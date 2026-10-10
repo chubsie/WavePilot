@@ -11,6 +11,10 @@
 (env WAVEPILOT_SELECTOR·D1_SERVER_URL) + 새 페이지 drone_camera.html?scenario=<id>&autostart=ai → 종료 대기(타임아웃이면 kill)
 → 실행 폴더의 JSONL 로 판정 → 끝에 summary.md·summary.csv.
 
+결과 폴더 (기본 logs/compare/<YYYYmmdd-HHMMSS>/, --out 으로 바꾼다):
+    <scenario>__<selector>__r<k>/   truth.json(정답) + run_mission JSONL + stderr.log
+    summary.md, summary.csv         시나리오×선택기 행 + 선택기 합계 행
+
 서버가 하나라도 응답하지 않으면 비교를 시작하지 않고 그 사실을 summary.md 에 남긴 뒤 종료 코드 1 이다 (D-14).
 
 playwright 는 uv 그룹 compare 에만 있고, 이 파일의 함수 안에서만 import 한다 — 모듈 import·--help·단위 테스트는
@@ -18,6 +22,7 @@ playwright 없이 돈다. 하위 프로세스·브라우저·health·포트 대�
 """
 
 import argparse
+import json
 import logging
 import os
 import socket
@@ -36,6 +41,8 @@ from typing import Protocol
 from modules.decision.factory import D1_URL_ENV, SELECTOR_D1, SELECTOR_ENV, SELECTOR_RULE
 from modules.decision.systemone_client import HEALTH_PATH as D1_HEALTH_PATH
 from modules.drone.compare_report import (
+    EVENT_END,
+    KIND_MISSION_RECORD,
     RunOutcome,
     aborted_run,
     evaluate_run,
@@ -301,7 +308,125 @@ def run_comparison(options: CompareOptions, deps: CompareDeps) -> int:
 
 
 def _run_all(options: CompareOptions, deps: CompareDeps, outcomes: list[RunOutcome]) -> None:
-    raise NotImplementedError("run loop")
+    """계획한 실행을 차례로 돌려 outcomes 에 쌓는다 — 중간에 끊겨도 호출 쪽이 쌓인 만큼 표를 쓴다."""
+    scenario_by_id = {scenario.scenario_id: scenario for scenario in options.scenarios}
+    run_list = plan_runs(list(scenario_by_id), options.selectors, options.repeats)
+
+    browser = deps.open_browser(options.headless)
+    try:
+        for repeat, scenario_id, selector in run_list:
+            outcome = execute_run(options, deps, browser, scenario_by_id[scenario_id], selector, repeat)
+            outcomes.append(outcome)
+            logger.info(
+                "run %s/%s r%d: %s success=%s%s",
+                scenario_id,
+                selector,
+                repeat,
+                outcome.status,
+                outcome.is_success,
+                f" ({outcome.abort_detail})" if outcome.abort_detail else "",
+            )
+    finally:
+        browser.close()
+
+
+def execute_run(
+    options: CompareOptions,
+    deps: CompareDeps,
+    browser: BrowserSession,
+    scenario: CompareScenario,
+    selector: str,
+    repeat: int,
+) -> RunOutcome:
+    """실행 1회 = run_mission 하위 프로세스 1개 + 새 페이지 1개. 끝까지 못 가면 aborted 로 돌려준다."""
+    scenario_id = scenario.scenario_id
+    rundir = get_run_dir(options.out_dir, scenario_id, selector, repeat)
+    rundir.mkdir(parents=True, exist_ok=True)
+    truth = build_ground_truth(scenario)
+    (rundir / TRUTH_FILE).write_text(json.dumps(truth, ensure_ascii=False, indent=2), encoding="utf-8")
+    timeout_sec = get_run_timeout_sec(options, scenario)
+
+    process = deps.launch_process(
+        build_run_command(options, scenario, rundir),
+        build_run_env(os.environ, selector, options.d1_url),
+        rundir / STDERR_FILE,
+    )
+    try:
+        drive_result = _drive_run(options, deps, browser, process, scenario_id, selector, repeat, timeout_sec)
+    except KeyboardInterrupt:
+        _stop_process(process)
+        raise
+
+    if isinstance(drive_result, RunOutcome):
+        return drive_result
+    return _judge_run(truth, rundir, drive_result, scenario_id, selector, repeat)
+
+
+def _drive_run(
+    options: CompareOptions,
+    deps: CompareDeps,
+    browser: BrowserSession,
+    process: RunningProcess,
+    scenario_id: str,
+    selector: str,
+    repeat: int,
+    timeout_sec: float,
+) -> int | RunOutcome:
+    """포트 대기 → 페이지 열기 → 종료 대기. 프로세스 종료 코드, 또는 끝까지 못 가면 aborted RunOutcome."""
+    if not deps.wait_for_port(SIM_HOST, options.sim_port, options.sim_connect_timeout_sec, process):
+        _stop_process(process)
+        detail = f"simulator server did not open {SIM_HOST}:{options.sim_port} within {options.sim_connect_timeout_sec:g}s"
+        return aborted_run(scenario_id, selector, repeat, detail)
+
+    try:
+        page = browser.open_page(build_page_url(options.sim_port, scenario_id))
+    except Exception as error:
+        _stop_process(process)
+        return aborted_run(scenario_id, selector, repeat, f"page open failed: {error}")
+
+    try:
+        return process.wait(timeout=timeout_sec)
+    except subprocess.TimeoutExpired:
+        _stop_process(process)
+        return aborted_run(scenario_id, selector, repeat, f"timeout after {timeout_sec:g}s")
+    finally:
+        _close_page(page)
+
+
+def _judge_run(truth: dict, rundir: Path, exit_code: int, scenario_id: str, selector: str, repeat: int) -> RunOutcome:
+    # 0(착지)·1(그 밖의 임무 종료)만 임무가 끝까지 간 것이다 — 2(사용법)·130(중단) 등은 판정하지 않는다
+    if exit_code not in (EXIT_OK, EXIT_FAILURE):
+        return aborted_run(scenario_id, selector, repeat, f"run_mission exit {exit_code}")
+
+    jsonl_list = sorted(rundir.glob("*.jsonl"))
+    if not jsonl_list:
+        return aborted_run(scenario_id, selector, repeat, "no mission log")
+
+    records = read_jsonl(jsonl_list[-1])
+    has_end = any(record.get("kind") == KIND_MISSION_RECORD and record.get("event") == EVENT_END for record in records)
+    if not has_end:
+        return aborted_run(scenario_id, selector, repeat, "mission log has no end")
+
+    return evaluate_run(truth, records, scenario_id, selector, repeat)
+
+
+def _stop_process(process: RunningProcess) -> None:
+    # 아직 돌고 있으면 죽이고 거둔다 — 다음 실행이 같은 포트를 쓰고, 좀비를 남기지 않게
+    if process.poll() is not None:
+        return
+
+    process.kill()
+    try:
+        process.wait(timeout=STOP_WAIT_SEC)
+    except subprocess.TimeoutExpired:
+        logger.warning("run_mission did not exit %gs after kill", STOP_WAIT_SEC)
+
+
+def _close_page(page: PageHandle) -> None:
+    try:
+        page.close()
+    except Exception as error:
+        logger.warning("page close failed: %s", error)
 
 
 # ---------------------------------------------------------------- 기본 구현 (테스트는 가짜로 바꾼다)
