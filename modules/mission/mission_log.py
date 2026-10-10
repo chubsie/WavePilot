@@ -5,7 +5,8 @@
 - 콘솔: "kind t=12.3 key=value ..." 한 줄. dict/list 값은 압축 JSON.
 
 05-05 의 임무 루프가 kind 8종을 기록하고, 05-06 의 run_mission 이 default_log_path 로
-logs/missions/<시작시각>.jsonl 파일을 연다. path=None 이면 파일 없이 메모리와 콘솔에만 남는다.
+logs/missions/<시작시각>.jsonl 파일을 연다. kind 는 9종이다(06-03 이 run_mission browser 경로용 hit 추가).
+path=None 이면 파일 없이 메모리와 콘솔에만 남는다.
 """
 
 import json
@@ -22,6 +23,7 @@ KIND_HEART = "heart"
 KIND_RETURN = "return"
 KIND_SAFETY = "safety"
 KIND_LINK = "link"
+KIND_HIT = "hit"
 LOG_KINDS = (
     KIND_MISSION,
     KIND_MODE_TRANSITION,
@@ -31,6 +33,7 @@ LOG_KINDS = (
     KIND_RETURN,
     KIND_SAFETY,
     KIND_LINK,
+    KIND_HIT,
 )
 
 DEFAULT_LOG_DIR = Path("logs") / "missions"

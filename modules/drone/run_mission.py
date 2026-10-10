@@ -12,6 +12,7 @@ pipeline.py / run_scenario.py 는 건드리지 않는 별도 컴포지션 루트
     uv run python -m modules.drone.run_mission --sim browser --yolo orin --yolo-url http://<orin-ip>:8082
     (browser: http://127.0.0.1:8766/drone_camera.html 을 열고 AI 모드로 전환한다.
      패널에 AI mission 상태 줄(MODE·사유·링크)이 보이고, 이상 주입은 패널 Fault injection 버튼으로 한다 — D-19)
+    (browser 실행이면 브라우저가 판정한 발마다의 맞은 배우가 같은 JSONL 에 hit 줄로 남는다 — Phase 6 비교 집계용)
 
 --mission 임무 파일이 탐색 구역·상체 색·최대 비행 시간·안전 여유를 정한다(파일 색이 --target-color 보다 우선).
 임무 파일이 없으면 params 기본값 + CLI 로 돈다(Phase 3·4 동작).
@@ -64,12 +65,12 @@ from modules.drone.run_scenario import (
 from modules.drone.yolo_factory import DEFAULT_YOLO_URL, YOLO_CHOICES, YOLO_LOCAL, create_yolo_factory
 from modules.flight_control.interface import FlightControl, Telemetry
 from modules.mission.mission_file import MissionSpec, load_mission_file
-from modules.mission.mission_log import DEFAULT_LOG_DIR, KIND_MISSION, MissionLog, default_log_path
+from modules.mission.mission_log import DEFAULT_LOG_DIR, KIND_HIT, KIND_MISSION, MissionLog, default_log_path
 from modules.mission.operator import LinkStatus, OperatorInput, ScriptedOperator
 from modules.mission.safety import SafetyConfig, SafetyMonitor
 from modules.perception.interface import DEFAULT_CAMERA
 from modules.perception.tracking import TrackAggregator
-from modules.rule_mode.interface import RuleModeSettings
+from modules.rule_mode.interface import RuleModeSettings, track_label
 from modules.simulation.kinematic_flight import KinematicFlightControl
 from modules.simulation.scripted_targets import ScriptedTarget, ScriptedTargetSource
 from modules.yolo_detection.interface import Frame
@@ -214,6 +215,36 @@ class BridgeOperatorInput:
     def link_status(self, now_sec: float) -> LinkStatus:
         # 마지막 heartbeat 시각은 브리지가 sim 시각으로 들고 있어 now_sec 는 쓰지 않는다
         return LinkStatus(*self._bridge.operator_link_status())
+
+
+def record_heart_shots(bridge, mission_log: MissionLog) -> int:
+    """브라우저가 발마다 보낸 heart_shot(맞은 배우 판정, C2)을 꺼내 hit 줄로 남기고 개수를 돌려준다.
+
+    판정은 브라우저 레이캐스트 결과 그대로 기록만 한다 — 값 검증은 브리지가 이미 했다.
+    """
+    heart_shot_list = bridge.drain_heart_shots()
+
+    for event in heart_shot_list:
+        track_id = event["track_id"]
+        mission_log.record(
+            KIND_HIT,
+            event["time_sec"],
+            track=track_label(track_id),
+            track_id=track_id,
+            actor=event.get("actor_id"),
+        )
+
+    return len(heart_shot_list)
+
+
+def _build_browser_status_handler(bridge, mission_log: MissionLog) -> Callable[[dict], None]:
+    """매 틱 상태 콜백 — 패널 상태를 먼저 push 하고, 그 뒤 쌓인 heart_shot 을 로그로 옮긴다."""
+
+    def handle_status(status: dict) -> None:
+        bridge.set_mission_status(status)
+        record_heart_shots(bridge, mission_log)
+
+    return handle_status
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -436,14 +467,19 @@ def _run_browser_mission(
         frame_reader = LatestFrameReader(detection_source)
 
         # 조종자 모드·운용자 링크는 매 틱 operator 로 읽고, 브리지 자체가 끊기면 중단한다 (D-01, D-02)
-        return _build_runner(
+        result = _build_runner(
             args, flight_control, frame_reader, decision_model, setup,
             clock=lambda: flight_control.get_telemetry().time_sec,
             advance=WallTickSleeper(args.tick_hz),
             operator=BridgeOperatorInput(bridge),
             should_abort=lambda: not bridge.is_connected(),
-            on_status=bridge.set_mission_status,
+            on_status=_build_browser_status_handler(bridge, setup.mission_log),
         ).run()
+
+        # 마지막 틱 뒤에 도착한 연사 발까지 남긴다 (C3)
+        record_heart_shots(bridge, setup.mission_log)
+
+        return result
     finally:
         if frame_reader is not None:
             frame_reader.close()

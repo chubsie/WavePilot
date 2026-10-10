@@ -9,6 +9,7 @@ from modules.mission.mission_log import (
     DEFAULT_LOG_DIR,
     KIND_DETECTION,
     KIND_HEART,
+    KIND_HIT,
     KIND_LINK,
     KIND_MISSION,
     KIND_MODE_TRANSITION,
@@ -160,7 +161,7 @@ def test_default_log_path_uses_start_time():
     assert DEFAULT_LOG_DIR == Path("logs") / "missions"
 
 
-def test_log_kinds_are_the_eight_kind_constants():
+def test_log_kinds_are_the_nine_kind_constants():
     kind_constants = (
         KIND_MISSION,
         KIND_MODE_TRANSITION,
@@ -170,7 +171,17 @@ def test_log_kinds_are_the_eight_kind_constants():
         KIND_RETURN,
         KIND_SAFETY,
         KIND_LINK,
+        KIND_HIT,
     )
 
-    assert len(LOG_KINDS) == 8
+    assert len(LOG_KINDS) == 9
     assert set(LOG_KINDS) == set(kind_constants)
+
+
+def test_hit_kind_records_track_and_actor():
+    mission_log = MissionLog(console=logging.getLogger(TEST_LOGGER_NAME))
+
+    entry = mission_log.record(KIND_HIT, 1.0, track="T3", track_id=3, actor=None)
+
+    assert KIND_HIT == "hit"
+    assert entry == {"t": 1.0, "kind": "hit", "track": "T3", "track_id": 3, "actor": None}

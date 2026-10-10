@@ -399,6 +399,9 @@ class FakeConnectedBridge:
     def set_mission_status(self, status: dict) -> None:
         pass
 
+    def drain_heart_shots(self) -> list[dict]:
+        return []
+
 
 def test_browser_orin_args_reach_yolo_factory(monkeypatch):
     monkeypatch.delenv("WAVEPILOT_SELECTOR", raising=False)
@@ -438,6 +441,8 @@ class FakeOperatorBridge:
         self.link_status_value = link_status_value
         self.connected = True
         self.status_list: list[dict] = []
+        self.heart_shot_queue: list[dict] = []
+        self.call_list: list[str] = []
 
     def is_connected(self) -> bool:
         return self.connected
@@ -446,7 +451,15 @@ class FakeOperatorBridge:
         return self.link_status_value
 
     def set_mission_status(self, status: dict) -> None:
+        self.call_list.append("set_mission_status")
         self.status_list.append(status)
+
+    def drain_heart_shots(self) -> list[dict]:
+        self.call_list.append("drain_heart_shots")
+        drained_list = list(self.heart_shot_queue)
+        self.heart_shot_queue.clear()
+
+        return drained_list
 
 
 class FakeTelemetryFlightControl:
@@ -476,6 +489,28 @@ def test_bridge_operator_input_follows_ai_mode_and_link_status():
     assert operator.link_status(42.0) == LinkStatus(True, None)
 
 
+# 브라우저가 보낸 heart_shot 이벤트(C2)와 그 hit 로그 줄(C3)
+HEART_SHOT_RED = {"kind": "heart_shot", "track_id": 3, "time_sec": 42.1, "actor_id": "red_1"}
+HEART_SHOT_MISS = {"kind": "heart_shot", "track_id": 3, "time_sec": 42.2, "actor_id": None}
+EXPECTED_HIT_RED = {"t": 42.1, "kind": "hit", "track": "T3", "track_id": 3, "actor": "red_1"}
+EXPECTED_HIT_MISS = {"t": 42.2, "kind": "hit", "track": "T3", "track_id": 3, "actor": None}
+
+
+class HeartShotRunnerFactory(CapturingRunnerFactory):
+    """run() 안에서 한 틱 상태 콜백을 부르고, 콜백 뒤(마지막 틱 뒤) 도착한 발을 큐에 남겨 둔다."""
+
+    def __init__(self, bridge: FakeOperatorBridge) -> None:
+        super().__init__()
+        self._bridge = bridge
+
+    def run(self):
+        self._bridge.heart_shot_queue.append(HEART_SHOT_RED)
+        self.kwargs["on_status"]({"mode": "AI", "reason": "operator"})
+        self._bridge.heart_shot_queue.append(HEART_SHOT_MISS)
+
+        return super().run()
+
+
 def test_browser_mission_wires_operator_status_and_abort(monkeypatch, tmp_path):
     monkeypatch.delenv("WAVEPILOT_SELECTOR", raising=False)
     bridge = FakeOperatorBridge()
@@ -485,7 +520,7 @@ def test_browser_mission_wires_operator_status_and_abort(monkeypatch, tmp_path):
         browser_flight_control=lambda bridge: FakeTelemetryFlightControl(),
         browser_detection_source=lambda bridge, yolo_factory: FakeDetectionSource(),
     )
-    runner_factory = CapturingRunnerFactory()
+    runner_factory = HeartShotRunnerFactory(bridge)
     monkeypatch.setattr(run_mission, "_load_browser_components", lambda: components)
     monkeypatch.setattr(run_mission, "create_yolo_factory", lambda kind, device, url: None)
     monkeypatch.setattr(run_mission, "LatestFrameReader", lambda source: None)
@@ -497,16 +532,62 @@ def test_browser_mission_wires_operator_status_and_abort(monkeypatch, tmp_path):
     assert exit_code == run_mission.EXIT_OK
     assert isinstance(kwargs["operator"], run_mission.BridgeOperatorInput)
     assert kwargs["operator"]._bridge is bridge
-
-    kwargs["on_status"]({"mode": "AI", "reason": "operator"})
     assert bridge.status_list == [{"mode": "AI", "reason": "operator"}]
 
     assert kwargs["should_abort"]() is False
     bridge.connected = False
     assert kwargs["should_abort"]() is True
 
-    start = read_log_records(tmp_path)[0]
-    assert start["home_gps"] == HOME_GPS_FIX.to_dict()
+    records = read_log_records(tmp_path)
+    hit_list = [record for record in records if record["kind"] == "hit"]
+    assert records[0]["home_gps"] == HOME_GPS_FIX.to_dict()
+    # 틱 콜백에서 남긴 발 + 임무 종료 뒤 비우기로 남긴 발
+    assert hit_list == [EXPECTED_HIT_RED, EXPECTED_HIT_MISS]
+    assert bridge.heart_shot_queue == []
+
+
+# --- heart_shot hit 로그 (06-03) ---
+
+def _read_jsonl(path: Path) -> list[dict]:
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+
+def test_record_heart_shots_writes_hit_lines_in_order_once(tmp_path):
+    bridge = FakeOperatorBridge()
+    bridge.heart_shot_queue.extend([HEART_SHOT_RED, HEART_SHOT_MISS])
+    log_path = tmp_path / "x.jsonl"
+
+    with run_mission.MissionLog(log_path) as mission_log:
+        first_count = run_mission.record_heart_shots(bridge, mission_log)
+        second_count = run_mission.record_heart_shots(bridge, mission_log)
+
+    assert first_count == 2
+    assert second_count == 0
+    assert _read_jsonl(log_path) == [EXPECTED_HIT_RED, EXPECTED_HIT_MISS]
+
+
+def test_record_heart_shots_with_empty_queue_records_nothing(tmp_path):
+    bridge = FakeOperatorBridge()
+    log_path = tmp_path / "x.jsonl"
+
+    with run_mission.MissionLog(log_path) as mission_log:
+        count = run_mission.record_heart_shots(bridge, mission_log)
+
+    assert count == 0
+    assert log_path.read_text(encoding="utf-8") == ""
+
+
+def test_browser_status_handler_pushes_status_before_draining_heart_shots():
+    bridge = FakeOperatorBridge()
+    bridge.heart_shot_queue.append(HEART_SHOT_RED)
+    mission_log = run_mission.MissionLog()
+    handle_status = run_mission._build_browser_status_handler(bridge, mission_log)
+
+    handle_status({"mode": "AI", "reason": "operator"})
+
+    assert bridge.call_list == ["set_mission_status", "drain_heart_shots"]
+    assert bridge.status_list == [{"mode": "AI", "reason": "operator"}]
+    assert list(mission_log.records) == [EXPECTED_HIT_RED]
 
 
 # --- 보조 클래스 ---
