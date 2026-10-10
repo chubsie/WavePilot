@@ -5,6 +5,8 @@ Phase 6: 텔레메트리 events 의 heart_shot(발마다 맞은 배우, D-10), �
 
 import http.client
 import json
+import shutil
+import subprocess
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -15,11 +17,13 @@ from modules.simulation.browser.bridge import SimBridge
 from modules.simulation.browser.server import (
     MAX_FRAME_BYTES,
     MAX_TELEMETRY_BYTES,
+    VISUALIZER_DIR,
     parse_telemetry_post,
     start_sim_server,
 )
 
 JPEG_BYTES = b"\xff\xd8fake"
+SIM_LINK_JS = VISUALIZER_DIR / "sim_link.js"
 GOTO_COMMAND = GoTo(north_m=20.0, east_m=0.0, altitude_m=15.0)
 
 
@@ -401,3 +405,49 @@ def test_scenario_get_missing_file_is_404(scenario_server) -> None:
     status, _, _ = request(scenario_server, "GET", "/sim/scenario?id=missing")
 
     assert status == 404
+
+
+# --- sim_link.js 헬퍼 (Phase 6 C2, node 로 실행) ---
+
+SIM_LINK_HELPER_SCRIPT = """
+const SimLink = require(process.argv[1]);
+const autopilot = SimLink.createAutopilot();
+for (let n = 0; n < SimLink.MAX_PENDING_EVENTS + 2; n++) autopilot.recordEvent({ kind: 'heart_shot', n });
+const taken = autopilot.takeEvents();
+const child = { userData: {}, parent: { userData: { actorId: 'red_1' }, parent: null } };
+console.log(JSON.stringify({
+  scenario: [SimLink.parseScenarioId('?scenario=basic'), SimLink.parseScenarioId(''),
+             SimLink.parseScenarioId('?scenario='), SimLink.parseScenarioId('?battery=50')],
+  autostart: [SimLink.parseAutostart('?autostart=ai'), SimLink.parseAutostart('?autostart=AI'),
+              SimLink.parseAutostart('?autostart=x'), SimLink.parseAutostart('')],
+  actor: [SimLink.findActorId(child), SimLink.findActorId({ userData: {}, parent: null }), SimLink.findActorId(null)],
+  maxPending: SimLink.MAX_PENDING_EVENTS,
+  takenCount: taken.length,
+  firstTaken: taken[0].n,
+  takenAgain: autopilot.takeEvents().length,
+  maxPerPost: SimLink.MAX_EVENTS_PER_POST,
+}));
+"""
+
+
+def test_sim_link_scenario_helpers() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+
+    completed = subprocess.run(
+        [node, "-e", SIM_LINK_HELPER_SCRIPT, str(SIM_LINK_JS)],
+        timeout=10,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    result = json.loads(completed.stdout)
+    assert result["scenario"] == ["basic", None, None, None]
+    assert result["autostart"] == ["ai", None, None, None]
+    assert result["actor"] == ["red_1", None, None]
+    assert result["takenCount"] == result["maxPending"]
+    assert result["firstTaken"] == 2
+    assert result["takenAgain"] == 0
+    assert result["maxPerPost"] == 32
