@@ -1,0 +1,17 @@
+{
+  "forest": {
+    "style": "humid-tropical-jungle",
+    "generated_objects": 769,
+    "hero_tree_vertices": 129389,
+    "features": ["buttress-trees", "palms", "bamboo", "broadleaf-understory", "vines", "wet-mud", "puddles", "ruined-outpost", "humid-fog"],
+    "target_ids": ["T-11", "T-12"],
+    "forbidden_shapes": ["cone-pine"]
+  },
+  "urban": {
+    "style": "war-damaged-european-city",
+    "generated_objects": 857,
+    "features": ["damaged-facades", "exposed-floors", "broken-windows", "rubble", "wet-cobble", "burned-vehicle", "overcast-haze"],
+    "target_ids": ["T-03", "T-07", "T-09"],
+    "forbidden_shapes": ["intact-box-tower"]
+  }
+}

@@ -30,6 +30,7 @@
       <div id="viewport" class="viewport"></div>
       <div id="detection-overlay" class="detection-overlay" aria-hidden="true"></div>
       <div class="scanlines" aria-hidden="true"></div>
+      <div id="cinematic-effects" class="cinematic-effects urban" aria-hidden="true"></div>
       <div class="camera-topline">
         <span class="recording"><i></i> LIVE / EO CAM 01</span>
         <span id="scenario-code">URBAN_RECON</span>
@@ -48,6 +49,10 @@
           <button id="mode-imu" data-mode="imu">IMU</button>
           <button id="mode-keyboard" data-mode="keyboard" class="active">KEYBOARD</button>
           <button id="mode-auto" data-mode="auto">AUTO</button>
+        </div>
+        <div class="quality-switch" role="group" aria-label="그래픽 품질">
+          <button id="quality-cinematic" data-quality="cinematic" class="active">CINEMATIC</button>
+          <button id="quality-performance" data-quality="performance">PERFORMANCE</button>
         </div>
         <button id="connect-imu" class="utility-button">장갑 연결</button>
         <button id="reset-flight" class="icon-button" aria-label="비행 위치 재설정" title="비행 위치 재설정">↻</button>

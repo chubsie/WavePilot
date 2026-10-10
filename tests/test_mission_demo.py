@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 
@@ -34,12 +35,32 @@ def test_demo_assets_are_binary_glb_files():
     for name in ("urban.glb", "forest.glb"):
         data = (DEMO / "assets" / name).read_bytes()
         assert data[:4] == b"glTF"
-        assert len(data) < 15 * 1024 * 1024
+        assert len(data) < 18 * 1024 * 1024
 
 
 def test_urban_camera_starts_facing_scene_center():
     world_source = (DEMO / "world.js").read_text()
     assert 'urban: { sky: 0x768384, fog: 0x65706b, start: [0, 18, 54], heading: 0 }' in world_source
+
+
+def test_forest_camera_starts_below_the_canopy():
+    world_source = (DEMO / "world.js").read_text()
+    assert 'forest: { sky: 0x53655b, fog: 0x465648, start: [-40, 9, 50], heading: -0.67 }' in world_source
+
+
+def test_cinematic_environment_contract():
+    html = (DEMO / "index.html").read_text()
+    for element_id in ("quality-cinematic", "quality-performance", "cinematic-effects"):
+        assert f'id="{element_id}"' in html
+
+    manifest = json.loads((DEMO / "assets" / "environment-manifest.json").read_text())
+    assert manifest["forest"]["style"] == "humid-tropical-jungle"
+    assert manifest["urban"]["style"] == "war-damaged-european-city"
+    assert manifest["forest"]["generated_objects"] >= 700
+    assert manifest["forest"]["hero_tree_vertices"] >= 100_000
+    assert manifest["urban"]["generated_objects"] >= 700
+    assert manifest["forest"]["forbidden_shapes"] == ["cone-pine"]
+    assert manifest["urban"]["forbidden_shapes"] == ["intact-box-tower"]
 
 
 def test_readme_documents_demo_launch_and_controls():

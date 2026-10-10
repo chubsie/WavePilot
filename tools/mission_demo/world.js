@@ -2,7 +2,7 @@ const THREE = window.THREE;
 
 const SCENE_SETTINGS = {
   urban: { sky: 0x768384, fog: 0x65706b, start: [0, 18, 54], heading: 0 },
-  forest: { sky: 0x53655b, fog: 0x465648, start: [-40, 20, 50], heading: -0.67 },
+  forest: { sky: 0x53655b, fog: 0x465648, start: [-40, 9, 50], heading: -0.67 },
 };
 
 export class DroneWorld {
@@ -24,6 +24,7 @@ export class DroneWorld {
     this.heading = Math.PI;
     this.scenario = "urban";
     this.clock = new THREE.Clock();
+    this.quality = "cinematic";
 
     this.scene.add(new THREE.HemisphereLight(0xdde1c9, 0x263128, 1.2));
     const sun = new THREE.DirectionalLight(0xffefcb, 1.45);
@@ -34,6 +35,19 @@ export class DroneWorld {
     sun.shadow.camera.right = sun.shadow.camera.top = 75;
     this.scene.add(sun);
     window.addEventListener("resize", () => this.resize());
+    this.resize();
+  }
+
+  setQuality(quality) {
+    this.quality = quality;
+    const cinematic = quality === "cinematic";
+    this.renderer.setPixelRatio(cinematic ? Math.min(window.devicePixelRatio, 1.65) : 1);
+    this.renderer.shadowMap.enabled = cinematic;
+    if (this.environment) {
+      this.environment.traverse((object) => {
+        if (object.userData.detail_high === true || object.name.startsWith("DETAIL_HIGH")) object.visible = cinematic;
+      });
+    }
     this.resize();
   }
 
@@ -51,6 +65,7 @@ export class DroneWorld {
         if (object.isMesh) { object.castShadow = true; object.receiveShadow = true; }
       });
       this.scene.add(this.environment);
+      this.setQuality(this.quality);
       this.onAssetStatus(`BLENDER ASSET · ${name.toUpperCase()} / READY`);
     } catch (error) {
       console.warn("GLB unavailable, using procedural fallback", error);

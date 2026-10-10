@@ -39,7 +39,7 @@ def test_cinematic_environment_contract():
 - [ ] Create layered tropical vegetation: irregular buttress-root trees, palm crowns, bamboo clusters, broadleaf plants, ferns, vines, canopy cards, shrubs, and wet fallen logs.
 - [ ] Create uneven muddy terrain, a winding wet track, puddles, drainage channels, a ruined concrete outpost, sandbags, rusted gate, and trench.
 - [ ] Use named PBR-style materials `WetMud`, `WetLeaf`, `TropicalBark`, `MossConcrete`, `RustMetal`, and `PuddleWater` with roughness/metallic/transmission tuned for export.
-- [ ] Export the selected scene to `forest.glb`, keep it below 15 MB, and verify it loads through the existing `THREE.GLTFLoader` path.
+- [ ] Export the selected scene to `forest.glb`, keep it below 18 MB, and verify it loads through the existing `THREE.GLTFLoader` path. The 18 MB ceiling preserves real leaf silhouettes and diffuse/alpha maps after measured LOD optimization.
 
 ### Task 3: Rebuild the ruined city in Blender
 
@@ -50,7 +50,7 @@ def test_cinematic_environment_contract():
 - [ ] Remove intact box towers and create a long European street from damaged modular facades with cornices, window recesses, exposed floors, broken wall silhouettes, soot and shell damage.
 - [ ] Add cobblestone, rubble piles, individual bricks, timber beams, twisted metal, sandbags, broken lamps, barricades, and a burned vehicle.
 - [ ] Use named PBR-style materials `WetCobble`, `DamagedPlaster`, `OldBrick`, `SootGlass`, `BurnedMetal`, and `RubbleDust`.
-- [ ] Preserve target custom properties for `T-03`, `T-07`, and `T-09`, export to `urban.glb`, and keep it below 15 MB.
+- [ ] Preserve target custom properties for `T-03`, `T-07`, and `T-09`, export to `urban.glb`, and keep it below 18 MB.
 
 ### Task 4: Add cinematic rendering and performance mode
 
