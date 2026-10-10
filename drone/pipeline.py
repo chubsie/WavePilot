@@ -3,6 +3,11 @@
 프레임 1개당 단계 순서:
   (1) 프레임 읽기(None 이면 끝) → (2) pace 훅(벽시계 맞추기) → (3) 텔레메트리 읽기
   → (4) track 갱신 → (5) 운용자 수신 메시지 처리 → (6) 텔레메트리 주기 송신 → (7) 상태·보고 주기 송신
+  → (8) 백그라운드 모드면 끝난 보고 수거·송신
+
+보고 생성은 두 모드다. 동기 모드(기본, --speed 0)는 상태 직후 같은 스레드에서 보고를 만들어 결정론을 지킨다.
+백그라운드 모드(실시간)는 워커 1개에 보고만 맡기고, 이전 보고가 안 끝났으면 그 주기를 건너뛴다 —
+느린 LLM 이 프레임·텔레메트리 송신을 막지 않게 하기 위해서다(RESEARCH Pitfall 6).
 
 메시지 4종 중 드론은 telemetry / state / report 3종을 보내고 command 1종을 받는다.
 시계는 frame.timestamp_sec 하나뿐이다. 이 파일은 time.sleep·벽시계를 쓰지 않으므로 pace=None 실행은 결정론적이다.
@@ -14,6 +19,7 @@
 
 import logging
 from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
@@ -22,7 +28,7 @@ from interfaces.comm import CommLink, Message
 from interfaces.detection import DetectionSource, Frame
 from interfaces.flight_control import FlightControl, Telemetry, command_from_dict
 from interfaces.track import Track
-from llm_module import LLMModule
+from llm_module import LLMModule, ModuleOutput, StateJson
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +93,14 @@ class DronePipeline:
         self._config = config
         self._pace = pace
 
+        # 보고 워커는 인스턴스 속성으로만 둔다 — 모듈 전역 가변 상태 금지 (AI-SPEC Async-First)
+        self._report_executor = (
+            ThreadPoolExecutor(max_workers=1, thread_name_prefix="report")
+            if config.run_reports_in_background
+            else None
+        )
+        self._pending_report: Future | None = None
+
         self._next_seq = 0
         self._next_telemetry_sec = 0.0
         self._next_report_sec = config.report_interval_sec  # 첫 보고는 한 주기 뒤
@@ -105,9 +119,11 @@ class DronePipeline:
     def run(self) -> RunSummary:
         try:
             self._run_frame_loop()
+            self._drain_pending_report()
         except _LinkLostError:
             pass
         finally:
+            self._shutdown_report_worker()
             self._link.close()
 
         return self._build_summary()
@@ -138,6 +154,8 @@ class DronePipeline:
             if self._is_due(now_sec, self._next_report_sec):
                 self._send_state_and_report(now_sec, telemetry)
                 self._next_report_sec += self._config.report_interval_sec
+
+            self._collect_finished_report()
 
     def _is_due(self, now_sec: float, due_sec: float) -> bool:
         return now_sec + SCHEDULE_EPSILON_SEC >= due_sec
@@ -185,18 +203,79 @@ class DronePipeline:
         self._send_message("state", state.to_dict())
         self._state_count += 1
 
+        if self._report_executor is None:
+            self._generate_report_now(state)
+        else:
+            self._submit_report(state)
+
+    def _generate_report_now(self, state: StateJson) -> None:
         # 보고 실패로 파이프라인을 멈추지 않는다 (AI-SPEC 실패 처리 정책)
         try:
             output = self._llm_module.process_state(state)
         except Exception as error:
-            self._failed_report_count += 1
-            logger.error("report generation failed: %s", error)
+            self._handle_report_failure(error)
             return
 
+        self._send_report_output(output)
+
+    def _send_report_output(self, output: ModuleOutput) -> None:
         payload = output.to_report_payload()
         self._send_message("report", payload)
         self._report_count += 1
         logger.info("report sent: time_sec=%s verdict=%s", payload["time_sec"], payload["decision"]["verdict"])
+
+    def _handle_report_failure(self, error: Exception) -> None:
+        self._failed_report_count += 1
+        logger.error("report generation failed: %s", error)
+
+    # --- 백그라운드 보고 ---
+    # 워커는 process_state 만 돌린다. 송신은 항상 run() 을 부른 스레드에서만 한다 —
+    # CommLink 구현의 스레드 안전성에 기대지 않기 위해서다.
+
+    def _submit_report(self, state: StateJson) -> None:
+        self._collect_finished_report()
+
+        # 오래된 상태의 보고는 가치가 없다 — 쌓지 않고 건너뛴다
+        if self._pending_report is not None:
+            self._skipped_report_count += 1
+            logger.warning("report skipped: previous report still running")
+            return
+
+        self._pending_report = self._report_executor.submit(self._llm_module.process_state, state)
+
+    def _collect_finished_report(self) -> None:
+        if self._pending_report is None or not self._pending_report.done():
+            return
+
+        future = self._pending_report
+        self._pending_report = None
+        self._handle_report_future(future)
+
+    def _drain_pending_report(self) -> None:
+        if self._pending_report is None:
+            return
+
+        future = self._pending_report
+        self._pending_report = None
+        done, _ = wait([future], timeout=self._config.report_drain_timeout_sec)
+        if not done:
+            logger.warning("report dropped at shutdown: still running after %s s", self._config.report_drain_timeout_sec)
+            return
+
+        self._handle_report_future(future)
+
+    def _handle_report_future(self, future: Future) -> None:
+        try:
+            output = future.result()
+        except Exception as error:
+            self._handle_report_failure(error)
+            return
+
+        self._send_report_output(output)
+
+    def _shutdown_report_worker(self) -> None:
+        if self._report_executor is not None:
+            self._report_executor.shutdown(wait=False, cancel_futures=True)
 
     def _send_message(self, message_type: str, payload: dict) -> None:
         # sent_at 은 운용자 콘솔 줄 머리와 같은 형식(로컬 ISO 8601, 밀리초)

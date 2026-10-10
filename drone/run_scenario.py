@@ -145,10 +145,13 @@ def main(argv: list[str] | None = None) -> int:
         logger.error("could not connect to operator console: %s", error)
         return EXIT_FAILURE
 
+    # --speed 0 은 보고를 동기로 만들어 결정론을 지킨다(SKELETON 시계 행). 실시간이면 보고만 워커로 돌려
+    # llama_server 가 느려도 프레임·텔레메트리 송신이 멈추지 않게 한다 (RESEARCH Pitfall 6)
     config = PipelineConfig(
         report_interval_sec=args.report_interval_sec,
         telemetry_interval_sec=args.telemetry_interval_sec,
-        run_reports_in_background=False,
+        run_reports_in_background=args.speed > 0,
+        report_drain_timeout_sec=args.llm_timeout_sec + REPORT_DRAIN_MARGIN_SEC,
     )
     pace = WallClockPacer(args.speed) if args.speed > 0 else None
     pipeline = DronePipeline(
