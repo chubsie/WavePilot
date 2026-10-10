@@ -1,0 +1,509 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Glove Visualizer</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --border: #262b36; --text: #e6e8ee; --muted: #8a90a0;
+    --accent: #4f8cff; --roll: #ff6b6b; --pitch: #4fd1a5; --yaw: #f5b942; --ok: #4fd1a5; --bad: #ff6b6b;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: grid; grid-template-columns: 1fr 340px; overflow: hidden;
+  }
+  #view { position: relative; min-width: 0; min-height: 0; }
+  #view canvas { display: block; width: 100%; height: 100%; }
+  #hint {
+    position: absolute; left: 16px; bottom: 16px; color: var(--muted); font-size: 12px;
+    background: rgba(15,17,21,.7); padding: 6px 10px; border-radius: 6px;
+  }
+  aside {
+    background: var(--panel); border-left: 1px solid var(--border);
+    padding: 16px; display: flex; flex-direction: column; gap: 14px; overflow-y: auto;
+  }
+  h1 { font-size: 16px; margin: 0; display: flex; align-items: center; gap: 8px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--bad); }
+  .dot.on { background: var(--ok); }
+  #status { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+  button {
+    background: #222734; color: var(--text); border: 1px solid var(--border);
+    padding: 7px 12px; border-radius: 6px; font: inherit; cursor: pointer;
+  }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .45; cursor: default; }
+  .readouts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .card { background: #1d212b; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+  .card .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .card .value { font-size: 22px; font-variant-numeric: tabular-nums; }
+  .roll .value { color: var(--roll); } .pitch .value { color: var(--pitch); } .yaw .value { color: var(--yaw); }
+  fieldset { border: 1px solid var(--border); border-radius: 8px; margin: 0; padding: 8px 10px; }
+  legend { color: var(--muted); font-size: 12px; padding: 0 4px; }
+  label.chk { display: inline-flex; align-items: center; gap: 6px; margin: 2px 12px 2px 0; cursor: pointer; }
+  #chart { width: 100%; height: 150px; background: #1d212b; border: 1px solid var(--border); border-radius: 8px; }
+  .legend { display: flex; gap: 12px; font-size: 12px; color: var(--muted); }
+  .legend span::before { content: ""; display: inline-block; width: 10px; height: 3px; margin-right: 5px; vertical-align: middle; background: currentColor; }
+  #log {
+    margin: 0; min-height: 80px; max-height: 160px; overflow-y: auto; font: 12px/1.35 ui-monospace, Consolas, monospace;
+    background: #1d212b; border: 1px solid var(--border); border-radius: 8px; padding: 8px; color: var(--muted); white-space: pre-wrap;
+  }
+  @media (max-width: 760px) {
+    body { grid-template-columns: 1fr; grid-template-rows: 55vh auto; overflow: auto; }
+    aside { border-left: 0; border-top: 1px solid var(--border); }
+  }
+</style>
+</head>
+<body>
+  <div id="view"><div id="hint">Red arms = front of the drone · camera follows from behind</div></div>
+  <aside>
+    <div>
+      <h1><span id="dot" class="dot"></span>Glove Visualizer</h1>
+      <div id="status">Not connected. Close the Arduino Serial Monitor first.</div>
+    </div>
+    <div class="buttons">
+      <button id="connect" class="primary">Connect</button>
+      <button id="zero" disabled title="Sends 'c': current hand pose becomes level">Zero pose</button>
+      <button id="gyro" disabled title="Sends 'g': re-measures gyro bias, keep the glove still ~1 s">Calibrate gyro</button>
+      <button id="info" disabled title="Sends 'i': prints IMU info">IMU info</button>
+    </div>
+    <div class="readouts">
+      <div class="card roll"><div class="label">Roll</div><div class="value" id="vRoll">0.0°</div></div>
+      <div class="card pitch"><div class="label">Pitch</div><div class="value" id="vPitch">0.0°</div></div>
+      <div class="card yaw"><div class="label">Yaw (integrated)</div><div class="value" id="vYaw">0.0°</div></div>
+      <div class="card"><div class="label">Yaw rate · Stream</div><div class="value" id="vRate">0 °/s</div></div>
+    </div>
+    <fieldset>
+      <legend>Axis mapping (fix signs here if the drone moves the wrong way)</legend>
+      <label class="chk"><input type="checkbox" id="invRoll">Invert roll</label>
+      <label class="chk"><input type="checkbox" id="invPitch">Invert pitch</label>
+      <label class="chk"><input type="checkbox" id="invYaw">Invert yaw</label>
+      <label class="chk"><input type="checkbox" id="swapRP">Swap roll/pitch</label>
+    </fieldset>
+    <fieldset>
+      <legend>Flight preview</legend>
+      <label class="chk"><input type="checkbox" id="fly">Fly with tilt</label>
+      <button id="home" style="padding:4px 10px">Return home</button>
+      <div id="flightInfo" style="color:var(--muted);font-size:12px;margin-top:6px">Tilt forward = fly forward, tilt sideways = strafe, yaw = turn. Zero pose first.</div>
+    </fieldset>
+    <div>
+      <canvas id="chart"></canvas>
+      <div class="legend">
+        <span style="color:var(--roll)">roll ±90°</span>
+        <span style="color:var(--pitch)">pitch ±90°</span>
+        <span style="color:var(--yaw)">yaw rate ±270°/s</span>
+      </div>
+    </div>
+    <pre id="log"></pre>
+  </aside>
+
+<script src="three.min.js"></script>
+<script>
+// ---------- Stream format from firmware/glove/glove.ino ----------
+// G,<seq>,<roll_deg>,<pitch_deg>,<yaw_rate_dps>,<flex0>,<flex1>  at 50 Hz
+const SAMPLE_DT = 0.02;       // s per sample (seq step)
+const YAW_DEADBAND = 1.0;     // dps; ignore gyro noise so integrated yaw does not creep
+const HISTORY = 500;          // chart samples (10 s)
+
+const $ = (id) => document.getElementById(id);
+const state = { roll: 0, pitch: 0, yaw: 0, yawRate: 0, lastSeq: null, samples: 0, hz: 0 };
+const history = [];
+
+// ---------- Axis mapping toggles (remembered per browser) ----------
+const opts = { invRoll: false, invPitch: false, invYaw: false, swapRP: false, fly: false };
+// v2: firmware now outputs the drone-frame sign convention, so old saved inversions are dropped.
+const OPTS_KEY = 'gloveVizOpts.v2';
+try { Object.assign(opts, JSON.parse(localStorage.getItem(OPTS_KEY) || '{}')); } catch {}
+for (const k of Object.keys(opts)) {
+  $(k).checked = opts[k];
+  $(k).onchange = () => {
+    opts[k] = $(k).checked;
+    try { localStorage.setItem(OPTS_KEY, JSON.stringify(opts)); } catch {}
+  };
+}
+
+function mapped() {
+  let r = state.roll, p = state.pitch;
+  if (opts.swapRP) [r, p] = [p, r];
+  return {
+    roll: opts.invRoll ? -r : r,
+    pitch: opts.invPitch ? -p : p,
+    yaw: opts.invYaw ? -state.yaw : state.yaw,
+    yawRate: opts.invYaw ? -state.yawRate : state.yawRate,
+  };
+}
+
+// ---------- Log ----------
+function log(msg) {
+  const el = $('log');
+  el.textContent += msg + '\n';
+  const lines = el.textContent.split('\n');
+  if (lines.length > 80) el.textContent = lines.slice(-80).join('\n');
+  el.scrollTop = el.scrollHeight;
+}
+
+// ---------- Web Serial ----------
+let port = null, reader = null, writer = null, pipeDone = null;
+
+function setConnected(on) {
+  $('dot').classList.toggle('on', on);
+  $('connect').textContent = on ? 'Disconnect' : 'Connect';
+  $('zero').disabled = !on;
+  $('gyro').disabled = !on;
+  $('info').disabled = !on;
+  $('status').textContent = on ? 'Connected, waiting for data…' : 'Not connected. Close the Arduino Serial Monitor first.';
+}
+
+async function connect() {
+  if (!('serial' in navigator)) { log('Web Serial is not available. Use Chrome or Edge.'); return; }
+  try {
+    port = await navigator.serial.requestPort();
+    await port.open({ baudRate: 115200 });
+  } catch (e) {
+    log('Could not open port: ' + e.message + '\n(Is the Arduino Serial Monitor still open?)');
+    port = null;
+    return;
+  }
+  writer = port.writable.getWriter();
+  state.lastSeq = null;
+  setConnected(true);
+  readLoop();
+}
+
+async function disconnect() {
+  try { await reader?.cancel(); } catch {}
+  try { await pipeDone; } catch {}
+  try { writer?.releaseLock(); } catch {}
+  try { await port?.close(); } catch {}
+  port = reader = writer = pipeDone = null;
+  setConnected(false);
+}
+
+async function readLoop() {
+  const decoder = new TextDecoderStream();
+  pipeDone = port.readable.pipeTo(decoder.writable).catch(() => {});
+  reader = decoder.readable.getReader();
+  let buf = '';
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += value;
+      let i;
+      while ((i = buf.indexOf('\n')) >= 0) {
+        handleLine(buf.slice(0, i).trim());
+        buf = buf.slice(i + 1);
+      }
+    }
+  } catch (e) {
+    log('Read stopped: ' + e.message);
+  }
+  if (port) disconnect();
+}
+
+async function send(ch) {
+  try { await writer?.write(new TextEncoder().encode(ch)); } catch (e) { log('Send failed: ' + e.message); }
+}
+
+function handleLine(line) {
+  if (!line) return;
+  if (!line.startsWith('G,')) { log(line); return; }
+  const p = line.split(',');
+  if (p.length < 5) return;
+  const seq = Number(p[1]);
+  // Seq gaps give the real elapsed time; a reset board (seq goes backwards) contributes 0.
+  const steps = state.lastSeq === null ? 0 : Math.min(Math.max(seq - state.lastSeq, 0), 50);
+  state.lastSeq = seq;
+  state.roll = Number(p[2]);
+  state.pitch = Number(p[3]);
+  state.yawRate = Number(p[4]);
+  if (Math.abs(state.yawRate) > YAW_DEADBAND) state.yaw += state.yawRate * steps * SAMPLE_DT;
+  state.samples++;
+  const m = mapped();
+  history.push([m.roll, m.pitch, m.yawRate]);
+  if (history.length > HISTORY) history.shift();
+}
+
+$('connect').onclick = () => (port ? disconnect() : connect());
+$('zero').onclick = () => { send('c'); state.yaw = 0; };
+$('gyro').onclick = () => { send('g'); log('Calibrating gyro, keep the glove still…'); };
+$('info').onclick = () => send('i');
+if ('serial' in navigator) {
+  navigator.serial.addEventListener('disconnect', (e) => { if (e.target === port) { log('Device unplugged.'); disconnect(); } });
+} else {
+  log('Web Serial is not available in this browser. Open this page in Chrome or Edge.');
+}
+
+setInterval(() => {
+  state.hz = state.samples;
+  state.samples = 0;
+  if (port) $('status').textContent = state.hz ? `Streaming at ${state.hz} Hz` : 'Connected, no data (check the board is running glove.ino)';
+}, 1000);
+
+// ---------- 3D scene: a quadcopter that follows the glove ----------
+const view = $('view');
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+view.prepend(renderer.domElement);
+
+const SKY = 0x9db8d9;
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(SKY);
+scene.fog = new THREE.Fog(SKY, 70, 190);
+const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 600);
+
+scene.add(new THREE.HemisphereLight(0xeaf2ff, 0x4a3f30, 0.6));
+const sun = new THREE.DirectionalLight(0xfff3dd, 0.8);
+sun.position.set(60, 100, 40);
+scene.add(sun);
+
+// ---------- Procedural terrain (infinite: the mesh re-centres under the drone) ----------
+// 1 unit = 1 m. Heights come from fractal value noise, so the same world spot always
+// has the same height no matter where the mesh is centred.
+function hash(x, z) {
+  let h = (Math.imul(x, 374761393) + Math.imul(z, 668265263)) | 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+function valueNoise(x, z) {
+  const xi = Math.floor(x), zi = Math.floor(z);
+  const xf = x - xi, zf = z - zi;
+  const u = xf * xf * (3 - 2 * xf), v = zf * zf * (3 - 2 * zf);
+  const a = hash(xi, zi), b = hash(xi + 1, zi), c = hash(xi, zi + 1), d = hash(xi + 1, zi + 1);
+  return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
+}
+function terrainHeight(x, z) {
+  let n = 0, amp = 0.5, f = 0.011;
+  for (let o = 0; o < 5; o++) { n += amp * valueNoise(x * f + 100, z * f + 100); amp *= 0.5; f *= 2; }
+  n /= 0.96875;                                   // normalise 5 octaves to 0..1
+  return Math.pow(n, 1.7) * 75 - 12;              // < 0 is under water
+}
+const TERRAIN_COLORS = [                          // [max height, color]
+  [-4, new THREE.Color(0x1d5580)], [0, new THREE.Color(0x2f72a3)],     // deep / shallow water
+  [1.5, new THREE.Color(0xc2ad74)], [10, new THREE.Color(0x4f8236)],   // sand / grass
+  [20, new THREE.Color(0x3a6229)], [30, new THREE.Color(0x6b6257)],    // forest / rock
+  [Infinity, new THREE.Color(0xe8ecf0)],                               // snow
+];
+function terrainColor(h) {
+  for (const [max, c] of TERRAIN_COLORS) if (h < max) return c;
+}
+
+const T_SIZE = 400, T_SEG = 160, T_CELL = T_SIZE / T_SEG;
+const terrainGeo = new THREE.PlaneGeometry(T_SIZE, T_SIZE, T_SEG, T_SEG);
+terrainGeo.rotateX(-Math.PI / 2);
+const tPos = terrainGeo.attributes.position;
+const tBase = Float32Array.from(tPos.array);       // local x/z of every vertex
+terrainGeo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(tPos.count * 3), 3));
+const terrain = new THREE.Mesh(terrainGeo, new THREE.MeshStandardMaterial({
+  vertexColors: true, flatShading: true, roughness: 0.95, metalness: 0,
+}));
+scene.add(terrain);
+
+function buildTerrain(cx, cz) {
+  // Snap to the grid so vertices always land on the same world points (no "swimming").
+  cx = Math.round(cx / T_CELL) * T_CELL;
+  cz = Math.round(cz / T_CELL) * T_CELL;
+  const col = terrainGeo.attributes.color;
+  for (let i = 0; i < tPos.count; i++) {
+    const h = terrainHeight(cx + tBase[i * 3], cz + tBase[i * 3 + 2]);
+    tPos.setY(i, Math.max(h, 0));
+    const c = terrainColor(h);
+    col.setXYZ(i, c.r, c.g, c.b);
+  }
+  tPos.needsUpdate = true;
+  col.needsUpdate = true;
+  terrainGeo.computeBoundingSphere();
+  terrain.position.set(cx, 0, cz);
+}
+
+// Blob shadow under the drone: cheap depth cue for height above ground
+const shadow = new THREE.Mesh(new THREE.CircleGeometry(1.5, 32),
+  new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.3, depthWrite: false }));
+shadow.rotation.x = -Math.PI / 2;
+scene.add(shadow);
+
+const drone = new THREE.Group();
+scene.add(drone);
+const mat = (color, extra = {}) => new THREE.MeshStandardMaterial({ color, roughness: 0.6, metalness: 0.2, ...extra });
+
+drone.add(new THREE.Mesh(new THREE.BoxGeometry(0.75, 0.22, 0.95), mat(0x3a4150)));
+const canopy = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.12, 0.5), mat(0x4f8cff));
+canopy.position.set(0, 0.17, -0.1);
+drone.add(canopy);
+
+// Front is -Z. Front arms red, rear arms grey, so heading is obvious.
+const rotors = [];
+const R = 0.95;
+[[-R, -R, 0xff6b6b, 1], [R, -R, 0xff6b6b, -1], [-R, R, 0x8a90a0, -1], [R, R, 0x8a90a0, 1]].forEach(([x, z, color, dir]) => {
+  const len = Math.hypot(x, z);
+  const arm = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.07, len), mat(color));
+  arm.position.set(x / 2, 0, z / 2);
+  arm.rotation.y = Math.atan2(x, z);
+  drone.add(arm);
+
+  const motor = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 0.16, 20), mat(0x22262f));
+  motor.position.set(x, 0.06, z);
+  drone.add(motor);
+
+  const disc = new THREE.Mesh(new THREE.CylinderGeometry(0.46, 0.46, 0.01, 40),
+    mat(0xffffff, { transparent: true, opacity: 0.08 }));
+  disc.position.set(x, 0.15, z);
+  drone.add(disc);
+
+  const blade = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.012, 0.07), mat(0xd7dbe5));
+  blade.position.set(x, 0.155, z);
+  blade.userData.dir = dir;
+  drone.add(blade);
+  rotors.push(blade);
+});
+
+function resize() {
+  const w = view.clientWidth, h = view.clientHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / Math.max(h, 1);
+  camera.updateProjectionMatrix();
+}
+new ResizeObserver(resize).observe(view);
+resize();
+
+// ---------- Strip chart ----------
+const chart = $('chart');
+const ctx = chart.getContext('2d');
+const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const series = [[0, 90, css('--roll')], [1, 90, css('--pitch')], [2, 270, css('--yaw')]];
+
+function drawChart() {
+  const dpr = window.devicePixelRatio || 1;
+  const w = chart.clientWidth, h = chart.clientHeight;
+  if (chart.width !== w * dpr || chart.height !== h * dpr) { chart.width = w * dpr; chart.height = h * dpr; }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  ctx.strokeStyle = '#2c3240';
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0, h / 2); ctx.lineTo(w, h / 2); ctx.stroke();
+  for (const [idx, range, color] of series) {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    history.forEach((s, i) => {
+      const x = (i / (HISTORY - 1)) * w;
+      const y = h / 2 - Math.max(-1, Math.min(1, s[idx] / range)) * (h / 2 - 4);
+      i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+    });
+    ctx.stroke();
+  }
+}
+
+// ---------- Flight preview: simple velocity model, like the sim bridge will use ----------
+const HOVER_AGL = 9;          // m above ground (no throttle input yet)
+const TILT_DEADBAND = 3;      // deg of tilt ignored, so a resting hand does not drift
+const FULL_TILT = 30;         // deg of tilt for full speed
+const MAX_SPEED = 15;         // m/s
+const flight = { pos: new THREE.Vector3(0, 0, 0), vel: new THREE.Vector3(), alt: HOVER_AGL, terrainAt: null };
+
+function tiltAxis(deg) {
+  const a = Math.abs(deg);
+  if (a < TILT_DEADBAND) return 0;
+  return Math.sign(deg) * Math.min((a - TILT_DEADBAND) / (FULL_TILT - TILT_DEADBAND), 1);
+}
+
+// Home = nearest low, dry spot with an open view ahead (-Z), searched outward from the origin.
+const HOME = (() => {
+  for (let r = 0; r < 3000; r += 10) {
+    for (let a = 0; a < 2 * Math.PI; a += 0.4) {
+      const x = r * Math.cos(a), z = r * Math.sin(a), h = terrainHeight(x, z);
+      if (h < 2 || h > 6) continue;
+      let open = true;
+      for (let d = 20; d <= 100 && open; d += 20) open = terrainHeight(x, z - d) < h + 10;
+      if (open) return new THREE.Vector3(x, 0, z);
+    }
+  }
+  return new THREE.Vector3();
+})();
+
+function goHome() {
+  flight.pos.copy(HOME);
+  flight.vel.set(0, 0, 0);
+  flight.alt = Math.max(terrainHeight(HOME.x, HOME.z), 0) + HOVER_AGL;
+  buildTerrain(HOME.x, HOME.z);
+  flight.terrainAt = HOME.clone();
+  camera.position.set(HOME.x, flight.alt + 4, HOME.z + 9);
+}
+$('home').onclick = goHome;
+goHome();
+
+// ---------- Render loop ----------
+const D2R = Math.PI / 180;
+const shown = { roll: 0, pitch: 0, yaw: 0 };
+const clock = new THREE.Clock();
+const fwd = new THREE.Vector3(), right = new THREE.Vector3(), target = new THREE.Vector3();
+function frame() {
+  requestAnimationFrame(frame);
+  const dt = Math.min(clock.getDelta(), 0.05);
+  const m = mapped();
+  // Light smoothing so 50 Hz data looks fluid at 60+ fps
+  shown.roll += (m.roll - shown.roll) * 0.35;
+  shown.pitch += (m.pitch - shown.pitch) * 0.35;
+  shown.yaw += (m.yaw - shown.yaw) * 0.35;
+  // +pitch = nose up, +roll = right side down, +yaw = nose right
+  drone.rotation.set(shown.pitch * D2R, -shown.yaw * D2R, -shown.roll * D2R, 'YXZ');
+  for (const b of rotors) b.rotation.y += 0.45 * b.userData.dir;
+
+  // Heading vectors (front of the drone is -Z at yaw 0)
+  const psi = shown.yaw * D2R;
+  fwd.set(Math.sin(psi), 0, -Math.cos(psi));
+  right.set(Math.cos(psi), 0, Math.sin(psi));
+
+  // Nose down (negative pitch) flies forward, right side down (positive roll) strafes right
+  target.set(0, 0, 0);
+  if (opts.fly) {
+    target.addScaledVector(fwd, -tiltAxis(m.pitch) * MAX_SPEED);
+    target.addScaledVector(right, tiltAxis(m.roll) * MAX_SPEED);
+  }
+  flight.vel.lerp(target, Math.min(1, dt * 2.5));
+  flight.pos.addScaledVector(flight.vel, dt);
+
+  // Altitude hold above the terrain, smoothed so it glides over hills
+  const ground = Math.max(terrainHeight(flight.pos.x, flight.pos.z), 0);
+  flight.alt += (ground + HOVER_AGL - flight.alt) * Math.min(1, dt * 1.5);
+  flight.alt = Math.max(flight.alt, ground + 2);
+  drone.position.set(flight.pos.x, flight.alt, flight.pos.z);
+  shadow.position.set(flight.pos.x, ground + 0.15, flight.pos.z);
+  shadow.material.opacity = 0.35 * Math.max(0, 1 - (flight.alt - ground) / 30);
+
+  // Keep the terrain mesh centred under the drone
+  if (Math.hypot(flight.pos.x - flight.terrainAt.x, flight.pos.z - flight.terrainAt.z) > 25) {
+    buildTerrain(flight.pos.x, flight.pos.z);
+    flight.terrainAt.copy(flight.pos);
+  }
+
+  // Chase camera: behind and above, looking a little ahead of the drone
+  target.copy(drone.position).addScaledVector(fwd, -9);
+  target.y += 4;
+  camera.position.lerp(target, Math.min(1, dt * 5));
+  camera.position.y = Math.max(camera.position.y, Math.max(terrainHeight(camera.position.x, camera.position.z), 0) + 1.5);
+  target.copy(drone.position).addScaledVector(fwd, 3);
+  camera.lookAt(target);
+
+  const speed = Math.hypot(flight.vel.x, flight.vel.z);
+  $('flightInfo').textContent = opts.fly
+    ? `Speed ${speed.toFixed(1)} m/s · altitude ${(flight.alt - ground).toFixed(0)} m above ground · ${Math.hypot(flight.pos.x, flight.pos.z).toFixed(0)} m from home`
+    : 'Tilt forward = fly forward, tilt sideways = strafe, yaw = turn. Zero pose first.';
+
+  $('vRoll').textContent = m.roll.toFixed(1) + '°';
+  $('vPitch').textContent = m.pitch.toFixed(1) + '°';
+  $('vYaw').textContent = m.yaw.toFixed(0) + '°';
+  $('vRate').textContent = `${m.yawRate.toFixed(0)} °/s · ${state.hz} Hz`;
+
+  drawChart();
+  renderer.render(scene, camera);
+}
+frame();
+</script>
+</body>
+</html>

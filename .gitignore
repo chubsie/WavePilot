@@ -1,0 +1,23 @@
+# Vendor documents (NUCODE manuals/schematics are not redistributable; see README for links)
+*.pdf
+
+# Simulator binaries and third-party checkouts (download separately)
+Blocks/
+Colosseum/
+Colosseum-*/
+PythonClient-*/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Build output
+build/
+*.zip
+*.hex
+
+# Editor / OS
+.vscode/
+.DS_Store
+Thumbs.db
