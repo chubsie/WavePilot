@@ -9,6 +9,49 @@ const T = require('../tools/visualizer/three.min.js');
 globalThis.window = { THREE: T };
 Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem() { return null; }, setItem() {} } });
 const { DroneWorld } = await import('../tools/mission_demo/world.js');
+const { createDrone } = await import('../tools/mission_demo/drone-model.js');
+
+test('main axis mapping, gyro/info commands, logs and yaw reset remain available', async () => {
+  const logs=[],sent=[];
+  const glove=new GloveInput({onLog:line=>logs.push(line)});
+  glove.parse('INFO,ready');
+  glove.parse('G,1,15,-6,30,500,0,0');
+  glove.parse('G,2,15,-6,30,500,0,0');
+  assert.ok(glove.yawDegrees>0);
+  glove.axes.swapRP=true;
+  glove.axes.invRoll=true;
+  const mapped=glove.sample();
+  assert.equal(mapped.roll,.2);
+  assert.equal(mapped.pitch,-.5);
+  glove.link={send:async value=>sent.push(value)};
+  for(const command of ['g','i','c']) await glove.send(command);
+  assert.deepEqual(sent,['g','i','c']);
+  assert.equal(glove.yawDegrees,0);
+  assert.deepEqual(logs,['INFO,ready','자이로 보정 중 · 장갑을 움직이지 마세요']);
+});
+
+test('chase view shows drone while inset uses original camera without self-occlusion', () => {
+  const world = flightWorld();
+  const model = createDrone();
+  Object.assign(world, model, {chaseCamera:new T.PerspectiveCamera(60,1,.1,320),
+    fpvContainer:{clientWidth:300,clientHeight:169,getBoundingClientRect:()=>({left:680,bottom:220,width:300,height:169})}});
+  world.container.getBoundingClientRect=()=>({left:0,bottom:1000});
+  const renders=[];
+  world.renderer={setScissorTest(){},setViewport(){},setScissor(){},clearDepth(){},
+    render(scene,camera){renders.push({camera,visible:world.drone.visible});}};
+  world.renderViews(1/60,{roll:.2,pitch:.3});
+  assert.equal(renders.length,2);
+  assert.equal(renders[0].camera,world.chaseCamera);
+  assert.equal(renders[0].visible,true);
+  assert.equal(renders[1].camera,world.camera);
+  assert.equal(renders[1].visible,false);
+  assert.ok(world.drone.position.equals(world.camera.position));
+  assert.equal(model.rotors.length,4);
+  const point=world.camera.position.clone().add(world.camera.getWorldDirection(new T.Vector3()).multiplyScalar(20));
+  const projected=world.project(point.toArray());
+  assert.ok(Math.abs(projected.x-150)<.01);
+  assert.ok(Math.abs(projected.y-84.5)<.01);
+});
 
 function flightWorld(boxes = []) {
   const world = Object.create(DroneWorld.prototype);
@@ -22,7 +65,7 @@ function flightWorld(boxes = []) {
 test('IMU 50% throttle hovers; full throttle accelerates upward with main gravity and drag', () => {
   const world = flightWorld();
   const start = world.camera.position.y;
-  const command = { source: 'imu', roll: 0, pitch: 0, yaw: 0, throttle: .5, flexReady: true };
+  const command = { source: 'imu', roll: 0, pitch: 0, yaw: 0, throttle: .5, flexReady: true, flex0: 1500, fly: true };
   for (let i = 0; i < 60; i++) world.update(command, 1 / 60);
   assert.ok(Math.abs(world.camera.position.y - start) < .001, 'neutral flex must hover, not climb');
   world.update({ ...command, throttle: 1 }, 1 / 60);
@@ -34,7 +77,7 @@ test('IMU 50% throttle hovers; full throttle accelerates upward with main gravit
 
 test('IMU tilt produces throttle-dependent acceleration and deadband prevents drift', () => {
   const low = flightWorld(), high = flightWorld(), rest = flightWorld();
-  const command = { source: 'imu', roll: 0, pitch: 1, yaw: 0, throttle: .5, flexReady: true };
+  const command = { source: 'imu', roll: 0, pitch: 1, yaw: 0, throttle: .5, flexReady: true, flex0: 1500, fly: true };
   low.update(command, 1 / 60);
   high.update({ ...command, throttle: 1 }, 1 / 60);
   rest.update({ ...command, pitch: .05 }, 1 / 60);
@@ -52,6 +95,24 @@ test('stale IMU and lost AUTO observations stop all translational movement', () 
     assert.equal(world.velocity.length(), 0);
     assert.ok(world.camera.position.equals(before));
   }
+});
+
+test('sequence-integrated yaw drives world heading and parked mode coasts while holding altitude', () => {
+  const world = flightWorld(), glove = new GloveInput();
+  glove.parse('G,10,50,-45,90,1500,0,0');
+  glove.parse('G,20,50,-45,90,1500,0,0');
+  world.velocity.set(3,4,5);
+  const altitude = world.camera.position.y;
+  world.update(glove.sample(),1/60);
+  assert.ok(Math.abs(world.heading - -18*.35*Math.PI/180)<1e-12);
+  assert.equal(world.camera.position.y,altitude);
+  assert.deepEqual(world.velocity.toArray(),[2.8499999999999996,3.8,4.75]);
+  const heading = world.heading;
+  glove.parse('G,20,50,-45,90,1500,0,0'); // duplicate packet must not integrate rate again
+  world.update(glove.sample(),1/60);
+  assert.ok(Math.abs(world.heading)<18*Math.PI/180);
+  assert.ok(world.heading<heading); // continues smoothing toward the same 18° yaw
+  assert.equal(glove.sample().rollDegrees,50); // no physical tilt clamp at 30°
 });
 
 test('runtime collects only explicit GLB proxies, never enclosing facade bounds', async () => {
@@ -98,7 +159,9 @@ test('extended main glove packet preserves flex throttle and button edge actions
   assert.equal(glove.last.throttle, 0);
   assert.equal(glove.last.flexReady, true);
   const neutral = glove.parse('G,4,15,-30,45,1500,0,0');
-  assert.equal(neutral.throttle, .5);
+  assert.equal(neutral.throttle, 0);
+  glove.advanceFrame();
+  assert.equal(glove.sample().throttle, .15);
   assert.equal(neutral.pitch, 1);
   assert.equal(neutral.roll, .5);
   assert.equal(neutral.yaw, -.5);

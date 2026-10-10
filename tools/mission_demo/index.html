@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#080b09">
   <title>WavePilot — Field Command</title>
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles.css?v=main-parity-3">
 </head>
 <body>
   <header class="command-bar">
@@ -25,16 +25,37 @@
   <main class="command-grid">
     <section class="camera-panel" aria-label="드론 실시간 화면">
       <div id="viewport" class="viewport"></div>
-      <div id="detection-overlay" class="detection-overlay" aria-hidden="true"></div>
+      <section class="fpv-inset" aria-label="드론 1인칭 카메라 미니 화면">
+        <div class="fpv-title">● DRONE CAMERA <span>1인칭 시야</span></div>
+        <div id="fpv-view"><div id="detection-overlay" class="detection-overlay" aria-hidden="true"></div>
+          <div class="reticle" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+        </div>
+      </section>
+      <details class="glove-settings">
+        <summary>장갑 설정 · 센서</summary>
+        <output id="sensor-values">센서 데이터 대기</output>
+        <div class="bend-meter" aria-label="Flex 굽힘"><i id="bend-fill"></i></div>
+        <p id="flex-calibration">FLAT/BENT 보정 필요</p>
+        <label><input id="invRoll" type="checkbox">Roll 반전</label>
+        <label><input id="invPitch" type="checkbox">Pitch 반전</label>
+        <label><input id="invYaw" type="checkbox">Yaw 반전</label>
+        <label><input id="swapRP" type="checkbox">Roll/Pitch 교환</label>
+        <label><input id="glove-fly" type="checkbox">장갑 비행 활성</label>
+        <button id="gyro-imu" class="utility-button" disabled>자이로 보정</button>
+        <button id="info-imu" class="utility-button" disabled>IMU 정보</button>
+        <p>M: 수동/AI 원형 비행 · L 누름: LED 점멸</p>
+        <output id="flight-details"></output>
+        <canvas id="sensor-chart" aria-label="최근 500개 Roll, Pitch, Yaw rate 센서 샘플"></canvas>
+        <p class="chart-legend"><span>Roll ±90°</span><span>Pitch ±90°</span><span>Yaw ±270°/s</span></p>
+        <pre id="glove-log" aria-live="polite"></pre>
+      </details>
       <div class="scanlines" aria-hidden="true"></div>
       <div id="cinematic-effects" class="cinematic-effects urban" aria-hidden="true"></div>
       <div class="camera-topline">
-        <span class="recording"><i></i> LIVE / EO CAM 01</span>
+        <span class="recording"><i></i> DRONE / FOLLOW CAM</span>
         <span id="scenario-code">URBAN_RECON</span>
         <span>LINK <b>98%</b></span>
       </div>
-      <div class="reticle" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
-      <div class="attitude-line"><i></i><span>— 0 —</span><i></i></div>
       <div class="camera-footer">
         <div><small>ALT</small><b id="altitude">12.0</b><span>M</span></div>
         <div><small>SPD</small><b id="speed">0.0</b><span>M/S</span></div>
@@ -45,7 +66,8 @@
         <div class="mode-switch" role="group" aria-label="비행 모드">
           <button id="mode-imu" data-mode="imu">IMU</button>
           <button id="mode-keyboard" data-mode="keyboard" class="active">KEYBOARD</button>
-          <button id="mode-auto" data-mode="auto">AUTO</button>
+          <button id="mode-ai" data-mode="ai" title="원본 AI: 반경 20m 원형 비행">AI CIRCLE</button>
+          <button id="mode-auto" data-mode="auto" title="식별 대상 접근 및 관측">AUTO</button>
         </div>
         <div class="quality-switch" role="group" aria-label="그래픽 품질">
           <button id="quality-cinematic" data-quality="cinematic" class="active">CINEMATIC</button>
@@ -54,9 +76,9 @@
         <div class="glove-controls" aria-label="장갑 연결 및 보정">
           <button id="connect-imu" class="utility-button">USB 연결</button>
           <button id="connect-ble" class="utility-button">Bluetooth 연결</button>
-          <button id="flex-flat" class="utility-button">FLAT</button>
-          <button id="flex-bent" class="utility-button">BENT</button>
-          <button id="zero-imu" class="utility-button">ZERO</button>
+          <button id="flex-flat" class="utility-button" disabled>FLAT</button>
+          <button id="flex-bent" class="utility-button" disabled>BENT</button>
+          <button id="zero-imu" class="utility-button" disabled>ZERO</button>
         </div>
         <button id="reset-flight" class="icon-button" aria-label="비행 위치 재설정" title="비행 위치 재설정">↻</button>
       </div>

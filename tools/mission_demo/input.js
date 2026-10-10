@@ -33,20 +33,35 @@ const NUS = {
   tx: "6e400003-b5a3-f393-e0a9-e50e24dcca9e",
 };
 
-const FLEX_KEY = "wavepilot-mission-flex.v1";
+const FLEX_KEY = "gloveVizFlex.v1";
 
 export class GloveInput {
-  constructor({ onStatus = () => {}, onModeToggle = () => {}, onAuxAction = () => {} } = {}) {
+  constructor({ onStatus = () => {}, onModeToggle = () => {}, onAuxAction = () => {}, onLog = () => {} } = {}) {
     this.link = null;
     this.last = null;
     this.buffer = "";
     this.onStatus = onStatus;
     this.onModeToggle = onModeToggle;
     this.onAuxAction = onAuxAction;
+    this.onLog = onLog;
+    this.yawDegrees = 0;
+    this.packetCount = 0;
+    this.axes = {invRoll:false,invPitch:false,invYaw:false,swapRP:false,fly:false};
+    try { Object.assign(this.axes,JSON.parse(localStorage.getItem('gloveVizOpts.v2') || '{}')); } catch {}
     this.lastSeq = null;
     this.buttons = 0;
-    this.flex0 = { raw: null, recent: [], flat: null, bent: null };
-    try { Object.assign(this.flex0, JSON.parse(localStorage.getItem(FLEX_KEY) || "{}")); } catch {}
+    this.flex0 = { raw: null, recent: [], flat: null, bent: null, bend: 0 };
+    this.history = [];
+    this.hz = 0;
+    try {
+      const saved = localStorage.getItem(FLEX_KEY);
+      const legacy = localStorage.getItem('wavepilot-mission-flex.v1');
+      Object.assign(this.flex0, JSON.parse(saved || legacy || '{}'));
+      if (!saved && legacy) this.saveFlex();
+    } catch {}
+    if (typeof navigator !== 'undefined') navigator.serial?.addEventListener?.('disconnect', event => {
+      if (this.link?.port === event.target) { this.onLog('USB 장갑 연결이 끊어졌습니다.'); this.disconnect(); }
+    });
   }
 
   async connect(kind = "usb") {
@@ -98,6 +113,7 @@ export class GloveInput {
       filters: [{ namePrefix: "WavePilot" }, { services: [NUS.service] }],
       optionalServices: [NUS.service],
     });
+    try {
     const server = await device.gatt.connect();
     const service = await server.getPrimaryService(NUS.service);
     const tx = await service.getCharacteristic(NUS.tx);
@@ -115,6 +131,12 @@ export class GloveInput {
     };
     device.addEventListener("gattserverdisconnected", () => { if (this.link?.device === device) this.disconnect(); });
     this.onStatus({ connected: true, kind: "ble" });
+    } catch (error) {
+      try { device.gatt.disconnect(); } catch {}
+      this.link = null;
+      this.onStatus({ connected: false, kind: null });
+      throw error;
+    }
   }
 
   feed(text) {
@@ -128,7 +150,8 @@ export class GloveInput {
 
   parse(line) {
     const fields = line.trim().split(",");
-    if (fields[0] !== "G" || fields.length < 5) return null;
+    if (fields[0] !== "G") { if(line) this.onLog(line); return null; }
+    if (fields.length < 5) return null;
     const seq = Number(fields[1]);
     const roll = Number(fields[2]);
     const pitch = Number(fields[3]);
@@ -136,8 +159,10 @@ export class GloveInput {
     if (![seq, roll, pitch, yawRate].every(Number.isFinite)) return null;
     const steps = this.lastSeq === null ? 0 : Math.min(Math.max(seq - this.lastSeq, 0), 50);
     this.lastSeq = seq;
+    this.packetCount++;
+    if(Math.abs(yawRate)>1) this.yawDegrees += yawRate*steps*.02;
     const flex0 = fields.length >= 6 ? Number(fields[5]) : NaN;
-    const buttons = fields.length >= 8 ? Number(fields[7]) | 0 : 0;
+    const buttons = fields.length >= 8 && Number.isFinite(Number(fields[7])) ? Number(fields[7]) | 0 : this.buttons;
     if (Number.isFinite(flex0)) {
       this.flex0.raw = flex0;
       this.flex0.recent.push(flex0);
@@ -148,13 +173,15 @@ export class GloveInput {
     if (pressed & 1) this.onAuxAction(true);
     if (!(buttons & 1) && (this.buttons & 1)) this.onAuxAction(false);
     this.buttons = buttons;
-    const bend = this.flexBend();
     this.last = {
-      roll: clamp(roll / 30), pitch: clamp(-pitch / 30), yaw: clamp(-yawRate / 90),
-      throttle: this.flexReady() ? bend : 0.5,
-      flexReady: this.flexReady(),
+      roll: roll / 30, pitch: -pitch / 30, yaw: -yawRate / 90,
+      throttle: this.flex0.bend, flexReady: this.flexReady(),
+      rollDegrees:roll,pitchDegrees:pitch,yawRate,
       source: "imu", timestamp: performance.now(), seq, steps, flex0, buttons,
     };
+    const mapped = this.mapped();
+    this.history.push([mapped.rollDegrees, mapped.pitchDegrees, mapped.yawRate]);
+    if (this.history.length > 500) this.history.shift();
     return this.last;
   }
 
@@ -163,18 +190,34 @@ export class GloveInput {
   }
 
   flexBend() {
-    if (!this.flexReady() || !Number.isFinite(this.flex0.raw)) return 0.5;
-    return clamp((this.flex0.raw - this.flex0.flat) / (this.flex0.bent - this.flex0.flat), 0, 1);
+    return this.flex0.bend;
+  }
+
+  advanceFrame() {
+    if (this.flexReady() && Number.isFinite(this.flex0.raw)) {
+      const target = clamp((this.flex0.raw - this.flex0.flat) / (this.flex0.bent - this.flex0.flat), 0, 1);
+      this.flex0.bend += (target - this.flex0.bend) * .3;
+    }
+  }
+
+  saveFlex() {
+    try { localStorage.setItem(FLEX_KEY, JSON.stringify({ flat: this.flex0.flat, bent: this.flex0.bent })); } catch {}
   }
 
   calibrateFlex(which) {
     if (!["flat", "bent"].includes(which) || this.flex0.recent.length < 10) return false;
     this.flex0[which] = Math.round(this.flex0.recent.reduce((sum, value) => sum + value, 0) / this.flex0.recent.length);
-    try { localStorage.setItem(FLEX_KEY, JSON.stringify({ flat: this.flex0.flat, bent: this.flex0.bent })); } catch {}
+    this.saveFlex();
+    this.onLog(this.flexReady() ? `Flex 보정: flat=${this.flex0.flat}, bent=${this.flex0.bent}` : 'Flex 두 기준값의 간격이 30 이상이어야 합니다.');
     return true;
   }
 
-  async send(command) { if (this.link) await this.link.send(command); }
+  async send(command) {
+    if(command==='c') this.yawDegrees=0;
+    try { if (this.link) await this.link.send(command); }
+    catch (error) { this.onLog(`Send failed: ${error.message}`); }
+    if (command === 'g') this.onLog('자이로 보정 중 · 장갑을 움직이지 마세요');
+  }
 
   async disconnect() {
     const link = this.link;
@@ -183,11 +226,24 @@ export class GloveInput {
     this.onStatus({ connected: false, kind: null });
   }
 
+  mapped() {
+    let roll = this.last?.rollDegrees || 0, pitch = this.last?.pitchDegrees || 0;
+    if (this.axes.swapRP) [roll, pitch] = [pitch, roll];
+    if (this.axes.invRoll) roll = -roll;
+    if (this.axes.invPitch) pitch = -pitch;
+    const yaw = this.axes.invYaw ? -this.yawDegrees : this.yawDegrees;
+    const rate = (this.last?.yawRate || 0) * (this.axes.invYaw ? -1 : 1);
+    return { ...this.last, rollDegrees: roll, pitchDegrees: pitch, yawDegrees: yaw, yawRate: rate,
+      roll: roll / 30, pitch: -pitch / 30, yaw: -rate / 90, fly: this.axes.fly,
+      flex0: this.flex0.raw, flexReady: this.flexReady(), throttle: this.flex0.bend };
+  }
+
   sample() {
+    const mapped = this.mapped();
     if (!this.last || performance.now() - this.last.timestamp > 500) {
-      return { roll: 0, pitch: 0, yaw: 0, throttle: 0.5, source: "imu-stale", timestamp: performance.now() };
+      return { ...mapped, source: "imu-stale", timestamp: performance.now() };
     }
-    return this.last;
+    return mapped;
   }
 }
 

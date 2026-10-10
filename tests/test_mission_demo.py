@@ -46,7 +46,7 @@ def test_demo_contains_only_the_urban_scenario():
 
 
 def test_actual_flight_and_glove_behavior():
-    subprocess.run(["node", "--test", "tests/mission_flight.test.mjs"], cwd=ROOT, check=True)
+    subprocess.run(["node", "--test", "tests/mission_flight.test.mjs", "tests/mission_main_parity.test.mjs"], cwd=ROOT, check=True)
 
 
 def test_cinematic_environment_contract():
