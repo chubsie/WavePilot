@@ -47,9 +47,9 @@ Compile warnings saying `"USE_TINYUSB" redefined` come from the board package an
 | Hand tilt | NU-IMU | Roll and pitch lean the drone; wrist rotation turns it |
 | Finger bend | Flex sensor on P0.03 (A1), divider to 3.3 V | Throttle: 0% straight, 50% hovers, 100% fully bent |
 | Thumb button | Switch from P0.21 to GND | Toggle Manual / AI mode (AI is a placeholder that circles) |
-| Middle-finger button | Switch from P0.10 to GND | Flash the drone's LEDs while held (placeholder) |
+| Middle-finger button | Switch from P0.10 to GND | Hold to fire a beam of hearts from the drone's nose |
 
-Calibrate the flex sensor with **Set flat** and **Set bent** in the visualizer. For testing without the glove, press `M` for the mode and hold `L` for the LEDs.
+Calibrate the flex sensor with **Set flat** and **Set bent** in the visualizer. For testing without the glove, press `M` for the mode and hold `L` for the hearts.
 
 ## Serial protocol
 
