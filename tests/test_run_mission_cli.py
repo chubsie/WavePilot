@@ -4,6 +4,7 @@ import ast
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -553,3 +554,39 @@ def test_browser_modules_are_not_imported_at_module_level():
 
     assert not imported & LAZY_ONLY_MODULES
 
+
+# --- README run_mission 예시 ---
+
+README_PYTHON_SECTION_HEADING = "## Python: LLM overwatch pipeline"
+README_FLAG_PATTERN = re.compile(r"(?<!\S)--[a-z][a-z0-9-]*")
+README_MISSION_PATH_PATTERN = re.compile(r"missions/[A-Za-z0-9_]+\.toml")
+README_RUN_MISSION_MODULE = "python -m modules.drone.run_mission"
+
+
+def _read_readme_run_mission_lines() -> list[str]:
+    readme_text = (WAVEPILOT_ROOT / "README.md").read_text(encoding="utf-8")
+    start = readme_text.index(README_PYTHON_SECTION_HEADING)
+    end = readme_text.find("\n## ", start + len(README_PYTHON_SECTION_HEADING))
+    section = readme_text[start:] if end < 0 else readme_text[start:end]
+
+    joined_text = section.replace("\\\n", " ")  # 백슬래시 줄이음은 한 명령이다
+    # 모듈 이름 뒤만 남긴다 — 앞쪽 플래그(uv run --group yolo)는 run_mission 인자가 아니다
+    return [
+        line.split(README_RUN_MISSION_MODULE, 1)[1]
+        for line in joined_text.splitlines()
+        if README_RUN_MISSION_MODULE in line
+    ]
+
+
+def test_readme_run_mission_flags_and_paths_exist():
+    lines = _read_readme_run_mission_lines()
+    option_strings = set(run_mission.build_arg_parser()._option_string_actions)
+
+    unknown_flags = sorted({flag for line in lines for flag in README_FLAG_PATTERN.findall(line)} - option_strings)
+    mission_paths = {path for line in lines for path in README_MISSION_PATH_PATTERN.findall(line)}
+    missing_paths = sorted(path for path in mission_paths if not (WAVEPILOT_ROOT / path).is_file())
+
+    assert lines, "README has no `python -m modules.drone.run_mission` command line"
+    assert not unknown_flags, f"README run_mission flags not defined: {unknown_flags}"
+    assert mission_paths, "README run_mission lines mention no mission file"
+    assert not missing_paths, f"README mentions mission files that do not exist: {missing_paths}"
