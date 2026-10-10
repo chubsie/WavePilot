@@ -18,8 +18,9 @@ ARG LLAMA_CPP_REF=b11541
 ARG CUDA_ARCH=87
 ARG BUILD_JOBS=4
 
+# LIBRARY_PATH: 베이스 이미지에 없는 변수라 ${LIBRARY_PATH} 를 이어 붙이면 빈 항목(= 현재 디렉터리)이 생긴다.
 ENV PATH=/usr/local/cuda/bin:${PATH} \
-    LIBRARY_PATH=/usr/local/cuda/lib64/stubs:${LIBRARY_PATH}
+    LIBRARY_PATH=/usr/local/cuda/lib64/stubs
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \

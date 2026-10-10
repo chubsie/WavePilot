@@ -15,6 +15,12 @@ DECISION_JETSON_PARTS = ("modules", "decision", "deploy", "jetson")
 MODEL_PATH = "/models/d1-3B-Q4_K_M.gguf"
 DECISION_PORT = "8081"
 LLAMA_CPP_REF = "b11541"
+# 이미지 태그는 빌드 인자와 같은 변수로 만든다 — 다른 ref·베이스로 빌드해도 이름이 내용과 맞는다 (IN-08)
+COMPOSE_IMAGE = "image: wavepilot/llama-server:${LLAMA_CPP_REF:-b11541}-${L4T_TAG:-r36.4.0}"
+HARDCODED_IMAGE_PATTERN = re.compile(r"^\s*image:\s*wavepilot/llama-server:b11541-r36\.4\.0\s*$", re.MULTILINE)
+DOCKERFILE_LIBRARY_PATH = "LIBRARY_PATH=/usr/local/cuda/lib64/stubs"
+SMOKE_BODY_COMMAND = "uv run python -m modules.decision.sample_request > /tmp/d1_smoke.json"
+SMOKE_BODY_COPY = "scp /tmp/d1_smoke.json <user>@<orin-ip>:/tmp/"
 
 # 값이 뒤따르는 플래그.
 VALUE_FLAGS = {"-m", "--alias", "--host", "--port", "-c", "-np", "-ngl"}
@@ -96,6 +102,17 @@ def test_decision_dockerfile_builds_cuda_sm87_llama_server(decision_dockerfile_t
         assert expected in decision_dockerfile_text, f"Dockerfile: expected {expected!r}"
 
 
+def test_decision_dockerfile_library_path_has_no_empty_entry(decision_dockerfile_text: str) -> None:
+    # 베이스 이미지에 LIBRARY_PATH 가 없어 ${LIBRARY_PATH} 를 이어 붙이면 빈 항목(현재 디렉터리)이 생긴다 (IN-09)
+    code_lines = get_code_lines(decision_dockerfile_text)
+
+    library_path_lines = [line for line in code_lines if "LIBRARY_PATH=" in line]
+    assert library_path_lines == [DOCKERFILE_LIBRARY_PATH], (
+        f"Dockerfile: expected exactly {DOCKERFILE_LIBRARY_PATH!r}, got {library_path_lines}"
+    )
+    assert "${LIBRARY_PATH}" not in "\n".join(code_lines),"Dockerfile: LIBRARY_PATH must not append the unset ${LIBRARY_PATH}"
+
+
 def test_decision_runtime_image_contains_only_llama_server(decision_dockerfile_text: str) -> None:
     assert 'ENTRYPOINT ["llama-server"]' in decision_dockerfile_text, 'Dockerfile: expected ENTRYPOINT ["llama-server"]'
     assert f"EXPOSE {DECISION_PORT}" in decision_dockerfile_text, f"Dockerfile: expected EXPOSE {DECISION_PORT}"
@@ -118,7 +135,7 @@ def test_decision_compose_project_and_service(decision_compose_text: str) -> Non
         "name: wavepilot-decision",
         "llama-decision:",
         "runtime: nvidia",
-        "image: wavepilot/llama-server:b11541-r36.4.0",
+        COMPOSE_IMAGE,
         "LLAMA_CPP_REF: ${LLAMA_CPP_REF:-b11541}",
         "L4T_TAG: ${L4T_TAG:-r36.4.0}",
         'CUDA_ARCH: "87"',
@@ -127,6 +144,9 @@ def test_decision_compose_project_and_service(decision_compose_text: str) -> Non
         assert expected in decision_compose_text, f"compose.yaml: expected {expected!r}"
 
     assert "llama-report" not in decision_compose_text, "compose.yaml: llama-report belongs to modules/llm_report"
+    assert HARDCODED_IMAGE_PATTERN.search(decision_compose_text) is None, (
+        "compose.yaml: image tag must follow LLAMA_CPP_REF / L4T_TAG, not be hardcoded"
+    )
 
 
 def test_decision_compose_command_pins_every_server_flag(decision_compose_text: str) -> None:
@@ -212,3 +232,35 @@ def test_decision_runbook_access_control_without_api_key(decision_runbook_text: 
 
 def test_decision_runbook_states_agent_does_not_execute(decision_runbook_text: str) -> None:
     assert "에이전트는 실행하지 않는다" in decision_runbook_text, "RUNBOOK.md: expected '에이전트는 실행하지 않는다' (D-10)"
+
+
+def test_decision_runbook_checks_gpu_with_list_devices(decision_runbook_text: str) -> None:
+    # --version 은 CUDA 장치를 출력하지 않는다(실측) — GPU 인식은 --list-devices, 사용은 tegrastats 로 본다
+    for expected in (
+        "docker compose run --rm --no-deps llama-decision --list-devices",
+        "CUDA0: Orin",
+        "build 1",
+        "GR3D_FREQ",
+        "tmux",
+    ):
+        assert expected in decision_runbook_text, f"RUNBOOK.md: expected {expected!r}"
+
+
+def test_decision_runbook_image_name_follows_build_args(decision_runbook_text: str) -> None:
+    assert "${LLAMA_CPP_REF}-${L4T_TAG}" in decision_runbook_text, "RUNBOOK.md: expected the variable image tag"
+    assert "이미지 이름은 `b11541-r36.4.0` 그대로" not in decision_runbook_text, (
+        "RUNBOOK.md: the image name now follows LLAMA_CPP_REF, the old 'name stays the same' note is stale"
+    )
+    assert "`image:` 이름은 그대로" not in decision_runbook_text, (
+        "RUNBOOK.md: the image name now follows L4T_TAG, the old 'name stays the same' note is stale"
+    )
+
+
+def test_decision_runbook_smoke_body_comes_from_code(wavepilot_root: Path, decision_runbook_text: str) -> None:
+    # 스모크 본문은 실제 v2 요청과 같아야 7단계 지연 분해가 의미 있다 (IN-07)
+    assert (wavepilot_root / "modules" / "decision" / "sample_request.py").is_file()
+    for expected in (SMOKE_BODY_COMMAND, SMOKE_BODY_COPY):
+        assert expected in decision_runbook_text, f"RUNBOOK.md: expected smoke body step {expected!r}"
+
+    for stale in ("cat > /tmp/d1_smoke.json", "class_name", "target_class", "distance_m"):
+        assert stale not in decision_runbook_text, f"RUNBOOK.md: hand-written v1-shaped smoke body remnant {stale!r}"

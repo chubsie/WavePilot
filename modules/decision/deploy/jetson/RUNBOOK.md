@@ -7,12 +7,12 @@
 |------|------|------|
 | 읽기 전용 | 0 (Mac 에서 파일 전달만), 1 | Orin 상태를 바꾸지 않는다 (0단계는 사용자 홈 아래 파일 복사뿐) |
 | 상태 변경 | 2 ~ 5, 9, 10 | 모델 다운로드, 이미지 pull·빌드, 컨테이너 기동·중지, 방화벽 |
-| 요청·측정 | 6 ~ 8 | 실행 중인 서버에 요청만 보낸다 (스모크, 지연 교차 검증, Mac 접속) |
+| 요청·측정 | 6 ~ 8 | 실행 중인 서버에 요청만 보낸다 (스모크, 지연 교차 검증, Mac 접속). 6단계 요청 본문은 Mac 에서 만들어 Orin `/tmp` 로 복사한다 |
 | 보고 | 11 | 결과를 붙여 넣어 에이전트에게 전달 |
 
 구성 요약:
 
-- 이미지: `wavepilot/llama-server:b11541-r36.4.0` — llama.cpp `b11541` 을 `nvcr.io/nvidia/l4t-jetpack:r36.4.0` 위에서 `CMAKE_CUDA_ARCHITECTURES=87` 로 소스 빌드. 컨테이너에는 `llama-server` 바이너리만 있다.
+- 이미지: `wavepilot/llama-server:${LLAMA_CPP_REF}-${L4T_TAG}` (기본 `b11541-r36.4.0`) — 태그가 빌드 인자를 따라가므로 다른 ref·베이스로 빌드하면 이미지 이름도 바뀐다. 기본값은 llama.cpp `b11541` 을 `nvcr.io/nvidia/l4t-jetpack:r36.4.0` 위에서 `CMAKE_CUDA_ARCHITECTURES=87` 로 소스 빌드. 컨테이너에는 `llama-server` 바이너리만 있다.
 - 왜 `b11541` 인가: 예전 보고 서버 이미지(llama.cpp `v0.6.0`)는 d1-3B 의 `lfm2-d1` 아키텍처를 읽지 못한다. 지원은 PR #30110 으로 들어왔고 `b11541` 이 확인된 첫 태그다.
 - compose 프로젝트: `wavepilot-decision` (llm_report 의 `jetson` 프로젝트와 분리 — 여기서 `down` 해도 그쪽 컨테이너를 건드리지 않는다).
 - compose 서비스: `llama-decision`, 포트 `8081`, 모델 `/models/d1-3B-Q4_K_M.gguf` (읽기 전용 볼륨).
@@ -68,7 +68,7 @@ ss -ltn | grep -E ':8081|:8080'
 **`L4T_TAG` 선택 기준:**
 
 - NGC 의 최신 r36 태그는 `r36.4.0` 이다. 호스트가 JetPack 6.2.x (= L4T r36.5) 여도 같은 r36 주버전이므로 기본값 `r36.4.0` 으로 먼저 시도한다.
-- 호스트가 r36.2/r36.3 이고 r36.4.0 베이스에서 CUDA 오류가 나면 `L4T_TAG=r36.3.0` (또는 `r36.2.0`) 으로 맞춰 다시 빌드한다. 이 경우 compose 의 `image:` 이름은 그대로지만 내용은 다른 태그로 빌드된다는 점을 보고에 적는다.
+- 호스트가 r36.2/r36.3 이고 r36.4.0 베이스에서 CUDA 오류가 나면 `L4T_TAG=r36.3.0` (또는 `r36.2.0`) 으로 맞춰 다시 빌드한다. 이미지 이름도 `wavepilot/llama-server:b11541-r36.3.0` 처럼 따라 바뀐다. 이후 `up`·`run` 에도 같은 `L4T_TAG` 를 지정해야 그 이미지를 쓴다 (빠뜨리면 기본 태그 이미지를 찾고, 없으면 기본값으로 새로 빌드한다). 사용한 `L4T_TAG` 를 보고에 적는다.
 
 **참고 — 예전 보고 서버:** Nemotron 모델은 사용자가 이미 Orin 에서 지웠다. 예전 `llama-report` 컨테이너가 아직 떠 있으면 중지할지는 사용자 판단이다. 중지한다면 그 컨테이너의 디렉터리(`~/wavepilot/modules/llm_report/deploy/jetson`)에서 `docker compose down` 한다. 디스크가 모자라면 선택적으로 `docker image rm wavepilot/llama-server:v0.6.0-r36.4.0` 으로 예전 이미지를 지운다.
 
@@ -119,9 +119,11 @@ docker run --rm --runtime nvidia nvcr.io/nvidia/l4t-jetpack:r36.4.0 nvcc --versi
 
 ## 4. 빌드 (상태 변경)
 
-**목적:** llama.cpp `b11541` 의 `llama-server` 를 SM87 로 빌드해 `wavepilot/llama-server:b11541-r36.4.0` 이미지를 만든다.
+**목적:** llama.cpp `b11541` 의 `llama-server` 를 SM87 로 빌드해 `wavepilot/llama-server:b11541-r36.4.0` 이미지를 만든다 (기본값 기준 — 태그는 `${LLAMA_CPP_REF}-${L4T_TAG}`).
 
-**명령 (Orin):**
+빌드는 수십 분 걸려 그사이 SSH 가 끊기면 빌드도 같이 죽는다. `tmux` 세션 안에서 돌린다 (`tmux new -s d1build`, 다시 붙기는 `tmux attach -t d1build`).
+
+**명령 (Orin, tmux 안에서):**
 
 ```bash
 cd ~/wavepilot/modules/decision/deploy/jetson
@@ -134,13 +136,24 @@ time docker compose build llama-decision
 BUILD_JOBS=2 docker compose build llama-decision
 ```
 
-빌드 결과 확인:
+빌드 결과 확인 — 바이너리 실행과 GPU 인식을 따로 본다:
 
 ```bash
 docker compose run --rm --no-deps llama-decision --version
+docker compose run --rm --no-deps llama-decision --list-devices
 ```
 
-**기대 결과:** 빌드는 수십 분 걸릴 수 있다. `--version` 이 b11541 무렵의 빌드 번호와 CUDA 디바이스(Orin)를 출력한다.
+**기대 결과:** 빌드는 수십 분 걸릴 수 있다.
+
+- `--version` 은 버전과 컴파일러만 출력한다. CUDA 장치는 나오지 않는다. 실측 예:
+
+  ```text
+  version: 0.6.0-dev (build 1, commit f2918ca)
+  built with GNU 11.4.0 for Linux aarch64
+  ```
+
+  `build 1` 은 정상이다 — `--depth 1` 로 clone 해서 커밋 수를 셀 수 없기 때문이다. 어느 소스인지는 `commit` 해시로 본다.
+- GPU 인식은 `--list-devices` 로 확인한다. `CUDA0: Orin (7607 MiB, 6384 MiB free)` 형태의 줄이 있어야 한다 (MiB 값은 그때 메모리 상황에 따라 다르다).
 
 **실패 시:**
 
@@ -151,8 +164,9 @@ docker compose run --rm --no-deps llama-decision --version
   LLAMA_CPP_REF=<newer-b-tag> docker compose build llama-decision
   ```
 
-  이때 이미지 이름은 `b11541-r36.4.0` 그대로지만 내용은 다른 태그로 빌드된다. 사용한 태그를 보고에 반드시 적는다.
+  이미지 이름은 `wavepilot/llama-server:<newer-b-tag>-r36.4.0` 이 된다. 이후 `up`·`run` 에도 같은 `LLAMA_CPP_REF=<newer-b-tag>` 를 붙인다. 사용한 태그를 보고에 반드시 적는다.
 - `--version` 실행 시 공유 라이브러리(`.so`)를 못 찾는다는 오류 → 정적 빌드(`BUILD_SHARED_LIBS=OFF`) 가정 실패. 로그 첨부.
+- `--list-devices` 에 `CUDA0` 줄이 없다 → 컨테이너가 GPU 를 못 본다. 1단계 nvidia 런타임 확인 결과와 출력 전체를 보고.
 
 ---
 
@@ -173,6 +187,7 @@ curl -s http://localhost:8081/v1/models
 **기대 결과:**
 
 - 로그에 `decision model type: lfm2-d1` 줄이 있다.
+- 기본 로그(verbosity 3)에는 offload/CUDA 줄이 없다 — 없어도 정상이다. GPU 사용은 6단계 `tegrastats` 의 `GR3D_FREQ` 로 확인한다.
 - 모델 로딩 중에는 `/health` 가 `503`, 준비되면 `200` (`{"status":"ok"}`). `docker compose ps` 상태가 `healthy` 가 될 때까지 기다린다 (start_period 120s).
 - `/v1/models` 응답의 output_modalities 에 `"decisions"` 가 있다.
 
@@ -188,30 +203,16 @@ curl -s http://localhost:8081/v1/models
 
 **목적:** `/v1/systemone` 이 choice 질문에 choice / probabilities / confidence / usage 로 답하는지 확인한다.
 
-요청 본문을 임시 파일로 만든다 (Orin). `state` 는 압축 JSON **문자열**이고 합성 값이다. criteria 문구는 예시일 뿐이며, 실제 정의의 원본은 코드 상수 `RULE_MODE_DEFINITIONS` (01-01) 다.
+요청 본문은 손으로 쓰지 않고 코드로 만든다 (Mac). `modules.decision.sample_request` 가 재생 픽스처 한 줄을 d1 셀렉터와 같은 순서(판정기 사건 → 보기 필터 → `RULE_MODE_DEFINITIONS` 질문 → 요청 상태 v2 문자열)로 조립해, 셀렉터가 실제로 보내는 바이트 그대로 출력한다. 그래서 7단계 지연·`usage.input_tokens` 가 실제 요청과 같은 조건에서 나온다. 기본 줄은 `target_found_mode_chain.jsonl` 13번째 줄이다 (대상 track 3개, 현재 보기 필터 기준 보기 6개).
 
 ```bash
-cat > /tmp/d1_smoke.json <<'EOF'
-{
-  "state": "{\"schema_version\":2,\"drone\":{\"battery_pct\":78.0,\"altitude_m\":40.0},\"tracks\":[{\"track_id\":\"T1\",\"class_name\":\"person\",\"confidence\":0.82,\"distance_m\":65.0}],\"mission\":{\"target_class\":\"person\"}}",
-  "questions": {
-    "rule_mode": {
-      "type": "choice",
-      "instructions": "Choose the next rule_mode for the drone.",
-      "criteria": {
-        "search": "No confirmed target; sweep the area to find one.",
-        "approach": "A target is detected but far; move closer to confirm it.",
-        "observe": "A target is confirmed and close enough; keep it in view.",
-        "hold": "Stay in place because the situation is unclear or unsafe to move.",
-        "return_home": "Battery is low or the mission is over; fly back to home."
-      }
-    }
-  }
-}
-EOF
+cd WavePilot && uv run python -m modules.decision.sample_request > /tmp/d1_smoke.json
+scp /tmp/d1_smoke.json <user>@<orin-ip>:/tmp/
 ```
 
-요청 (두 번 보낸다 — 첫 번째는 워밍업):
+다른 줄로 만들려면 `--fixture <path> --line N` 을 준다. 사건이 없는 줄(셀렉터가 묻지 않는 줄)은 오류로 거절된다.
+
+요청 (Orin, 두 번 보낸다 — 첫 번째는 워밍업):
 
 ```bash
 curl -s http://localhost:8081/v1/systemone -H "Content-Type: application/json" -d @/tmp/d1_smoke.json
@@ -220,7 +221,7 @@ curl -s http://localhost:8081/v1/systemone -H "Content-Type: application/json" -
 echo
 ```
 
-메모리 확인:
+메모리·GPU 확인 (`tegrastats` 가 도는 5초 동안 다른 터미널에서 위 `curl` 을 한 번 더 보낸다):
 
 ```bash
 free -h
@@ -229,13 +230,14 @@ timeout 5 tegrastats
 
 **기대 결과:**
 
-- `answers.rule_mode.choice` 가 보낸 키(`search`, `approach`, `observe`, `hold`, `return_home`) 중 하나다.
+- `answers.rule_mode.choice` 가 보낸 criteria 키 중 하나다 (기본 본문은 `search`, `approach`, `aim_and_fire`, `observe`, `hold`, `return_home`).
 - `answers.rule_mode.probabilities` 의 합이 약 1, `confidence` 가 0 ~ 1 사이.
 - `usage.input_tokens` 가 있다.
 - `timings` 는 **없다** — 정상이다 (RESEARCH 2.3). 그래서 7단계에서 지연을 바깥에서 잰다.
-- probabilities 가 전부 비슷한 값(예: 모두 약 0.2)으로 퇴화했는지 눈여겨보고 보고에 적는다 (RESEARCH A8, Q4_K_M 양자화 위험).
+- probabilities 가 전부 비슷한 값(예: 6개면 모두 약 0.17)으로 퇴화했는지 눈여겨보고 보고에 적는다 (RESEARCH A8, Q4_K_M 양자화 위험).
+- 요청 처리 중 `tegrastats` 의 `GR3D_FREQ` 가 0% 보다 올라간다 — GPU 로 추론한다는 뜻이다. 계속 `0%` 면 CPU 로 돌고 있는 것이니 4단계 `--list-devices` 결과와 함께 보고.
 
-**실패 시:** 501 이면 5단계 실패 시 항목으로. 400 이면 본문 JSON 형식을 확인하고 전체 응답을 보고.
+**실패 시:** 501 이면 5단계 실패 시 항목으로. 400 이면 Mac 에서 `sample_request` 를 다시 돌려 본문을 새로 만들고, 그래도 400 이면 전체 응답과 본문 파일을 보고.
 
 ---
 
@@ -246,9 +248,9 @@ timeout 5 tegrastats
 - `network_rtt_ms` = `GET /health` 왕복 시간
 - `orin_processing_ms` = max(0, `total_ms` − `network_rtt_ms`)
 
-로 추정한다. 이 추정이 Orin 내부에서 잰 처리 시간과 맞는지 본다.
+로 추정한다. 이 추정이 Orin 내부에서 잰 처리 시간과 맞는지 본다. 본문은 6단계에서 `sample_request` 로 만든 `/tmp/d1_smoke.json` 이다 — 셀렉터의 실제 요청과 같은 바이트라 토큰 수도 같아서, 여기서 맞으면 실제 요청에도 그대로 적용된다.
 
-**명령 (Orin, 6단계의 `/tmp/d1_smoke.json` 사용):**
+**명령 (Orin, 6단계에서 복사해 둔 `/tmp/d1_smoke.json` 사용):**
 
 ```bash
 curl -s -o /dev/null http://localhost:8081/v1/systemone -H "Content-Type: application/json" -d @/tmp/d1_smoke.json
@@ -260,10 +262,9 @@ echo "== orin systemone =="
 for i in $(seq 10); do curl -s -o /dev/null -w '%{time_connect} %{time_starttransfer} %{time_total}\n' http://localhost:8081/v1/systemone -H "Content-Type: application/json" -d @/tmp/d1_smoke.json; done
 ```
 
-**명령 (Mac, 같은 본문 파일을 가져와서):**
+**명령 (Mac, 6단계에서 만든 같은 `/tmp/d1_smoke.json` 사용):**
 
 ```bash
-scp <user>@<orin-ip>:/tmp/d1_smoke.json /tmp/
 curl -s -o /dev/null http://<orin-ip>:8081/v1/systemone -H "Content-Type: application/json" -d @/tmp/d1_smoke.json
 
 echo "== mac health =="
@@ -333,16 +334,20 @@ cd WavePilot && D1_SERVER_URL=http://<orin-ip>:8081 uv run pytest -m d1
 
 ```bash
 docker compose down
+docker image ls wavepilot/llama-server
 docker image rm wavepilot/llama-server:b11541-r36.4.0
 docker builder prune
 ```
 
+다른 `LLAMA_CPP_REF`·`L4T_TAG` 로 빌드했다면 `docker image ls` 에 보이는 그 태그를 지운다.
+
 `docker compose down` 은 프로젝트 `wavepilot-decision` 의 컨테이너만 내린다.
 
-다른 llama.cpp 태그로 재빌드:
+다른 llama.cpp 태그로 재빌드 (이미지는 `wavepilot/llama-server:<tag>-r36.4.0` 으로 따로 생긴다. 기동도 같은 변수로):
 
 ```bash
 LLAMA_CPP_REF=<tag> docker compose build llama-decision
+LLAMA_CPP_REF=<tag> docker compose up -d llama-decision
 ```
 
 ---
@@ -356,6 +361,7 @@ L4T / JetPack 버전 (cat /etc/nv_tegra_release, dpkg-query):
 사용한 llama.cpp ref (기본 b11541 / 바꿨다면 그 태그):
 빌드 성공 여부 / 소요 시간 / BUILD_JOBS / L4T_TAG:
 llama-server --version 출력:
+llama-server --list-devices 출력 (CUDA0 줄):
 decision model type 로그 줄:
 /health 코드 — Orin 내부:
 /health 코드 — Mac 에서:
@@ -363,6 +369,7 @@ decision model type 로그 줄:
 모델 파일 크기 / sha256sum (HF 와 일치 여부):
 스모크 응답 JSON (두 번째 호출):
 probabilities 퇴화 여부 (모두 비슷한가):
+tegrastats GR3D_FREQ (요청 중):
 7단계 원본 출력 — orin health 10줄:
 7단계 원본 출력 — orin systemone 10줄:
 7단계 원본 출력 — mac health 10줄:
