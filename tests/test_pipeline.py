@@ -1,8 +1,8 @@
 """DronePipeline 소켓 없는 테스트 (MOCK-01, RPT-01, COMM-01).
 
 InMemoryLink 가 CommLink 자리를 채운다. 보낸 메시지를 목록에 쌓고, 미리 넣어 둔 수신 메시지를
-앞에서부터 꺼내 준다. 테스트 파일은 경계 규칙 대상이 아니므로 mocks·perception·llm_module 파사드를
-여기서 직접 조립한다(실행 코드에서는 drone/run_scenario.py 만 이 일을 한다).
+앞에서부터 꺼내 준다. 테스트 파일은 경계 규칙 대상이 아니므로 simulation·perception·llm_report 파사드를
+여기서 직접 조립한다(실행 코드에서는 modules/drone/run_scenario.py 만 이 일을 한다).
 """
 
 import logging
@@ -13,17 +13,17 @@ from pathlib import Path
 
 import pytest
 
-from drone.pipeline import DronePipeline, PipelineConfig, RunSummary
-from interfaces.comm import MESSAGE_TYPES, LinkStatus, Message
-from interfaces.detection import Frame
-from interfaces.flight_control import CommandAck, ReturnToHome, Telemetry
-from interfaces.geometry import DEFAULT_CAMERA
-from llm_module import LLMModuleConfig, create_llm_module
-from mocks.clock import SimClock
-from mocks.detection_source import ScenarioDetectionSource
-from mocks.flight_control import MockFlightControl
-from mocks.scenario import load_scenario
-from perception.tracking import TrackAggregator
+from modules.drone.pipeline import DronePipeline, PipelineConfig, RunSummary
+from modules.comm.interface.comm import MESSAGE_TYPES, LinkStatus, Message
+from modules.yolo_detection.interface.detection import Frame
+from modules.flight_control.interface.flight_control import CommandAck, ReturnToHome, Telemetry
+from modules.perception.interface.geometry import DEFAULT_CAMERA
+from modules.llm_report import LLMModuleConfig, create_llm_module
+from modules.simulation.clock import SimClock
+from modules.simulation.detection_source import ScenarioDetectionSource
+from modules.flight_control.mock import MockFlightControl
+from modules.simulation.scenario import load_scenario
+from modules.perception.tracking import TrackAggregator
 
 SENT_AT_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}$")
 TRACK_LABEL_PATTERN = re.compile(r"^T\d+$")

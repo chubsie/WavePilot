@@ -11,10 +11,10 @@ from pathlib import Path
 
 import pytest
 
-from comm.tcp_link import TcpJsonLinesLink
-from interfaces.comm import LinkStatus, Message
-from interfaces.flight_control import GoTo, Land, ReturnToHome, TakeOff
-from operator_console.console import (
+from modules.comm.tcp_link import TcpJsonLinesLink
+from modules.comm.interface.comm import LinkStatus, Message
+from modules.flight_control.interface.flight_control import GoTo, Land, ReturnToHome, TakeOff
+from modules.operator_console.console import (
     LINE_TAGS,
     OperatorConsole,
     format_line,
@@ -351,7 +351,7 @@ def _wait_for_line(
 
 def test_operator_console_process_smoke(wavepilot_root: Path) -> None:
     process = subprocess.Popen(
-        [sys.executable, "-m", "operator_console", "--host", "127.0.0.1", "--port", "0", "--exit-on-disconnect"],
+        [sys.executable, "-m", "modules.operator_console", "--host", "127.0.0.1", "--port", "0", "--exit-on-disconnect"],
         cwd=wavepilot_root,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,

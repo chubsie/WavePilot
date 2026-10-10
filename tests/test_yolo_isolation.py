@@ -1,7 +1,7 @@
 """YOLO 선택 의존성 격리 검사 (SC3, DET-01).
 
 무거운 선택 의존성(yolo 그룹)은 base 환경 밖에 있어야 한다.
-그래서 ultralytics/torch/cv2/numpy import 는 어댑터(yolo_detection/)와 CLI(tools/run_yolo.py)에만 두고,
+그래서 ultralytics/torch/cv2/numpy import 는 어댑터(modules/yolo_detection/)와 CLI(modules/yolo_detection/run_yolo.py)에만 두고,
 그 안에서도 모듈 최상단이 아니라 함수 안에서만 한다.
 """
 
@@ -12,8 +12,8 @@ import tomllib
 from pathlib import Path
 
 HEAVY_MODULES = frozenset({"ultralytics", "torch", "cv2", "numpy"})
-ALLOWED_PREFIXES = ("yolo_detection/",)
-ALLOWED_FILES = frozenset({"tools/run_yolo.py"})
+ALLOWED_PREFIXES = ("modules/yolo_detection/",)
+ALLOWED_FILES = frozenset({"modules/yolo_detection/run_yolo.py"})
 EXCLUDED_DIRS = frozenset({".venv", "tests", "graft", "__pycache__"})
 
 WAVEPILOT_ROOT = Path(__file__).resolve().parents[1]
@@ -91,7 +91,7 @@ def test_heavy_imports_are_not_module_level() -> None:
 
 def test_yolo_detection_imports_without_heavy_deps() -> None:
     blocker = "; ".join(f"sys.modules[{name!r}] = None" for name in sorted(HEAVY_MODULES))
-    code = f"import sys; {blocker}; import yolo_detection, yolo_detection.convert, yolo_detection.source"
+    code = f"import sys; {blocker}; import modules.yolo_detection, modules.yolo_detection.convert, modules.yolo_detection.source"
 
     completed = subprocess.run(
         [sys.executable, "-c", code],

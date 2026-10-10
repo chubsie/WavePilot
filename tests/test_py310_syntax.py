@@ -17,9 +17,8 @@ WAVEPILOT_ROOT = Path(__file__).resolve().parents[1]
 
 def _get_jetson_files() -> list[Path]:
     candidates = [
-        *sorted((WAVEPILOT_ROOT / "yolo_detection").glob("**/*.py")),
-        WAVEPILOT_ROOT / "interfaces" / "detection.py",
-        WAVEPILOT_ROOT / "tools" / "run_yolo.py",
+        WAVEPILOT_ROOT / "modules" / "__init__.py",
+        *sorted((WAVEPILOT_ROOT / "modules" / "yolo_detection").glob("**/*.py")),
     ]
     return [path for path in candidates if path.exists()]
 
@@ -56,4 +55,4 @@ def test_jetson_files_avoid_py311_stdlib(path: Path) -> None:
 def test_jetson_file_list_covers_adapter() -> None:
     relative_paths = {_get_relative_id(path) for path in JETSON_FILES}
 
-    assert {"interfaces/detection.py", "yolo_detection/source.py"} <= relative_paths
+    assert {"modules/yolo_detection/interface/detection.py", "modules/yolo_detection/source.py"} <= relative_paths

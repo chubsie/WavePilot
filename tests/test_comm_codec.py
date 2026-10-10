@@ -1,11 +1,11 @@
-"""comm.codec — Message <-> UTF-8 JSON 한 줄 코덱 테스트 (IF-03)."""
+"""modules.comm.codec — Message <-> UTF-8 JSON 한 줄 코덱 테스트 (IF-03)."""
 
 import json
 
 import pytest
 
-from comm.codec import MAX_LINE_BYTES, decode_message, encode_message
-from interfaces.comm import Message
+from modules.comm.codec import MAX_LINE_BYTES, decode_message, encode_message
+from modules.comm.interface.comm import Message
 
 SENT_AT = "2026-10-10T12:00:00.000+00:00"
 

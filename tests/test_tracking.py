@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from interfaces.detection import COCO_CLASS_IDS, Detection, Frame
-from interfaces.geometry import project_ned_to_pixel
-from perception.tracking import TrackAggregator
+from modules.yolo_detection.interface.detection import COCO_CLASS_IDS, Detection, Frame
+from modules.perception.interface.geometry import project_ned_to_pixel
+from modules.perception.tracking import TrackAggregator
 
 BOX_HALF_WIDTH_PX = 10.0
 BOX_HEIGHT_PX = 30.0
@@ -127,7 +127,7 @@ def test_horizon_detection_is_skipped_and_counted(aggregator, default_camera, ho
         track_id=9,
     )
 
-    with caplog.at_level("INFO", logger="perception.tracking"):
+    with caplog.at_level("INFO", logger="modules.perception.tracking"):
         aggregator.update(make_frame(default_camera, 0, 0.0, [sky_detection]), telemetry)
         aggregator.update(make_frame(default_camera, 1, 0.1, [sky_detection]), telemetry)
 
@@ -149,7 +149,7 @@ def test_is_active_flips_after_lost_timeout(aggregator, default_camera, hover_te
 
 
 def test_tracking_uses_frame_clock_not_wall_clock():
-    source = (Path(__file__).resolve().parents[1] / "perception" / "tracking.py").read_text(encoding="utf-8")
+    source = (Path(__file__).resolve().parents[1] / "modules" / "perception" / "tracking.py").read_text(encoding="utf-8")
 
     assert "time.time(" not in source
     assert "time.monotonic(" not in source

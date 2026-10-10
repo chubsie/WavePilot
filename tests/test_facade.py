@@ -1,7 +1,7 @@
-"""llm_module 최상위 파사드 테스트 (IF-06, D-03, SC7).
+"""modules.llm_report 최상위 파사드 테스트 (IF-06, D-03, SC7).
 
-이 파일은 "별도 스크립트가 공개 인터페이스만으로 쓴다" 를 흉내 낸다 — llm_module 서브모듈을 직접 import 하지 않고
-`from llm_module import ...` 최상위 이름만 쓴다(첫 테스트가 이 파일 자신을 AST 로 검사한다).
+이 파일은 "별도 스크립트가 공개 인터페이스만으로 쓴다" 를 흉내 낸다 — modules.llm_report 서브모듈을 직접 import 하지 않고
+`from modules.llm_report import ...` 최상위 이름만 쓴다(첫 테스트가 이 파일 자신을 AST 로 검사한다).
 """
 
 import ast
@@ -13,8 +13,8 @@ from pathlib import Path
 
 import pytest
 
-import llm_module
-from llm_module import (
+import modules.llm_report
+from modules.llm_report import (
     LLMModule,
     LLMModuleConfig,
     LLMResponseError,
@@ -52,19 +52,19 @@ def test_this_file_imports_only_top_level_llm_module() -> None:
     internal_imports = [
         node.module
         for node in ast.walk(tree)
-        if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("llm_module.")
+        if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("modules.llm_report.")
     ]
 
     assert internal_imports == []
 
 
 def test_all_exports_required_names_and_every_name_exists() -> None:
-    assert REQUIRED_EXPORTS <= set(llm_module.__all__)
-    assert all(hasattr(llm_module, name) for name in llm_module.__all__)
+    assert REQUIRED_EXPORTS <= set(modules.llm_report.__all__)
+    assert all(hasattr(modules.llm_report, name) for name in modules.llm_report.__all__)
 
 
 def test_import_does_not_load_llama_server_backend(wavepilot_root: Path) -> None:
-    script = "import sys, llm_module; print('llm_module.llama_server_backend' in sys.modules)"
+    script = "import sys, modules.llm_report; print('modules.llm_report.llama_server_backend' in sys.modules)"
 
     result = subprocess.run(
         [sys.executable, "-c", script], cwd=wavepilot_root, capture_output=True, text=True, check=True
@@ -247,9 +247,9 @@ def test_create_llm_module_builds_llama_server_backend_lazily(monkeypatch: pytes
         def is_ready(self) -> bool:
             return True
 
-    fake_module = types.ModuleType("llm_module.llama_server_backend")
+    fake_module = types.ModuleType("modules.llm_report.llama_server_backend")
     fake_module.LlamaServerBackend = RecordingLlamaServerBackend
-    monkeypatch.setitem(sys.modules, "llm_module.llama_server_backend", fake_module)
+    monkeypatch.setitem(sys.modules, "modules.llm_report.llama_server_backend", fake_module)
     config = LLMModuleConfig(
         backend="llama_server", backend_url="http://10.0.0.5:8080", request_timeout_sec=30.0
     )

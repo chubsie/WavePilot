@@ -16,5 +16,5 @@ fi
 
 echo "setup done. next steps:"
 echo "  scripts/run_demo.sh --backend fake           # demo without an LLM server"
-echo "  scripts/run_llama_server_mac.sh              # start local llama-server (first run downloads the model)"
+echo "  modules/llm_report/scripts/run_llama_server_mac.sh              # start local llama-server (first run downloads the model)"
 echo "  scripts/run_demo.sh --backend llama_server   # demo with the real LLM"

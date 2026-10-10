@@ -2,15 +2,15 @@
 
 FakeLLMBackend 는 정해 둔 응답(또는 예외)을 큐 순서대로 돌려주고 받은 인자를 모두 기록한다.
 "스키마 enum = 입력 ID", "재시도 때 max_tokens 2배", "무트랙이면 호출 0회" 를 단언하는 데 쓴다.
-llm_module.fake_backend.FakeReportBackend(상태를 읽어 결정적 보고를 만드는 공개 구현)와는 역할이 다르다.
+modules.llm_report.fake_backend.FakeReportBackend(상태를 읽어 결정적 보고를 만드는 공개 구현)와는 역할이 다르다.
 """
 
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from interfaces.track import Track
-from llm_module.backend import Completion
+from modules.perception.interface.track import Track
+from modules.llm_report.interface.backend import Completion
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures" / "states"
 CHARS_PER_TOKEN_ESTIMATE = 3  # 토큰 수는 의미 없는 값이라 문자 수로 대충 만든다

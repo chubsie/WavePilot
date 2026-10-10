@@ -26,9 +26,9 @@ torch = pytest.importorskip("torch")
 from ultralytics import YOLO
 from ultralytics.utils import ASSETS
 
-from interfaces.detection import Frame
-from tools.run_yolo import resolve_auto_device
-from yolo_detection.source import YoloDetectionSource
+from modules.yolo_detection.interface.detection import Frame
+from modules.yolo_detection.run_yolo import resolve_auto_device
+from modules.yolo_detection.source import YoloDetectionSource
 
 ALLOWED_CLASS_NAMES = {"person", "car", "bus", "truck"}  # 4클래스 어휘 밖이 나오면 convert 필터가 깨진 것
 BENCH_SUMMARY_KEYS = {
@@ -84,7 +84,7 @@ def _copy_bus_frames(directory: Path, count: int) -> Path:
 def _run_cli(wavepilot_root: Path, *cli_args: str) -> subprocess.CompletedProcess:
     env = {**os.environ, "PYTHONPATH": str(wavepilot_root)}
     return subprocess.run(
-        [sys.executable, "tools/run_yolo.py", *cli_args],
+        [sys.executable, "modules/yolo_detection/run_yolo.py", *cli_args],
         cwd=wavepilot_root,
         env=env,
         capture_output=True,

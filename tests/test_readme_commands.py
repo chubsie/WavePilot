@@ -15,30 +15,38 @@ import pytest
 PYTHON_SECTION_HEADING = "## Python: LLM overwatch pipeline"
 PREVIOUS_LAST_HEADING = "## Third-party code"
 
+# README 패키지 지도는 들여쓰기 트리라 마지막 경로 조각만 적힌다 — 디스크 검사는 전체 경로로 한다
 PACKAGE_MAP_PATHS = (
-    "interfaces/", "mocks/", "perception/", "comm/", "drone/", "operator_console/",
-    "llm_module/", "scenarios/", "deploy/jetson/", "scripts/", "examples/", "tests/",
+    "modules/",
+    "modules/llm_report/", "modules/llm_report/interface/", "modules/llm_report/deploy/jetson/",
+    "modules/llm_report/scripts/", "modules/llm_report/examples/",
+    "modules/yolo_detection/", "modules/yolo_detection/interface/", "modules/yolo_detection/deploy/jetson/",
+    "modules/perception/", "modules/perception/interface/",
+    "modules/flight_control/", "modules/flight_control/interface/",
+    "modules/comm/", "modules/comm/interface/",
+    "modules/simulation/", "modules/drone/", "modules/operator_console/",
+    "scripts/", "tests/",
 )
 # 01-09 가 같은 wave 4 에서 병렬로 만드는 경로. 패키지 지도 검사에서는 빼고, 실패가 01-09 를
 # 가리키도록 test_same_wave_paths_exist 에서 따로 존재를 검사한다
 SAME_WAVE_PENDING_PATHS = frozenset({
-    "scripts/", "examples/",
-    "scripts/run_demo.sh", "scripts/run_llama_server_mac.sh", "examples/use_llm_module.py",
+    "scripts/run_demo.sh", "modules/llm_report/scripts/run_llama_server_mac.sh", "modules/llm_report/examples/use_llm_module.py",
 })
 
 CONSOLE_TAGS = ("LISTEN", "LINK", "TELEMETRY", "STATE", "DECISION", "REPORT", "COMMAND", "WARN")
 FACADE_NAMES = ("LLMModule", "LLMModuleConfig", "create_llm_module")
 INTERFACE_NAMES = ("DetectionSource", "FlightControl")
+INTERFACE_MODULES = ("modules.yolo_detection.interface", "modules.flight_control.interface")
 ALLOWED_IPV4 = frozenset({"127.0.0.1", "0.0.0.0"})
-RUNBOOK_PATH = "deploy/jetson/RUNBOOK.md"
+RUNBOOK_PATH = "modules/llm_report/deploy/jetson/RUNBOOK.md"
 
-DRONE_RUNNER_SOURCE = "drone/run_scenario.py"
-OPERATOR_CONSOLE_DIR = "operator_console"
+DRONE_RUNNER_SOURCE = "modules/drone/run_scenario.py"
+OPERATOR_CONSOLE_DIR = "modules/operator_console"
 
 FLAG_PATTERN = re.compile(r"(?<!\S)--[a-z][a-z0-9-]*")
-SCENARIO_PATH_PATTERN = re.compile(r"scenarios/[A-Za-z0-9_]+\.toml")
+SCENARIO_PATH_PATTERN = re.compile(r"modules/simulation/scenarios/[A-Za-z0-9_]+\.toml")
 MARKER_PATTERN = re.compile(r"pytest -m (\w+)")
-SUBMODULE_IMPORT_PATTERN = re.compile(r"\b(from|import)\s+llm_module\.[a-z_]")
+SUBMODULE_IMPORT_PATTERN = re.compile(r"\b(from|import)\s+modules\.llm_report\.[a-z_]")
 IPV4_PATTERN = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b")
 # 사용자 결정(2026-10-10): 인증 키는 어디에도 없다 — README 도 언급하지 않는다
 API_KEY_PATTERN = re.compile(r"api[ _-]?key", re.IGNORECASE)
@@ -93,7 +101,7 @@ def test_python_section_is_appended_after_existing_body(wavepilot_root: Path) ->
 def test_package_map_paths_are_listed_and_exist(wavepilot_root: Path) -> None:
     section = _read_python_section(wavepilot_root)
 
-    missing_in_readme = [path for path in PACKAGE_MAP_PATHS if path not in section]
+    missing_in_readme = [path for path in PACKAGE_MAP_PATHS if f"{Path(path).name}/" not in section]
     missing_on_disk = [
         path for path in PACKAGE_MAP_PATHS
         if path not in SAME_WAVE_PENDING_PATHS and not (wavepilot_root / path).is_dir()
@@ -117,12 +125,12 @@ def test_drone_runner_flags_exist_in_source(wavepilot_root: Path) -> None:
     section = _read_python_section(wavepilot_root)
     runner_source = _source_text([wavepilot_root / DRONE_RUNNER_SOURCE])
 
-    lines = _command_lines(section, "python -m drone.run_scenario")
+    lines = _command_lines(section, "python -m modules.drone.run_scenario")
     unknown_flags = sorted(
         {flag for line in lines for flag in _flags_in(line) if f'"{flag}"' not in runner_source}
     )
 
-    assert lines, "README has no `python -m drone.run_scenario` command line"
+    assert lines, "README has no `python -m modules.drone.run_scenario` command line"
     assert not unknown_flags, f"README drone runner flags not defined in {DRONE_RUNNER_SOURCE}: {unknown_flags}"
 
 
@@ -130,12 +138,12 @@ def test_operator_console_flags_exist_in_source(wavepilot_root: Path) -> None:
     section = _read_python_section(wavepilot_root)
     console_source = _source_text(_operator_console_sources(wavepilot_root))
 
-    lines = _command_lines(section, "python -m operator_console")
+    lines = _command_lines(section, "python -m modules.operator_console")
     unknown_flags = sorted(
         {flag for line in lines for flag in _flags_in(line) if f'"{flag}"' not in console_source}
     )
 
-    assert lines, "README has no `python -m operator_console` command line"
+    assert lines, "README has no `python -m modules.operator_console` command line"
     assert not unknown_flags, f"README operator console flags not defined in {OPERATOR_CONSOLE_DIR}/: {unknown_flags}"
 
 
@@ -195,16 +203,18 @@ def test_console_tags_are_documented_and_emitted(wavepilot_root: Path) -> None:
 
 def test_facade_and_interface_names_exist(wavepilot_root: Path) -> None:
     section = _read_python_section(wavepilot_root)
-    llm_module = importlib.import_module("llm_module")
-    interfaces = importlib.import_module("interfaces")
+    llm_module = importlib.import_module("modules.llm_report")
+    interface_modules = [importlib.import_module(name) for name in INTERFACE_MODULES]
 
     unmentioned_names = [name for name in (*FACADE_NAMES, *INTERFACE_NAMES) if name not in section]
     missing_facade_names = [name for name in FACADE_NAMES if not hasattr(llm_module, name)]
-    missing_interface_names = [name for name in INTERFACE_NAMES if not hasattr(interfaces, name)]
+    missing_interface_names = [
+        name for name in INTERFACE_NAMES if not any(hasattr(module, name) for module in interface_modules)
+    ]
 
     assert not unmentioned_names, f"README simulator section does not mention: {unmentioned_names}"
-    assert not missing_facade_names, f"llm_module does not export: {missing_facade_names}"
-    assert not missing_interface_names, f"interfaces does not export: {missing_interface_names}"
+    assert not missing_facade_names, f"modules.llm_report does not export: {missing_facade_names}"
+    assert not missing_interface_names, f"{INTERFACE_MODULES} do not export: {missing_interface_names}"
 
 
 def test_no_llm_module_submodule_imports_in_section(wavepilot_root: Path) -> None:
@@ -216,7 +226,7 @@ def test_no_llm_module_submodule_imports_in_section(wavepilot_root: Path) -> Non
         if SUBMODULE_IMPORT_PATTERN.search(line)
     ]
 
-    assert not violations, f"README must import only the top-level llm_module facade (D-03): {violations}"
+    assert not violations, f"README must import only the top-level modules.llm_report facade (D-03): {violations}"
 
 
 def test_runbook_link_exists(wavepilot_root: Path) -> None:

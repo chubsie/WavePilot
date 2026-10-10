@@ -1,4 +1,4 @@
-"""tools/run_yolo.py CLI 테스트 (DET-01, DET-02, 계약 C4).
+"""modules/yolo_detection/run_yolo.py CLI 테스트 (DET-01, DET-02, 계약 C4).
 
 base 환경(ultralytics·cv2 없음)에서 돈다 — 가짜 모델을 주입해 인자 파싱, 벤치 계산, JSON lines 출력을 검증한다.
 실제 yolo11n 으로 도는 CLI 는 tests/test_yolo_live.py 가 맡는다.
@@ -11,8 +11,8 @@ from typing import Any
 
 import pytest
 
-from interfaces.detection import Detection, Frame
-from tools.run_yolo import (
+from modules.yolo_detection.interface.detection import Detection, Frame
+from modules.yolo_detection.run_yolo import (
     build_bench_summary,
     parse_args,
     parse_device,
@@ -20,7 +20,7 @@ from tools.run_yolo import (
     stream_frames,
     summarize_latencies,
 )
-from yolo_detection.source import YoloDetectionSource
+from modules.yolo_detection.source import YoloDetectionSource
 
 BENCH_SUMMARY_KEYS = {
     "weights",

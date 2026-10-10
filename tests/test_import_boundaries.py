@@ -1,46 +1,31 @@
-"""패키지 간 import 경계 검사 (SC4, SC7, IF-06, D-03, D-04).
+"""모듈 간 import 경계 검사 (SC4, SC7, IF-06, D-03, D-04).
 
-인터페이스 우선 구조는 "누가 누구를 import 하지 않는가"로만 지켜진다.
-AST 로 모든 import 를 모아 금지 목록과 대조한다. 아직 없는 패키지는 건너뛴다 —
-지금 통과하고, 패키지가 생기면 그때부터 의미 있는 검사가 된다.
+각 모듈은 `modules/<name>/interface/` 에 계약을 두고, 다른 모듈은 그 interface 만 import 한다.
+구현을 골라 조립하는 컴포지션 루트(drone/, operator_console/__main__.py)만 예외다.
+AST 로 모든 import 를 모아 규칙과 대조한다.
 """
 
 import ast
 from pathlib import Path
 
 WAVEPILOT_ROOT = Path(__file__).resolve().parents[1]
+MODULES_DIR = WAVEPILOT_ROOT / "modules"
+MODULE_PREFIX = "modules."
 
-CHECKED_PACKAGES = (
-    "interfaces", "mocks", "comm", "perception", "drone", "operator_console", "llm_module",
-    "yolo_detection",
-)
+LLM_FACADE = "modules.llm_report"
 
-# 패키지(최상위 이름) -> import 하면 안 되는 최상위 모듈
-FORBIDDEN_BY_PACKAGE = {
-    "interfaces": {"mocks", "comm", "perception", "drone", "operator_console", "llm_module", "yolo_detection"},
-    "mocks": {"comm", "perception", "llm_module", "drone", "operator_console"},
-    "perception": {"mocks", "comm", "llm_module", "drone", "operator_console", "yolo_detection"},
-    "comm": {"mocks", "perception", "llm_module", "drone", "operator_console"},
-    "llm_module": {"mocks", "comm", "perception", "drone", "operator_console", "yolo_detection"},
-    "operator_console": {"mocks", "perception", "llm_module", "drone"},
-    "yolo_detection": {"mocks", "comm", "perception", "llm_module", "drone", "operator_console"},
-}
+# 구현을 골라 끼우는 진입점 — 다른 모듈의 구현을 import 해도 된다
+COMPOSITION_ROOTS = frozenset({
+    "modules/drone/run_scenario.py",
+    "modules/operator_console/__main__.py",
+})
 
-# 파일 단위 규칙: 파이프라인은 구현체(mock·전송·인식 구현)를 몰라야 교체 지점이 유지된다
-FORBIDDEN_BY_FILE = {
-    "drone/pipeline.py": {"mocks", "comm", "perception"},
-}
-
-LLM_FACADE = "llm_module"
+# 파이프라인은 interface 와 LLM 최상위 파사드만 알아야 mock·실기 구현을 바꿔 끼울 수 있다
+INTERFACE_ONLY_FILES = frozenset({"modules/drone/pipeline.py"})
 
 
 def _get_python_files() -> list[Path]:
-    python_files: list[Path] = []
-    for package in CHECKED_PACKAGES:
-        package_dir = WAVEPILOT_ROOT / package
-        if package_dir.is_dir():
-            python_files.extend(sorted(package_dir.rglob("*.py")))
-    return python_files
+    return sorted(MODULES_DIR.rglob("*.py"))
 
 
 def _get_imports(path: Path) -> list[tuple[int, str]]:
@@ -55,31 +40,59 @@ def _get_imports(path: Path) -> list[tuple[int, str]]:
     return imports
 
 
-def _find_violations(path: Path) -> list[str]:
-    relative_path = path.relative_to(WAVEPILOT_ROOT).as_posix()
-    package = relative_path.split("/")[0]
-    forbidden = FORBIDDEN_BY_PACKAGE.get(package, set()) | FORBIDDEN_BY_FILE.get(relative_path, set())
+def _get_module_name(dotted: str) -> str | None:
+    """`modules.<name>...` 이면 <name>, 아니면 None."""
+    if not dotted.startswith(MODULE_PREFIX):
+        return None
+    return dotted.removeprefix(MODULE_PREFIX).split(".")[0]
 
+
+def _is_interface_import(dotted: str) -> bool:
+    parts = dotted.split(".")
+    return len(parts) >= 3 and parts[2] == "interface"
+
+
+def _find_violation(relative_path: str, imported: str) -> str | None:
+    owner = relative_path.split("/")[1]
+    target = _get_module_name(imported)
+    is_interface_file = "/interface/" in relative_path
+
+    if target is None or imported == "modules":
+        return None
+    if is_interface_file and not _is_interface_import(imported):
+        return "interface/ may import only other interface/ packages"
+    if target == owner:
+        return None
+    if _is_interface_import(imported):
+        return None
+    if relative_path in INTERFACE_ONLY_FILES:
+        return None if imported == LLM_FACADE else "pipeline may import only interface/ and the llm_report facade"
+    if relative_path in COMPOSITION_ROOTS or owner == "drone":
+        return None if not imported.startswith(f"{LLM_FACADE}.") else f"use the top-level '{LLM_FACADE}' facade"
+    return f"other modules may import only modules.{target}.interface"
+
+
+def test_modules_respect_import_boundaries() -> None:
     violations: list[str] = []
-    for line_no, module in _get_imports(path):
-        top_level = module.split(".")[0]
-        if top_level in forbidden:
-            violations.append(f"{relative_path}:{line_no} imports forbidden module '{module}'")
-        is_llm_internal = module.startswith(f"{LLM_FACADE}.")
-        if is_llm_internal and package != LLM_FACADE:
-            violations.append(
-                f"{relative_path}:{line_no} imports '{module}'; only the top-level "
-                f"'{LLM_FACADE}' facade may be imported outside llm_module/"
-            )
-    return violations
 
-
-def test_packages_respect_import_boundaries() -> None:
-    violations = [message for path in _get_python_files() for message in _find_violations(path)]
+    for path in _get_python_files():
+        relative_path = path.relative_to(WAVEPILOT_ROOT).as_posix()
+        for line_no, imported in _get_imports(path):
+            reason = _find_violation(relative_path, imported)
+            if reason is not None:
+                violations.append(f"{relative_path}:{line_no} imports '{imported}' — {reason}")
 
     assert not violations, "\n".join(violations)
 
 
+def test_every_module_with_contracts_has_interface_package() -> None:
+    contract_modules = ("llm_report", "yolo_detection", "perception", "flight_control", "comm")
+
+    missing = [name for name in contract_modules if not (MODULES_DIR / name / "interface" / "__init__.py").is_file()]
+
+    assert not missing, f"modules without interface/ package: {missing}"
+
+
 def test_operator_package_does_not_shadow_stdlib() -> None:
     # operator/ 는 표준 라이브러리 operator 를 가려 dataclasses 등이 깨진다 (D-04 편차)
-    assert not (WAVEPILOT_ROOT / "operator").exists(), "use operator_console/, not operator/"
+    assert not (MODULES_DIR / "operator").exists(), "use modules/operator_console/, not operator/"

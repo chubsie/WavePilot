@@ -1,8 +1,8 @@
-"""interfaces.detection 계약: YOLO 추적 필드 보존, 직렬화 왕복, 입력 검증."""
+"""modules.yolo_detection.interface.detection 계약: YOLO 추적 필드 보존, 직렬화 왕복, 입력 검증."""
 
 import pytest
 
-from interfaces.detection import COCO_CLASS_IDS, Detection, DetectionSource, Frame
+from modules.yolo_detection.interface.detection import COCO_CLASS_IDS, Detection, DetectionSource, Frame
 
 
 def _make_detection(track_id: int | None = 3) -> Detection:

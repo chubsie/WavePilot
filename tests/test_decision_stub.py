@@ -5,7 +5,7 @@
 
 import pytest
 
-from llm_module.decision import (
+from modules.llm_report.decision import (
     DEFAULT_QUESTIONS,
     QUESTION_ID_NEXT_ACTION,
     QUESTION_ID_REPORT_NEEDED,
@@ -18,7 +18,7 @@ from llm_module.decision import (
     ScoreQuestion,
     YesNoQuestion,
 )
-from llm_module.state import StateJson, build_state_json
+from modules.llm_report.state import StateJson, build_state_json
 from tests.fakes import load_state_fixture, make_track
 
 PROBABILITY_TOLERANCE = 1e-6

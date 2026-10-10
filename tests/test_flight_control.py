@@ -2,9 +2,9 @@
 
 import pytest
 
-from interfaces.flight_control import FlightControl, GoTo, Land, ReturnToHome, TakeOff
-from mocks.clock import SimClock
-from mocks.flight_control import BATTERY_DRAIN_PCT_PER_SEC, MockFlightControl
+from modules.flight_control.interface.flight_control import FlightControl, GoTo, Land, ReturnToHome, TakeOff
+from modules.simulation.clock import SimClock
+from modules.flight_control.mock import BATTERY_DRAIN_PCT_PER_SEC, MockFlightControl
 
 
 @pytest.fixture

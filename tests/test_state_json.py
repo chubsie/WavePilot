@@ -8,7 +8,7 @@ import json
 
 import pytest
 
-from llm_module.state import (
+from modules.llm_report.state import (
     StateJson,
     build_state_json,
     format_track_label,

@@ -7,7 +7,7 @@ cd "$ROOT"
 
 BACKEND=fake
 BACKEND_URL="${LLAMA_SERVER_URL:-http://127.0.0.1:8080}"
-SCENARIO=scenarios/checkpoint.toml
+SCENARIO=modules/simulation/scenarios/checkpoint.toml
 SPEED=1.0
 PORT=0
 HOST=127.0.0.1
@@ -21,7 +21,7 @@ usage: scripts/run_demo.sh [--backend fake|llama_server] [--backend-url URL]
 
   --backend       report LLM backend (default: fake)
   --backend-url   llama-server base URL (default: \$LLAMA_SERVER_URL or http://127.0.0.1:8080)
-  --scenario      scenario TOML file (default: scenarios/checkpoint.toml)
+  --scenario      scenario TOML file (default: modules/simulation/scenarios/checkpoint.toml)
   --speed         sim seconds per wall second; 0 = as fast as possible (default: 1.0)
   --port          operator console port; 0 picks a free port (default: 0)
 USAGE
@@ -57,7 +57,7 @@ if [ ! -f "$SCENARIO" ]; then
 fi
 if [ "$BACKEND" = "llama_server" ] && ! curl -sf -m 2 "$BACKEND_URL/health" > /dev/null; then
   echo "llama-server not ready at $BACKEND_URL" >&2
-  echo "start it with: scripts/run_llama_server_mac.sh" >&2
+  echo "start it with: modules/llm_report/scripts/run_llama_server_mac.sh" >&2
   exit 1
 fi
 
@@ -82,7 +82,7 @@ trap 'exit 130' INT TERM
 # 운용자 콘솔 기동. 포트 열림을 TCP 접속으로 확인하면 운용자가 그 접속을 드론으로 받고
 # --exit-on-disconnect 로 끝나 버리므로, 로그의 LISTEN 줄로만 판단한다
 OPERATOR_LOG="$WORK_DIR/operator.log"
-PYTHONUNBUFFERED=1 "$PYTHON" -m operator_console --host "$HOST" --port "$PORT" --exit-on-disconnect \
+PYTHONUNBUFFERED=1 "$PYTHON" -m modules.operator_console --host "$HOST" --port "$PORT" --exit-on-disconnect \
   < /dev/null > "$OPERATOR_LOG" 2>&1 &
 OPERATOR_PID=$!
 tail -n +1 -f "$OPERATOR_LOG" &
@@ -114,7 +114,7 @@ if [ "$BACKEND" = "llama_server" ]; then
   DRONE_ARGS+=(--llm-url "$BACKEND_URL")
 fi
 DRONE_STATUS=0
-"$PYTHON" -m drone.run_scenario "${DRONE_ARGS[@]}" &
+"$PYTHON" -m modules.drone.run_scenario "${DRONE_ARGS[@]}" &
 DRONE_PID=$!
 wait "$DRONE_PID" || DRONE_STATUS=$?
 DRONE_PID=""

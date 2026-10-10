@@ -5,12 +5,12 @@ from pathlib import Path
 
 import pytest
 
-from interfaces.detection import COCO_CLASS_IDS, DetectionSource
-from interfaces.geometry import project_ned_to_pixel
-from mocks.camera import MIN_VISIBLE_AREA_RATIO, project_object_box
-from mocks.clock import SimClock
-from mocks.detection_source import ScenarioDetectionSource
-from mocks.scenario import DEFAULT_CONFIDENCE, load_scenario
+from modules.yolo_detection.interface.detection import COCO_CLASS_IDS, DetectionSource
+from modules.perception.interface.geometry import project_ned_to_pixel
+from modules.simulation.camera import MIN_VISIBLE_AREA_RATIO, project_object_box
+from modules.simulation.clock import SimClock
+from modules.simulation.detection_source import ScenarioDetectionSource
+from modules.simulation.scenario import DEFAULT_CONFIDENCE, load_scenario
 
 SCENARIO_NAMES = ("checkpoint", "road_crossing", "crowd_near_truck")
 VEHICLE_KINDS = {"car", "bus", "truck"}
@@ -205,7 +205,7 @@ class FakeFlightControl:
         return self._telemetry
 
     def send_command(self, command):
-        from interfaces.flight_control import CommandAck
+        from modules.flight_control.interface.flight_control import CommandAck
 
         return CommandAck(accepted=True, reason="fake")
 

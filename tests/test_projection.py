@@ -5,8 +5,8 @@ from dataclasses import replace
 
 import pytest
 
-from interfaces.geometry import project_ned_to_pixel
-from perception.projection import ground_anchor, pixel_to_ground
+from modules.perception.interface.geometry import project_ned_to_pixel
+from modules.perception.projection import ground_anchor, pixel_to_ground
 
 GROUND_NORTH_LIST = (10.0, 20.0, 35.0, 50.0, 60.0)
 GROUND_EAST_LIST = (-20.0, -5.0, 5.0, 20.0)

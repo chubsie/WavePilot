@@ -17,7 +17,7 @@ VALUE_FLAGS = {"-m", "--alias", "--host", "--port", "-c", "-np", "-ngl", "--chat
 
 @pytest.fixture
 def jetson_dir(wavepilot_root: Path) -> Path:
-    return wavepilot_root / "deploy" / "jetson"
+    return wavepilot_root / "modules" / "llm_report" / "deploy" / "jetson"
 
 
 @pytest.fixture
@@ -86,7 +86,7 @@ def test_runtime_image_contains_only_llama_server(dockerfile_text: str) -> None:
     assert foreign_copies == [], f"Dockerfile: only COPY --from=build allowed (D-08), got {foreign_copies}"
 
     code_text = "\n".join(code_lines).lower()
-    for forbidden in ("pip", "python", "llm_module", ".gguf"):
+    for forbidden in ("pip", "python", "llm_report", ".gguf"):
         assert forbidden not in code_text, f"Dockerfile: {forbidden!r} must not appear outside comments (D-08)"
 
 
@@ -131,7 +131,7 @@ def test_compose_healthcheck_and_model_volume(compose_text: str) -> None:
     for expected in (
         "http://localhost:8080/health",
         "start_period: 120s",
-        '"${MODELS_DIR:-../../models}:/models:ro"',
+        '"${MODELS_DIR:-../../../../models}:/models:ro"',
         "8080:8080",
     ):
         assert expected in compose_text, f"compose.yaml: expected {expected!r}"
@@ -155,7 +155,7 @@ def test_runbook_covers_user_steps(runbook_text: str) -> None:
 
 
 def test_no_model_weights_in_repo_tree(wavepilot_root: Path) -> None:
-    gguf_files = list((wavepilot_root / "deploy").rglob("*.gguf"))
+    gguf_files = list((wavepilot_root / "modules").rglob("*.gguf"))
     assert gguf_files == [], f"deploy/: model weights must not be in the repo tree, found {gguf_files}"
 
     gitignore_lines = (wavepilot_root / ".gitignore").read_text(encoding="utf-8").splitlines()

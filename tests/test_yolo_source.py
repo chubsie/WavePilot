@@ -5,10 +5,10 @@ import types
 
 import pytest
 
-from interfaces.detection import DetectionSource, Frame
+from modules.yolo_detection.interface.detection import DetectionSource, Frame
 from tests.yolo_fakes import FakeResult, FakeYoloModel, make_boxes
-from yolo_detection.convert import convert_boxes
-from yolo_detection.source import YoloDetectionSource
+from modules.yolo_detection.convert import convert_boxes
+from modules.yolo_detection.source import YoloDetectionSource
 
 DEFAULT_TRACK_KWARGS = {
     "persist": True,

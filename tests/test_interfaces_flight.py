@@ -1,8 +1,8 @@
-"""interfaces.flight_control / interfaces.track 계약: 텔레메트리, 명령 4종, track 직렬화."""
+"""modules.flight_control.interface.flight_control / modules.perception.interface.track 계약: 텔레메트리, 명령 4종, track 직렬화."""
 
 import pytest
 
-from interfaces.flight_control import (
+from modules.flight_control.interface.flight_control import (
     FLIGHT_MODES,
     CommandAck,
     FlightControl,
@@ -13,7 +13,7 @@ from interfaces.flight_control import (
     Telemetry,
     command_from_dict,
 )
-from interfaces.track import Track
+from modules.perception.interface.track import Track
 
 
 def _make_track() -> Track:
