@@ -13,7 +13,7 @@ RUNBOOK_NAME = "YOLO-RUNBOOK.md"  # deploy/jetson 아래 사용자 실행 런북
 
 RUN_YOLO_FLAGS = frozenset(
     {"--frames", "--video", "--weights", "--device", "--tracker", "--fps", "--output", "--bench", "--warmup"}
-)  # 계약 C4: tools/run_yolo.py 가 받는 플래그 전부
+)  # 계약 C4: modules/yolo_detection/run_yolo.py 가 받는 플래그 전부
 
 BENCH_SUMMARY_KEYS = (
     "weights",
@@ -36,11 +36,11 @@ EXPORT_COMMAND = "format=engine half=True imgsz=640"  # Pitfall 5: llama-server 
 
 @pytest.fixture
 def yolo_runbook_text(wavepilot_root: Path) -> str:
-    return (wavepilot_root / "deploy" / "jetson" / RUNBOOK_NAME).read_text(encoding="utf-8")
+    return (wavepilot_root / "modules" / "yolo_detection" / "deploy" / "jetson" / RUNBOOK_NAME).read_text(encoding="utf-8")
 
 
 def get_run_yolo_lines(text: str) -> list[str]:
-    return [line for line in text.splitlines() if "tools/run_yolo.py" in line]
+    return [line for line in text.splitlines() if "modules/yolo_detection/run_yolo.py" in line]
 
 
 def get_numbered_sections(text: str) -> list[str]:
@@ -121,7 +121,7 @@ def test_run_yolo_commands_use_only_contract_flags(yolo_runbook_text: str) -> No
         if "--bench" in line and "--weights models/yolo11n.engine" in line and "--warmup 10" in line
     ]
 
-    assert run_yolo_lines, "YOLO-RUNBOOK.md: no tools/run_yolo.py command line"
+    assert run_yolo_lines, "YOLO-RUNBOOK.md: no modules/yolo_detection/run_yolo.py command line"
     assert not violations, "\n".join(violations)
     assert bench_lines, "YOLO-RUNBOOK.md: no engine --bench --warmup 10 command line"
 

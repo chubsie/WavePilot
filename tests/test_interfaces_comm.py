@@ -1,8 +1,8 @@
-"""interfaces.comm 계약: 메시지 4종 envelope, 입력 검증, 링크 상태."""
+"""modules.comm.interface.comm 계약: 메시지 4종 envelope, 입력 검증, 링크 상태."""
 
 import pytest
 
-from interfaces.comm import MESSAGE_TYPES, CommLink, LinkStatus, Message
+from modules.comm.interface.comm import MESSAGE_TYPES, CommLink, LinkStatus, Message
 
 SENT_AT = "2026-10-10T12:00:00.000+09:00"
 

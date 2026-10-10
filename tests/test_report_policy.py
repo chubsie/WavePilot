@@ -5,8 +5,8 @@
 
 import pytest
 
-from llm_module.report_policy import find_policy_violations
-from llm_module.report_schema import ReportSentence, SituationReport
+from modules.llm_report.report_policy import find_policy_violations
+from modules.llm_report.report_schema import ReportSentence, SituationReport
 
 
 def _make_report(kind: str, text: str) -> SituationReport:

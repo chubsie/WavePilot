@@ -13,13 +13,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from llm_module.backend import (
+from modules.llm_report.interface.backend import (
     LLMBackend,
     LLMResponseError,
     LLMTimeoutError,
     LLMUnavailableError,
 )
-from llm_module.llama_server_backend import (
+from modules.llm_report.llama_server_backend import (
     MAX_RESPONSE_BYTES,
     LlamaServerBackend,
 )

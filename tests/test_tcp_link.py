@@ -1,4 +1,4 @@
-"""comm.tcp_link.TcpJsonLinesLink — 루프백 임의 포트 통합 테스트 (COMM-01, IF-03).
+"""modules.comm.tcp_link.TcpJsonLinesLink — 루프백 임의 포트 통합 테스트 (COMM-01, IF-03).
 
 모든 소켓은 127.0.0.1 port 0 이고, 모든 대기에 시간 제한을 둔다 — pytest-timeout 이 없으므로
 테스트가 영원히 멈추면 안 된다.
@@ -11,9 +11,9 @@ from collections.abc import Callable, Iterator
 
 import pytest
 
-from comm.codec import MAX_LINE_BYTES, encode_message
-from comm.tcp_link import TcpJsonLinesLink
-from interfaces.comm import CommLink, LinkStatus, Message
+from modules.comm.codec import MAX_LINE_BYTES, encode_message
+from modules.comm.tcp_link import TcpJsonLinesLink
+from modules.comm.interface.comm import CommLink, LinkStatus, Message
 
 RECEIVE_TIMEOUT_SEC = 2.0
 SENT_AT = "2026-10-10T12:00:00.000+00:00"

@@ -13,7 +13,7 @@ pytestmark = pytest.mark.yolo
 cv2 = pytest.importorskip("cv2")
 np = pytest.importorskip("numpy")
 
-from yolo_detection.image_source import DirectoryImageSource, VideoImageSource
+from modules.yolo_detection.image_source import DirectoryImageSource, VideoImageSource
 
 IMAGE_WIDTH = 1280
 IMAGE_HEIGHT = 720

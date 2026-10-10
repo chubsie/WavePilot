@@ -7,10 +7,10 @@ import json
 
 import pytest
 
-from llm_module.backend import LLMTimeoutError, LLMUnavailableError
-from llm_module.report_generator import NO_TRACKS_FLAG, ReportGenerator
-from llm_module.report_prompt import SYSTEM_PROMPT, build_user_prompt
-from llm_module.report_schema import (
+from modules.llm_report.interface.backend import LLMTimeoutError, LLMUnavailableError
+from modules.llm_report.report_generator import NO_TRACKS_FLAG, ReportGenerator
+from modules.llm_report.report_prompt import SYSTEM_PROMPT, build_user_prompt
+from modules.llm_report.report_schema import (
     MAX_SENTENCE_CHARS,
     ReportFormatError,
     ReportSentence,
@@ -18,7 +18,7 @@ from llm_module.report_schema import (
     build_report_schema,
     parse_report,
 )
-from llm_module.state import StateJson, truncate_state
+from modules.llm_report.state import StateJson, truncate_state
 from tests.fakes import FakeLLMBackend, FakeResponse, load_state_fixture
 
 UNSUPPORTED_SCHEMA_KEYS = {

@@ -1,4 +1,4 @@
-"""interfaces.geometry 부호 규약 고정 테스트.
+"""modules.perception.interface.geometry 부호 규약 고정 테스트.
 
 부호 버그는 알려진 값과 왕복(픽셀 → 광선 → 점 → 픽셀)에서만 잡힌다.
 """
@@ -8,8 +8,8 @@ import math
 
 import pytest
 
-from interfaces.flight_control import Telemetry
-from interfaces.geometry import (
+from modules.flight_control.interface.flight_control import Telemetry
+from modules.perception.interface.geometry import (
     DEFAULT_CAMERA,
     CameraIntrinsics,
     pixel_to_ray_ned,

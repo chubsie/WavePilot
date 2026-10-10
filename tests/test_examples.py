@@ -1,4 +1,4 @@
-"""사용자 진입 스크립트 계약: examples/use_llm_module.py (SC7, IF-06) 와 scripts/*.sh.
+"""사용자 진입 스크립트 계약: modules/llm_report/examples/use_llm_module.py (SC7, IF-06) 와 scripts/*.sh.
 
 예제와 셸 스크립트는 외부 사용자처럼 subprocess 로 실행한다. 셸 스크립트는 실행 비트에 기대지 않고
 `bash scripts/...` 로 부른다. llama-server 는 띄우지 않는다 — llama_server 경로는 닫힌 포트로
@@ -18,10 +18,10 @@ from pathlib import Path
 
 import pytest
 
-EXAMPLE_PATH = "examples/use_llm_module.py"
+EXAMPLE_PATH = "modules/llm_report/examples/use_llm_module.py"
 REPORT_SENTENCE_PATTERN = r"REPORT +\[(T\d+(?:,T\d+)*)\] \((observation|suggestion)\) \S"
 SAMPLE_TRACK_IDS = {"T1", "T2", "T3"}
-FORBIDDEN_EXAMPLE_IMPORTS = ("mocks", "comm", "perception", "drone", "operator_console")
+FORBIDDEN_EXAMPLE_IMPORTS = ("modules.simulation", "modules.comm", "modules.perception", "modules.drone", "modules.operator_console")
 DEMO_TIMEOUT_SEC = 90
 
 
@@ -87,7 +87,7 @@ def _make_single_track_state(track_id: str) -> dict:
     }
 
 
-# --- examples/use_llm_module.py (SC7) ---
+# --- modules/llm_report/examples/use_llm_module.py (SC7) ---
 
 
 def test_example_fake_backend_prints_decision_and_cited_report(wavepilot_root: Path) -> None:
@@ -127,7 +127,7 @@ def test_example_llama_server_unreachable_exits_2_with_hint(wavepilot_root: Path
     )
 
     assert result.returncode == 2
-    assert "scripts/run_llama_server_mac.sh" in result.stderr
+    assert "modules/llm_report/scripts/run_llama_server_mac.sh" in result.stderr
     assert "Traceback" not in result.stderr
 
 
@@ -141,20 +141,23 @@ def test_example_imports_only_stdlib_and_top_level_facade(wavepilot_root: Path) 
         elif isinstance(node, ast.ImportFrom):
             imported_modules.append(node.module or "")
 
-    # IF-06: 외부 사용자는 llm_module 최상위 파사드만 안다
+    # IF-06: 외부 사용자는 modules.llm_report 최상위 파사드만 안다
     for module_name in imported_modules:
         top_level_name = module_name.split(".")[0]
-        assert not module_name.startswith("llm_module."), module_name
-        assert top_level_name not in FORBIDDEN_EXAMPLE_IMPORTS, module_name
-        assert top_level_name == "llm_module" or top_level_name in sys.stdlib_module_names, module_name
-    assert "llm_module" in imported_modules
+        assert not module_name.startswith("modules.llm_report."), module_name
+        assert not module_name.startswith(FORBIDDEN_EXAMPLE_IMPORTS), module_name
+        assert module_name == "modules.llm_report" or top_level_name in sys.stdlib_module_names, module_name
+    assert "modules.llm_report" in imported_modules
 
 
 # --- scripts/*.sh ---
 
 
 def test_shell_scripts_follow_conventions(wavepilot_root: Path) -> None:
-    script_paths = sorted((wavepilot_root / "scripts").glob("*.sh"))
+    script_paths = sorted([
+        *(wavepilot_root / "scripts").glob("*.sh"),
+        *(wavepilot_root / "modules" / "llm_report" / "scripts").glob("*.sh"),
+    ])
     assert script_paths
 
     for script_path in script_paths:
@@ -187,7 +190,7 @@ def test_run_demo_llama_server_unreachable_fails_before_children(wavepilot_root:
     )
 
     assert result.returncode == 1
-    assert "scripts/run_llama_server_mac.sh" in result.stderr
+    assert "modules/llm_report/scripts/run_llama_server_mac.sh" in result.stderr
     # 자식 프로세스를 띄우기 전에 실패했다면 운용자 콘솔 LISTEN 줄이 없다
     assert "LISTEN" not in result.stdout
 
@@ -206,7 +209,7 @@ def test_run_demo_fake_backend_end_to_end(wavepilot_root: Path) -> None:
     assert "LINK disconnected" in output
 
 
-# --- scripts/run_llama_server_mac.sh ---
+# --- modules/llm_report/scripts/run_llama_server_mac.sh ---
 
 EXPECTED_SERVER_FLAGS = (
     "-hf nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M",
@@ -223,7 +226,7 @@ EXPECTED_SERVER_FLAGS = (
 
 
 def test_llama_server_print_command_has_ai_spec_flags(wavepilot_root: Path) -> None:
-    result = _run(wavepilot_root, ["bash", "scripts/run_llama_server_mac.sh", "--print-command"])
+    result = _run(wavepilot_root, ["bash", "modules/llm_report/scripts/run_llama_server_mac.sh", "--print-command"])
 
     assert result.returncode == 0, result.stderr
     assert len(result.stdout.strip().splitlines()) == 1
@@ -233,14 +236,14 @@ def test_llama_server_print_command_has_ai_spec_flags(wavepilot_root: Path) -> N
 
 def test_llama_server_port_is_overridable(wavepilot_root: Path) -> None:
     result = _run(
-        wavepilot_root, ["bash", "scripts/run_llama_server_mac.sh", "--print-command"], env_extra={"LLAMA_PORT": "8099"}
+        wavepilot_root, ["bash", "modules/llm_report/scripts/run_llama_server_mac.sh", "--print-command"], env_extra={"LLAMA_PORT": "8099"}
     )
 
     assert result.returncode == 0, result.stderr
     assert "--port 8099" in result.stdout
 
 
-# --- scripts/smoke_llama_server.py ---
+# --- modules/llm_report/scripts/smoke_llama_server.py ---
 
 SMOKE_CHECK_NAMES = ("health", "models", "json_schema_nested", "json_schema_flat", "enum_grammar", "thinking_off")
 
@@ -305,7 +308,7 @@ def fake_llama_server(request):
 def test_smoke_passes_against_healthy_server(wavepilot_root: Path, fake_llama_server: str) -> None:
     result = _run(
         wavepilot_root,
-        [sys.executable, "scripts/smoke_llama_server.py", "--url", fake_llama_server, "--ready-timeout-sec", "5"],
+        [sys.executable, "modules/llm_report/scripts/smoke_llama_server.py", "--url", fake_llama_server, "--ready-timeout-sec", "5"],
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
@@ -318,7 +321,7 @@ def test_smoke_passes_against_healthy_server(wavepilot_root: Path, fake_llama_se
 def test_smoke_fails_when_thinking_leaks(wavepilot_root: Path, fake_llama_server: str) -> None:
     result = _run(
         wavepilot_root,
-        [sys.executable, "scripts/smoke_llama_server.py", "--url", fake_llama_server, "--ready-timeout-sec", "5"],
+        [sys.executable, "modules/llm_report/scripts/smoke_llama_server.py", "--url", fake_llama_server, "--ready-timeout-sec", "5"],
     )
 
     assert result.returncode == 1, result.stdout + result.stderr
@@ -328,7 +331,7 @@ def test_smoke_fails_when_thinking_leaks(wavepilot_root: Path, fake_llama_server
 def test_smoke_unreachable_server_exits_2(wavepilot_root: Path) -> None:
     result = _run(
         wavepilot_root,
-        [sys.executable, "scripts/smoke_llama_server.py", "--url", _closed_port_url(), "--ready-timeout-sec", "1"],
+        [sys.executable, "modules/llm_report/scripts/smoke_llama_server.py", "--url", _closed_port_url(), "--ready-timeout-sec", "1"],
     )
 
     assert result.returncode == 2

@@ -16,14 +16,14 @@ def wavepilot_root() -> Path:
 
 @pytest.fixture
 def scenarios_dir(wavepilot_root: Path) -> Path:
-    return wavepilot_root / "scenarios"
+    return wavepilot_root / "modules" / "simulation" / "scenarios"
 
 
 @pytest.fixture
 def hover_telemetry():
-    # interfaces 는 fixture 안에서 import 한다 — 이 fixture 를 안 쓰는 테스트(경계 검사 등)가
-    # interfaces 구현 여부와 무관하게 수집되도록.
-    from interfaces.flight_control import Telemetry
+    # interface 모듈은 fixture 안에서 import 한다 — 이 fixture 를 안 쓰는 테스트(경계 검사 등)가
+    # interface 구현 여부와 무관하게 수집되도록.
+    from modules.flight_control.interface.flight_control import Telemetry
 
     # 감시 위치 (0,0) 고도 40 m, 짐벌 -55° — SKELETON 카메라 기본값과 같다
     return Telemetry(
@@ -43,6 +43,6 @@ def hover_telemetry():
 
 @pytest.fixture
 def default_camera():
-    from interfaces.geometry import DEFAULT_CAMERA
+    from modules.perception.interface.geometry import DEFAULT_CAMERA
 
     return DEFAULT_CAMERA

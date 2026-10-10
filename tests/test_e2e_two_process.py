@@ -71,7 +71,7 @@ def _drain_lines(line_queue: queue.Queue, collected_lines: list[str]) -> None:
 def test_scenario_run_reaches_operator_console(wavepilot_root: Path) -> None:
     operator_process = subprocess.Popen(
         [
-            sys.executable, "-m", "operator_console",
+            sys.executable, "-m", "modules.operator_console",
             "--host", "127.0.0.1", "--port", "0", "--exit-on-disconnect",
         ],
         cwd=wavepilot_root,
@@ -87,8 +87,8 @@ def test_scenario_run_reaches_operator_console(wavepilot_root: Path) -> None:
 
         drone_result = subprocess.run(
             [
-                sys.executable, "-m", "drone.run_scenario",
-                "--scenario", "scenarios/checkpoint.toml",
+                sys.executable, "-m", "modules.drone.run_scenario",
+                "--scenario", "modules/simulation/scenarios/checkpoint.toml",
                 "--operator-host", "127.0.0.1",
                 "--operator-port", port,
                 "--backend", "fake",

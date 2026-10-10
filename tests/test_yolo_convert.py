@@ -2,9 +2,9 @@
 
 import pytest
 
-from interfaces.detection import Frame
+from modules.yolo_detection.interface.detection import Frame
 from tests.yolo_fakes import FakeBoxes, FakeTensor, make_boxes
-from yolo_detection.convert import COCO_NAME_BY_ID, TRACKED_CLASS_IDS, convert_boxes
+from modules.yolo_detection.convert import COCO_NAME_BY_ID, TRACKED_CLASS_IDS, convert_boxes
 
 UNTRACKED_CLASS_IDS = (1, 16)  # bicycle, dog
 

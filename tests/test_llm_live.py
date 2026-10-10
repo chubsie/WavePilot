@@ -13,7 +13,7 @@ import os
 
 import pytest
 
-from llm_module.llama_server_backend import LlamaServerBackend
+from modules.llm_report.llama_server_backend import LlamaServerBackend
 
 pytestmark = pytest.mark.llm
 
@@ -135,7 +135,7 @@ def test_live_backend_returns_schema_constrained_ids(live_server_url: str) -> No
 def test_live_facade_report_cites_input_track_ids(live_server_url: str) -> None:
     # 파사드는 01-04 가 같은 웨이브에 병렬로 만든다. 모듈 상단에서 import 하면 01-04 완료 전
     # 기본 게이트(-m 'not llm and not e2e') 수집 단계에서 ImportError 가 나므로 함수 안에서 지연 import 한다
-    from llm_module import LLMModuleConfig, create_llm_module
+    from modules.llm_report import LLMModuleConfig, create_llm_module
 
     config = LLMModuleConfig(
         backend="llama_server",
