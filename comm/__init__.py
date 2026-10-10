@@ -5,5 +5,6 @@
 """
 
 from comm.codec import MAX_LINE_BYTES, decode_message, encode_message
+from comm.tcp_link import TcpJsonLinesLink
 
-__all__ = ["MAX_LINE_BYTES", "decode_message", "encode_message"]
+__all__ = ["MAX_LINE_BYTES", "TcpJsonLinesLink", "decode_message", "encode_message"]
