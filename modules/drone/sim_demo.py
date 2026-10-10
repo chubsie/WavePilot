@@ -23,6 +23,7 @@ from modules.flight_control.interface import (
     FlightControl,
     GoTo,
     Land,
+    ReturnToHome,
     SetGimbal,
     SetVelocity,
     SetYaw,
@@ -51,7 +52,9 @@ def build_demo_steps() -> list[DemoStep]:
         DemoStep(SetGimbal(pitch_deg=-45.0, yaw_deg=30.0), hold_sec=3.0),
         DemoStep(SetVelocity(north_mps=0.0, east_mps=3.0, down_mps=0.0, duration_sec=2.0), hold_sec=3.0),
         DemoStep(FireHeart(track_id=1), hold_sec=2.0),
-        DemoStep(Land(), hold_sec=8.0),
+        # 홈 = 첫 페어링 위치 — 약 22 m 이동(6 m/s) + 15 m 하강(1 m/s)
+        DemoStep(ReturnToHome(), hold_sec=22.0),
+        DemoStep(Land(), hold_sec=2.0),
     ]
 
 

@@ -113,7 +113,7 @@ def test_send_command_in_ai_mode_is_queued(bridge: SimBridge, control: BrowserFl
 def test_demo_steps_cover_every_motion_command_in_order() -> None:
     kinds = [step.command.KIND for step in build_demo_steps()]
 
-    assert kinds == ["go_to", "set_yaw", "set_gimbal", "set_velocity", "fire_heart", "land"]
+    assert kinds == ["go_to", "set_yaw", "set_gimbal", "set_velocity", "fire_heart", "return_to_home", "land"]
 
 
 def test_format_telemetry_line_includes_gps() -> None:
