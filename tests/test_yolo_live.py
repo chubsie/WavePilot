@@ -43,12 +43,14 @@ BENCH_SUMMARY_KEYS = {
     "image_height",
 }  # 계약 C4 — Jetson 런북이 이 키에 의존한다
 CLI_TIMEOUT_SEC = 600.0  # 첫 실행의 모델 로드·MPS 워밍업 여유. 무한 대기는 금지
+REPO_ROOT = Path(__file__).resolve().parents[1]
 BUS_IMAGE_PATH = ASSETS / "bus.jpg"  # ultralytics 패키지에 동봉 — 바이너리를 커밋하지 않는다
 
 
 @pytest.fixture(scope="module")
-def weights_path(wavepilot_root: Path) -> str:
-    path = wavepilot_root / "models" / "yolo11n.pt"
+def weights_path() -> str:
+    # conftest 의 wavepilot_root 는 function 스코프라 module fixture 에서 쓸 수 없다
+    path = REPO_ROOT / "models" / "yolo11n.pt"
     path.parent.mkdir(parents=True, exist_ok=True)
 
     if not path.exists():
