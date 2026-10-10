@@ -71,6 +71,20 @@
     };
   }
 
+  function measureToHome(gps, homeGps) {
+    // 두 GPS 사이 수평 거리·방위(북 0°, 시계방향)·고도차 — 수 km 안이라 평면 근사로 충분하다
+    const metersPerDegLon = METERS_PER_DEG_LAT * Math.cos(homeGps.latitude_deg * Math.PI / 180);
+    const northM = (homeGps.latitude_deg - gps.latitude_deg) * METERS_PER_DEG_LAT;
+    const eastM = (homeGps.longitude_deg - gps.longitude_deg) * metersPerDegLon;
+    const bearingDeg = ((Math.atan2(eastM, northM) * 180 / Math.PI) + 360) % 360;
+
+    return {
+      distanceM: Math.hypot(northM, eastM),
+      bearingDeg,
+      altitudeDiffM: gps.altitude_m - homeGps.altitude_m,
+    };
+  }
+
   function parseBatteryStartPct(search) {
     // URL 형식: ?battery=<0..100> (D-15). 없거나 잘못되면 100
     const raw = new URLSearchParams(search || '').get('battery');
@@ -513,19 +527,32 @@
     listElement.replaceChildren(...items);
   }
 
-  function formatTelemetry(telemetry) {
+  function formatTelemetry(telemetry, homeGps) {
     const fixed = (value, digits) => Number(value).toFixed(digits);
     const gps = telemetry.gps;
 
-    return [
-      `NED      N ${fixed(telemetry.north_m, 1)}  E ${fixed(telemetry.east_m, 1)}  D ${fixed(telemetry.down_m, 1)} m`,
+    const lines = [
       `GPS      ${fixed(gps.latitude_deg, 6)}, ${fixed(gps.longitude_deg, 6)}`,
-      `Altitude ${fixed(gps.altitude_m, 1)} m`,
+      `GPS alt  ${fixed(gps.altitude_m, 1)} m`,
+    ];
+    if (homeGps) {
+      const toHome = measureToHome(gps, homeGps);
+      lines.push(
+        `Home     ${fixed(homeGps.latitude_deg, 6)}, ${fixed(homeGps.longitude_deg, 6)}`,
+        `To home  ${fixed(toHome.distanceM, 1)} m · bearing ${fixed(toHome.bearingDeg, 0)}° · Δalt ${fixed(toHome.altitudeDiffM, 1)} m`,
+      );
+    } else {
+      lines.push('Home     (set when Python pairs)');
+    }
+
+    lines.push(
+      `NED      N ${fixed(telemetry.north_m, 1)}  E ${fixed(telemetry.east_m, 1)}  D ${fixed(telemetry.down_m, 1)} m`,
       `Attitude R ${fixed(telemetry.roll_deg, 1)}  P ${fixed(telemetry.pitch_deg, 1)}  Y ${fixed(telemetry.yaw_deg, 1)}°`,
       `Gimbal   P ${fixed(telemetry.gimbal_pitch_deg, 1)}  Y ${fixed(telemetry.gimbal_yaw_deg, 1)}°`,
       `Battery  ${fixed(telemetry.battery_pct, 1)} %`,
       `Mode     ${telemetry.flight_mode}`,
-    ].join('\n');
+    );
+    return lines.join('\n');
   }
 
   function renderPanel(elements, telemetry, linkState, homeGps) {
@@ -534,10 +561,7 @@
     elements.link.textContent = `Python: ${linkState.connected ? 'connected' : 'disconnected'}`
       + ` · frames ${linkState.frameFps.toFixed(1)} fps · YOLO ${yoloText} ms · RTT ${roundTripText} ms`;
 
-    const homeText = homeGps
-      ? `Home     ${Number(homeGps.latitude_deg).toFixed(6)}, ${Number(homeGps.longitude_deg).toFixed(6)}`
-      : 'Home     (set when Python pairs)';
-    elements.telemetry.textContent = formatTelemetry(telemetry) + '\n' + homeText;
+    elements.telemetry.textContent = formatTelemetry(telemetry, homeGps);
 
     const commandLines = linkState.recentCommands.map((c) => `#${c.id} ${c.kind}${c.accepted ? '' : ' (rejected)'}`);
     if (linkState.discardedCount > 0) commandLines.push(`${linkState.discardedCount} discarded (manual mode)`);
@@ -559,7 +583,7 @@
     GIMBAL_PITCH_MIN_DEG, GIMBAL_PITCH_MAX_DEG, GIMBAL_YAW_MIN_DEG, GIMBAL_YAW_MAX_DEG, DEFAULT_GIMBAL_PITCH_DEG,
     GOTO_SPEED_MPS, CLIMB_SPEED_MPS, LAND_SPEED_MPS, GOAL_REACHED_HORIZONTAL_M, GOAL_REACHED_VERTICAL_M, RTH_MIN_ALTITUDE_M,
     YAW_RATE_DPS, GIMBAL_RATE_DPS, HEART_DURATION_SEC, MAX_RECENT_ITEMS, DETECTION_STALE_SEC, MAX_PENDING_EVENTS,
-    wrapYawDeg, nedToGps, parseBatteryStartPct, batteryPctAt,
+    wrapYawDeg, nedToGps, measureToHome, parseBatteryStartPct, batteryPctAt,
     createAutopilot, createLink,
     startHeart, drawOverlay, renderPanel,
   };

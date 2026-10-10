@@ -40,6 +40,7 @@
     display: none; animation: pulse 1s ease-in-out infinite;
   }
   #view.ai #aiBanner { display: block; }
+  #home.active { background: var(--yaw); color: #1a1305; font-weight: 600; }
   #view.ai { box-shadow: inset 0 0 0 4px var(--yaw); }
   @keyframes pulse { 50% { opacity: .35; } }
   @keyframes aiGlow { 70%, 100% { box-shadow: 0 0 0 33px rgba(245,185,66,0); } }
@@ -233,8 +234,12 @@ $('flexBent').onclick = () => calibrateFlex('bent');
 const buttons = { mask: 0, middle: false, key: false };
 // D-05: in AI mode only Python commands move the drone; glove tilt/throttle are ignored, the mode button still works.
 const mode = { ai: false };
+// Return-home button: the autopilot flies the drone back over home and stays engaged until it gets there
+const rth = { active: false };
+const isAutopilotFlying = () => mode.ai || rth.active;
 function setMode(ai) {
   mode.ai = ai;
+  setReturnHome(false);
   if (ai) autopilot.enterAi(getPose());   // hold the current position until a command arrives
   else autopilot.cancel();                // a stale command must never resume later
 
@@ -735,7 +740,7 @@ function updateRotors(dt, m) {
   rotors.forEach((b, i) => {
     const front = b.position.z < 0, left = b.position.x < 0;
     let target = flight.throttle;
-    if (opts.fly || mode.ai) target += MIX_GAIN * (front ? pitchCmd : -pitchCmd) + MIX_GAIN * (left ? rollCmd : -rollCmd);
+    if (opts.fly || isAutopilotFlying()) target += MIX_GAIN * (front ? pitchCmd : -pitchCmd) + MIX_GAIN * (left ? rollCmd : -rollCmd);
     target = Math.max(0, Math.min(1, target));
     const u = b.userData;
     u.speed += (target - u.speed) * Math.min(1, dt * 6);        // motors take a moment to spin up/down
@@ -759,7 +764,37 @@ const home = { x: HOME.x, z: HOME.z, ground: spawnGround, gps: null };
 const batteryStartPct = SimLink.parseBatteryStartPct(location.search);   // ?battery=<0..100>
 const autopilot = SimLink.createAutopilot({ onHeart: (trackId) => SimLink.startHeart(trackId, nowSec()) });
 
-$('home').onclick = () => goHome(new THREE.Vector3(home.x, 0, home.z));
+function setReturnHome(active) {
+  rth.active = active;
+  $('home').textContent = active ? 'Returning home… (click to cancel)' : 'Return home';
+  $('home').classList.toggle('active', active);
+}
+
+function startReturnHome() {
+  setReturnHome(true);
+  autopilot.enterAi(getPose());
+  autopilot.apply({ id: null, kind: 'return_to_home' }, nowSec());
+  log('Return home: flying back over home');
+}
+
+function finishReturnHomeIfArrived(pose) {
+  const isAtHome = Math.hypot(pose.northM, pose.eastM) <= SimLink.GOAL_REACHED_HORIZONTAL_M;
+  if (!rth.active || !isAtHome || autopilot.flightMode !== 'hover') return;
+
+  setReturnHome(false);
+  if (!mode.ai) autopilot.cancel();   // manual: hand control back, hovering over home
+  log('Return home: reached home, hovering');
+}
+
+$('home').onclick = () => {
+  if (rth.active) {
+    setReturnHome(false);
+    if (!mode.ai) autopilot.cancel();
+    log('Return home cancelled');
+  } else {
+    startReturnHome();
+  }
+};
 
 function getPose() {
   return {
@@ -780,7 +815,7 @@ function rememberHomeAtPairing() {
   home.z = flight.pos.z;
   home.ground = Math.max(terrainHeight(home.x, home.z), 0);
   home.gps = getGps();
-  if (mode.ai) autopilot.enterAi(getPose());   // re-hold in the new home frame
+  if (isAutopilotFlying()) autopilot.enterAi(getPose());   // re-hold in the new home frame
 
   log(`Home set at pairing: ${home.gps.latitude_deg.toFixed(6)}, ${home.gps.longitude_deg.toFixed(6)}`);
 }
@@ -808,7 +843,7 @@ function buildTelemetry() {
     gimbal_pitch_deg: autopilot.gimbal.pitchDeg,
     gimbal_yaw_deg: autopilot.gimbal.yawDeg,
     battery_pct: SimLink.batteryPctAt(batteryStartPct, timeSec),
-    flight_mode: mode.ai ? autopilot.flightMode : getManualFlightMode(),
+    flight_mode: isAutopilotFlying() ? autopilot.flightMode : getManualFlightMode(),
     gps: getGps(),
   };
 }
@@ -843,10 +878,12 @@ function frame() {
   const dt = Math.min(clock.getDelta(), 0.05);
   const m = mapped();
   let aiCmd = null;
-  if (mode.ai) {
+  if (isAutopilotFlying()) {
     // D-05: glove tilt/yaw are ignored; the autopilot owns heading and velocity
-    aiCmd = autopilot.step(dt, nowSec(), getPose());
+    const pose = getPose();
+    aiCmd = autopilot.step(dt, nowSec(), pose);
     shown.yaw = aiCmd.yawDeg;
+    finishReturnHomeIfArrived(pose);
   } else {
     // Light smoothing so 50 Hz data looks fluid at 60+ fps
     shown.roll += (m.roll - shown.roll) * 0.35;
@@ -859,18 +896,18 @@ function frame() {
   fwd.set(Math.sin(psi), 0, -Math.cos(psi));
   right.set(Math.cos(psi), 0, Math.sin(psi));
 
-  if (mode.ai) {
+  if (aiCmd) {
     // Display attitude from body-frame velocity: moving forward = nose down, moving right = right side down
     shown.pitch = -clamp(flight.vel.dot(fwd) * AI_TILT_DEG_PER_MPS, -AI_MAX_TILT_DEG, AI_MAX_TILT_DEG);
     shown.roll = clamp(flight.vel.dot(right) * AI_TILT_DEG_PER_MPS, -AI_MAX_TILT_DEG, AI_MAX_TILT_DEG);
   }
   // +pitch = nose up, +roll = right side down, +yaw = nose right
   drone.rotation.set(shown.pitch * D2R, -shown.yaw * D2R, -shown.roll * D2R, 'YXZ');
-  updateRotors(dt, mode.ai ? shown : m);
+  updateRotors(dt, aiCmd ? shown : m);
 
   const ground = Math.max(terrainHeight(flight.pos.x, flight.pos.z), 0);
   let thrustAccel = 0;
-  if (mode.ai) {
+  if (aiCmd) {
     // NED velocity -> scene axes (x = east, y = up, z = south)
     aiTargetVel.set(aiCmd.velEastMps, -aiCmd.velDownMps, -aiCmd.velNorthMps);
     flight.vel.lerp(aiTargetVel, Math.min(1, dt * AI_VELOCITY_LAG_PER_SEC));
@@ -900,7 +937,7 @@ function frame() {
   }
   flight.pos.x += flight.vel.x * dt;
   flight.pos.z += flight.vel.z * dt;
-  if (opts.fly || mode.ai) flight.alt += flight.vel.y * dt;
+  if (opts.fly || aiCmd) flight.alt += flight.vel.y * dt;
 
   // Ground contact: sit on the terrain, no sinking, friction when landed
   const groundNow = Math.max(terrainHeight(flight.pos.x, flight.pos.z), 0);
@@ -931,8 +968,8 @@ function frame() {
   camera.lookAt(target);
 
   const speed = Math.hypot(flight.vel.x, flight.vel.z);
-  $('flightInfo').textContent = (opts.fly || mode.ai)
-    ? `${mode.ai ? `AI MODE · ${autopilot.flightMode}\n` : ''}Throttle ${Math.round(flight.throttle * 100)}%${flight.auto ? ' (auto hover, calibrate the flex)' : ''}${flight.onGround ? ' · landed' : ''}
+  $('flightInfo').textContent = (opts.fly || aiCmd)
+    ? `${mode.ai ? `AI MODE · ${autopilot.flightMode}\n` : rth.active ? `RETURN HOME · ${autopilot.flightMode}${home.gps ? ` · ${SimLink.measureToHome(getGps(), home.gps).distanceM.toFixed(0)} m to home` : ''}\n` : ''}Throttle ${Math.round(flight.throttle * 100)}%${flight.auto ? ' (auto hover, calibrate the flex)' : ''}${flight.onGround ? ' · landed' : ''}
 ` +
       `Speed ${speed.toFixed(1)} m/s · climb ${flight.vel.y >= 0 ? '+' : ''}${flight.vel.y.toFixed(1)} m/s · ${(flight.alt - groundNow).toFixed(0)} m above ground · ${Math.hypot(flight.pos.x - home.x, flight.pos.z - home.z).toFixed(0)} m from home
 ` +
