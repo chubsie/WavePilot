@@ -33,6 +33,7 @@ TEST_SCHEMA = {
 }
 SHORT_TIMEOUT_SEC = 0.3
 HANG_WAIT_SEC = 5.0
+SERVER_POLL_INTERVAL_SEC = 0.02  # shutdown() 대기를 줄여 테스트 전체를 빠르게 유지
 
 
 # ---------------------------------------------------------------------------
@@ -112,7 +113,9 @@ class FakeLlamaHandler(BaseHTTPRequestHandler):
 @pytest.fixture
 def fake_llama_server() -> Iterator[FakeLlamaServer]:
     server = FakeLlamaServer()
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(
+        target=server.serve_forever, args=(SERVER_POLL_INTERVAL_SEC,), daemon=True
+    )
     thread.start()
 
     yield server
