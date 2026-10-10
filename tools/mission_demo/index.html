@@ -13,10 +13,7 @@
       <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
       <span><b>WAVEPILOT</b><small>FIELD COMMAND / 01</small></span>
     </a>
-    <nav class="scenario-switch" aria-label="시나리오">
-      <button id="scenario-urban" class="seg active" aria-pressed="true"><span>01</span> 도심전</button>
-      <button id="scenario-mountain" class="seg" aria-pressed="false"><span>02</span> 산악전</button>
-    </nav>
+    <div class="scenario-switch" aria-label="현재 시나리오"><span class="seg active"><span>01</span> 폐허 시가전</span></div>
     <div class="system-strip" aria-label="시스템 상태">
       <span><i class="status-dot ok"></i> ORIN <b id="orin-status">DEMO</b></span>
       <span><i class="status-dot ok"></i> YOLO <b>LIVE</b></span>
@@ -39,7 +36,7 @@
       <div class="reticle" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
       <div class="attitude-line"><i></i><span>— 0 —</span><i></i></div>
       <div class="camera-footer">
-        <div><small>ALT</small><b id="altitude">18.0</b><span>M</span></div>
+        <div><small>ALT</small><b id="altitude">12.0</b><span>M</span></div>
         <div><small>SPD</small><b id="speed">0.0</b><span>M/S</span></div>
         <div><small>HDG</small><b id="heading">000</b><span>°</span></div>
         <div><small>BAT</small><b>87</b><span>%</span></div>
@@ -55,8 +52,8 @@
           <button id="quality-performance" data-quality="performance">PERFORMANCE</button>
         </div>
         <div class="glove-controls" aria-label="장갑 연결 및 보정">
-          <button id="connect-imu" class="utility-button">USB</button>
-          <button id="connect-ble" class="utility-button">BLE</button>
+          <button id="connect-imu" class="utility-button">USB 연결</button>
+          <button id="connect-ble" class="utility-button">Bluetooth 연결</button>
           <button id="flex-flat" class="utility-button">FLAT</button>
           <button id="flex-bent" class="utility-button">BENT</button>
           <button id="zero-imu" class="utility-button">ZERO</button>
@@ -64,6 +61,7 @@
         <button id="reset-flight" class="icon-button" aria-label="비행 위치 재설정" title="비행 위치 재설정">↻</button>
       </div>
       <div id="obstacle-warning" class="obstacle-warning" role="status">OBSTACLE / FLIGHT BLOCKED</div>
+      <div id="glove-status" class="glove-status" role="status">장갑 미연결 · USB 또는 Bluetooth 연결을 선택하세요</div>
       <div id="flight-hint" class="flight-hint">WASD 이동 · Q/E 회전 · R/F 고도</div>
     </section>
 

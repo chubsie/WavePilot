@@ -19,7 +19,7 @@ export class KeyboardInput {
     return {
       roll: down("d") - down("a"),
       pitch: down("w") - down("s"),
-      yaw: down("e") - down("q"),
+      yaw: down("q") - down("e"),
       throttle: down("r") - down("f"),
       source: "keyboard",
       timestamp: performance.now(),
@@ -50,7 +50,11 @@ export class GloveInput {
   }
 
   async connect(kind = "usb") {
-    await this.disconnect();
+    if (this.link) throw new Error('현재 장갑 연결을 해제한 후 다른 연결 방식을 선택하세요.');
+    this.last = null;
+    this.lastSeq = null;
+    this.buffer = '';
+    this.buttons = 0;
     if (kind === "ble") return this.connectBle();
     return this.connectUsb();
   }
@@ -72,7 +76,7 @@ export class GloveInput {
       },
     };
     this.onStatus({ connected: true, kind: "usb" });
-    this.readUsb(reader);
+    this.readUsb(reader).catch(error => this.onStatus({connected:false,kind:null,error:error.message}));
   }
 
   async readUsb(reader) {
@@ -146,8 +150,9 @@ export class GloveInput {
     this.buttons = buttons;
     const bend = this.flexBend();
     this.last = {
-      roll: clamp(roll / 30), pitch: clamp(-pitch / 30), yaw: clamp(yawRate / 90),
-      throttle: this.flexReady() ? clamp((bend - 0.5) * 2) : 0,
+      roll: clamp(roll / 30), pitch: clamp(-pitch / 30), yaw: clamp(-yawRate / 90),
+      throttle: this.flexReady() ? bend : 0.5,
+      flexReady: this.flexReady(),
       source: "imu", timestamp: performance.now(), seq, steps, flex0, buttons,
     };
     return this.last;
@@ -180,7 +185,7 @@ export class GloveInput {
 
   sample() {
     if (!this.last || performance.now() - this.last.timestamp > 500) {
-      return { roll: 0, pitch: 0, yaw: 0, throttle: 0, source: "imu-stale", timestamp: performance.now() };
+      return { roll: 0, pitch: 0, yaw: 0, throttle: 0.5, source: "imu-stale", timestamp: performance.now() };
     }
     return this.last;
   }
@@ -188,28 +193,55 @@ export class GloveInput {
 
 export { NUS };
 
-const ROUTES = {
-  urban: [[-18, 16, 18], [-7, 28, 17], [8, 29, 15], [19, 15, 19], [12, -5, 21], [-10, -8, 18]],
-  mountain: [[-34, -50, 18], [-24, -27, 22], [-10, -3, 28], [8, 20, 30], [28, 39, 34], [48, 55, 30]],
-};
+const URBAN_ROUTE = [[0, 42, 12], [0, 18, 12], [0, -8, 12], [0, -34, 12], [0, -58, 12], [0, -30, 12], [0, 0, 12], [0, 28, 12]];
 
 export class AutoPilotInput {
-  constructor() { this.route = ROUTES.urban; this.index = 0; }
-  setScenario(name) { this.route = ROUTES[name]; this.index = 0; }
-  sample(position, heading) {
-    const target = this.route[this.index];
+  constructor() { this.route = URBAN_ROUTE; this.index = 0; this.resetObservation(); }
+  resetObservation() {
+    this.targetId = null;
+    this.candidates = new Map();
+    this.lastSeen = 0;
+    this.obstructed = false;
+    this.status = 'PATROL';
+  }
+  reset() { this.index = 0; this.resetObservation(); }
+  notifyBlocked() { if (this.targetId) this.obstructed = true; }
+  sample(position, heading, tracks = [], now = performance.now()) {
+    const valid = tracks.filter(t => t.confidence >= 70 && t.position?.length === 3 && t.position.every(Number.isFinite));
+    const ids = new Set(valid.map(t => t.id));
+    for (const id of this.candidates.keys()) if (!ids.has(id)) this.candidates.delete(id);
+    for (const t of valid) if (!this.candidates.has(t.id)) this.candidates.set(t.id, now);
+    if (!this.targetId) {
+      const eligible = valid.filter(t => now - this.candidates.get(t.id) >= 1000);
+      eligible.sort((a,b) => Math.hypot(a.position[0]-position.x,a.position[2]-position.z) - Math.hypot(b.position[0]-position.x,b.position[2]-position.z));
+      if (eligible.length) { this.targetId = eligible[0].id; this.obstructed = false; }
+    }
+    const observed = valid.find(t => t.id === this.targetId);
+    if (observed) this.lastSeen = now;
+    if (this.targetId && !observed) {
+      if (now - this.lastSeen < 2000) {
+        this.status = 'LOST';
+        return {roll:0,pitch:0,yaw:0,throttle:0,brake:true,source:'auto',timestamp:now};
+      }
+      this.targetId = null;
+      this.obstructed = false;
+    }
+    const target = observed ? [observed.position[0], observed.position[2], position.y] : this.route[this.index];
     const dx = target[0] - position.x;
     const dz = target[1] - position.z;
     const dy = target[2] - position.y;
     const distance = Math.hypot(dx, dz);
-    if (distance < 4 && Math.abs(dy) < 3) this.index = (this.index + 1) % this.route.length;
+    if (!observed && distance < 4 && Math.abs(dy) < 3) this.index = (this.index + 1) % this.route.length;
     const desired = Math.atan2(-dx, -dz);
     let delta = desired - heading;
     while (delta > Math.PI) delta -= Math.PI * 2;
     while (delta < -Math.PI) delta += Math.PI * 2;
+    this.status = observed ? (this.obstructed ? 'BLOCKED' : distance <= 14 ? 'OBSERVE' : 'APPROACH') : 'PATROL';
+    const forward = observed ? (this.obstructed ? 0 : clamp((distance - 14) / 18, 0, .35)) : clamp(distance / 12, 0, .8);
     return {
-      roll: 0, pitch: clamp(distance / 12, 0, 0.8), yaw: clamp(delta * 1.4), throttle: clamp(dy / 8),
-      source: "auto", timestamp: performance.now(),
+      roll: 0, pitch: forward * Math.max(0, Math.cos(delta)), yaw: clamp(delta * 1.4), throttle: clamp(dy / 8),
+      brake: this.obstructed || (observed && distance <= 14) || Math.abs(delta) > .5,
+      source: "auto", timestamp: now,
     };
   }
 }

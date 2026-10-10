@@ -1,15 +1,9 @@
 {
-  "mountain": {
-    "style": "border-mountain-recon",
-    "generated_objects": 201,
-    "features": ["deep-valley", "wet-cliffs", "military-road", "bunker", "watch-post", "tunnel", "border-wire", "sparse-pine", "collision-proxies"],
-    "target_ids": ["T-11", "T-12"]
-  },
   "urban": {
     "style": "war-damaged-european-city",
-    "generated_objects": 857,
-    "features": ["damaged-facades", "exposed-floors", "broken-windows", "rubble", "wet-cobble", "burned-vehicle", "overcast-haze"],
-    "target_ids": ["T-03", "T-07", "T-09"],
-    "forbidden_shapes": ["intact-box-tower"]
+    "generated_objects": 888,
+    "colliders": 14,
+    "features": ["solid-facades", "broken-roofs", "exposed-floors", "recessed-windows", "balconies", "street-edge-rubble", "wet-cobble", "burned-vehicle", "clear-flight-corridor", "explicit-collision-proxies"],
+    "target_ids": ["T-03", "T-07"]
   }
 }
