@@ -5,15 +5,22 @@ pipeline.py / run_scenario.py 는 건드리지 않는 별도 컴포지션 루트
 
 실행 예시 (WavePilot 루트에서):
     uv run python -m modules.drone.run_mission --sim mock
+    uv run python -m modules.drone.run_mission --sim mock --mission missions/red_heart.toml
+    uv run python -m modules.drone.run_mission --sim mock --mission missions/red_heart.toml --log-dir logs/missions
     uv run python -m modules.drone.run_mission --sim mock --target-color none   (색 조건 없음, Phase 3 동작)
-    uv run --group yolo python -m modules.drone.run_mission --sim browser
+    uv run --group yolo python -m modules.drone.run_mission --sim browser --mission missions/red_heart.toml
     uv run python -m modules.drone.run_mission --sim browser --yolo orin --yolo-url http://<orin-ip>:8082
-    (browser: http://127.0.0.1:8766/drone_camera.html 을 열고 AI 모드로 전환한다)
+    (browser: http://127.0.0.1:8766/drone_camera.html 을 열고 AI 모드로 전환한다.
+     패널에 AI mission 상태 줄(MODE·사유·링크)이 보이고, 이상 주입은 패널 Fault injection 버튼으로 한다 — D-19)
+
+--mission 임무 파일이 탐색 구역·상체 색·최대 비행 시간·안전 여유를 정한다(파일 색이 --target-color 보다 우선).
+임무 파일이 없으면 params 기본값 + CLI 로 돈다(Phase 3·4 동작).
 
 --sim mock 은 헤드리스다. KinematicFlightControl 과 스크립트 대상(빨간 옷 1명 + 다른 색 1명)으로 YOLO 없이 돈다.
 --target-color red(기본)면 빨간 옷 사람에게만 하트를 쏜다. none 이면 색을 따지지 않는다.
 --speed 0 은 벽시계를 기다리지 않고 최대 속도로 돈다. 로그(stderr)에 선택마다 selection 줄,
-모드 종료마다 mode_end 줄이 나온다. return_home 이 착지하면 종료 코드 0, 그 밖의 종료는 1 이다.
+모드 종료마다 mode_end 줄이 나온다. 같은 사건이 logs/missions/<시작시각>.jsonl(JSON Lines)에도 남는다(--log-dir).
+return_home 이 착지하면 종료 코드 0, 그 밖의 종료는 1 이다.
 """
 
 import argparse
@@ -25,6 +32,8 @@ import sys
 import threading
 import time
 from collections.abc import Callable, Sequence
+from datetime import datetime
+from pathlib import Path
 
 from modules.decision.factory import SelectorConfig, create_decision_model
 from modules.decision.interface import DecisionModel
@@ -54,6 +63,10 @@ from modules.drone.run_scenario import (
 )
 from modules.drone.yolo_factory import DEFAULT_YOLO_URL, YOLO_CHOICES, YOLO_LOCAL, create_yolo_factory
 from modules.flight_control.interface import FlightControl, Telemetry
+from modules.mission.mission_file import MissionSpec, load_mission_file
+from modules.mission.mission_log import DEFAULT_LOG_DIR, KIND_MISSION, MissionLog, default_log_path
+from modules.mission.operator import LinkStatus, OperatorInput, ScriptedOperator
+from modules.mission.safety import SafetyConfig, SafetyMonitor
 from modules.perception.interface import DEFAULT_CAMERA
 from modules.perception.tracking import TrackAggregator
 from modules.rule_mode.interface import RuleModeSettings
@@ -72,6 +85,9 @@ AI_MODE_POLL_SEC = 0.5
 DEFAULT_TARGET_COLOR = "red"
 TARGET_COLOR_NONE = "none"
 TARGET_COLOR_CHOICES = (DEFAULT_TARGET_COLOR, TARGET_COLOR_NONE)
+
+DEFAULT_MISSION_LOG_DIR = DEFAULT_LOG_DIR  # WavePilot 루트(작업 디렉터리) 상대 경로
+MISSION_CONSOLE_LOGGER_NAME = "modules.drone.mission_loop"  # 기존 selection/mode_end 줄과 같은 로거
 
 # mock 세계 — 홈 북쪽 수색 구역 안에 빨간 옷 1명 + 다른 색 1명 (D-06, D-07).
 # 시야 안에 들어와야 보이도록 탐지 거리를 제한한다
@@ -169,6 +185,37 @@ class WallTickSleeper:
             self._next_deadline_sec = now_sec  # 밀렸으면 따라잡으려 몰아치지 않는다
 
 
+@dataclasses.dataclass(frozen=True)
+class MissionSetup:
+    """임무 한 번에 필요한 값 묶음 — 임무 파일·CLI 를 합친 결과를 실행 함수로 한꺼번에 넘긴다."""
+
+    defaults: ParamDefaults
+    settings: RuleModeSettings
+    safety_config: SafetyConfig | None  # None 이면 MissionRunner 기본 안전 감시
+    max_mission_sec: float
+    mission_path: str | None
+    spec: MissionSpec | None
+    selector_kind: str
+    mission_log: MissionLog
+
+
+class BridgeOperatorInput:
+    """브라우저 브리지를 OperatorInput 으로 — 조종자 모드 버튼과 운용자 링크 heartbeat 를 읽는다.
+
+    브리지 자체 연결(페이지가 POST 를 보내는지)은 should_abort 가 따로 본다 (D-01).
+    """
+
+    def __init__(self, bridge) -> None:
+        self._bridge = bridge
+
+    def is_ai_requested(self) -> bool:
+        return bool(self._bridge.ai_mode)
+
+    def link_status(self, now_sec: float) -> LinkStatus:
+        # 마지막 heartbeat 시각은 브리지가 sim 시각으로 들고 있어 now_sec 는 쓰지 않는다
+        return LinkStatus(*self._bridge.operator_link_status())
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m modules.drone.run_mission",
@@ -176,8 +223,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--sim", choices=SIM_CHOICES, default=SIM_MOCK, help="simulator implementation (default mock)")
     parser.add_argument(
+        "--mission", default=None,
+        help="TOML mission file; overrides search area, target color, safety limits",
+    )
+    parser.add_argument(
+        "--log-dir", default=DEFAULT_MISSION_LOG_DIR,
+        help=f"directory for <start time>.jsonl mission logs, relative to the working directory "
+        f"(run from WavePilot root; default {DEFAULT_MISSION_LOG_DIR})",
+    )
+    parser.add_argument(
         "--max-mission-sec", type=float, default=DEFAULT_MAX_MISSION_SEC,
-        help="sim seconds after which return_home is forced",
+        help="sim seconds after which return_home is forced; ignored when --mission is given "
+        "(mission max_flight_sec wins)",
     )
     parser.add_argument("--tick-hz", type=float, default=DEFAULT_TICK_HZ, help="mission loop ticks per sim second")
     parser.add_argument(
@@ -194,9 +251,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--ai-mode-timeout-sec", type=float, default=DEFAULT_AI_MODE_TIMEOUT_SEC,
         help="how long to wait for AI mode to be switched on in the page (--sim browser)",
     )
+    # 기본값 None — 임무 파일과 함께 지정했는지 구분한다 (지정 안 하면 red)
     parser.add_argument(
-        "--target-color", choices=TARGET_COLOR_CHOICES, default=DEFAULT_TARGET_COLOR,
-        help="upper-body color the mission targets; none = any color (Phase 3 behavior)",
+        "--target-color", choices=TARGET_COLOR_CHOICES, default=None,
+        help=f"upper-body color the mission targets (default {DEFAULT_TARGET_COLOR}); "
+        "none = any color (Phase 3 behavior); a --mission file color wins",
     )
     parser.add_argument("--device", default=DEFAULT_YOLO_DEVICE, help="YOLO device for --sim browser: auto | mps | cpu | 0")
     parser.add_argument(
@@ -222,14 +281,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         logger.error("invalid selector configuration: %s", error)
         return EXIT_USAGE
 
-    # Phase 5 임무 파일이 대상 색을 덮어쓸 자리다
-    target_upper_color = None if args.target_color == TARGET_COLOR_NONE else args.target_color
-    settings = build_rule_mode_settings(config.param_defaults, target_upper_color=target_upper_color)
+    # 잘못된 임무 파일은 비행·로그 파일 생성 전에 멈춘다 (D-14)
+    spec = None
+    if args.mission is not None:
+        try:
+            spec = load_mission_file(args.mission)
+        except (ValueError, OSError) as error:
+            logger.error("invalid mission file %s: %s", args.mission, error)
+            return EXIT_USAGE
+
+    log_path = default_log_path(Path(args.log_dir), datetime.now())
+    logger.info("mission log: %s", log_path)
+
     try:
-        if args.sim == SIM_BROWSER:
-            result = _run_browser_mission(args, decision_model, config.param_defaults, settings)
-        else:
-            result = _run_mock_mission(args, decision_model, config.param_defaults, settings)
+        with MissionLog(log_path, console=logging.getLogger(MISSION_CONSOLE_LOGGER_NAME)) as mission_log:
+            setup = _create_mission_setup(args, config, spec, mission_log)
+            if args.sim == SIM_BROWSER:
+                result = _run_browser_mission(args, decision_model, setup)
+            else:
+                result = _run_mock_mission(args, decision_model, setup)
     except KeyboardInterrupt:
         logger.info("interrupted")
         return EXIT_INTERRUPTED
@@ -238,6 +308,45 @@ def main(argv: Sequence[str] | None = None) -> int:
         return EXIT_FAILURE
 
     return EXIT_OK if result.is_success else EXIT_FAILURE
+
+
+def resolve_target_upper_color(target_color_arg: str | None, spec: MissionSpec | None) -> str | None:
+    """대상 상체 색 — 임무 파일 > --target-color > 기본 red. none 은 색 조건 없음(None)."""
+    if spec is not None:
+        if target_color_arg is not None:
+            logger.info(
+                "mission file target color %s overrides --target-color %s",
+                spec.target_upper_color or "any", target_color_arg,
+            )
+        return spec.target_upper_color
+
+    if target_color_arg is None:
+        return DEFAULT_TARGET_COLOR
+    if target_color_arg == TARGET_COLOR_NONE:
+        return None
+    return target_color_arg
+
+
+def apply_mission_spec(defaults: ParamDefaults, spec: MissionSpec) -> ParamDefaults:
+    """임무 파일의 탐색 구역으로 기본값을 덮는다 (D-13). 복귀 지점(home_*)은 파일에 없어 그대로다 (D-12)."""
+    return dataclasses.replace(
+        defaults,
+        search_area_north_min_m=spec.search_north_min_m,
+        search_area_north_max_m=spec.search_north_max_m,
+        search_area_east_min_m=spec.search_east_min_m,
+        search_area_east_max_m=spec.search_east_max_m,
+    )
+
+
+def build_safety_config(spec: MissionSpec, settings: RuleModeSettings, defaults: ParamDefaults) -> SafetyConfig:
+    return SafetyConfig(
+        search_area=settings.search_area,
+        geofence_margin_m=spec.geofence_margin_m,
+        battery_reserve_pct=spec.battery_reserve_pct,
+        max_flight_sec=spec.max_flight_sec,
+        home_north_m=defaults.home_north_m,
+        home_east_m=defaults.home_east_m,
+    )
 
 
 def build_mock_world(
@@ -252,8 +361,41 @@ def build_mock_world(
     return flight_control, frame_source
 
 
+def _create_mission_setup(
+    args: argparse.Namespace, config: SelectorConfig, spec: MissionSpec | None, mission_log: MissionLog
+) -> MissionSetup:
+    if spec is None:
+        defaults = config.param_defaults
+        target_class = "person"
+    else:
+        defaults = apply_mission_spec(config.param_defaults, spec)
+        target_class = spec.target_class
+
+    target_upper_color = resolve_target_upper_color(args.target_color, spec)
+    settings = build_rule_mode_settings(defaults, target_class=target_class, target_upper_color=target_upper_color)
+
+    if spec is None:
+        safety_config = None
+        max_mission_sec = args.max_mission_sec
+    else:
+        safety_config = build_safety_config(spec, settings, defaults)
+        max_mission_sec = spec.max_flight_sec
+        logger.info("mission file max_flight_sec %.1f s replaces --max-mission-sec", max_mission_sec)
+
+    return MissionSetup(
+        defaults=defaults,
+        settings=settings,
+        safety_config=safety_config,
+        max_mission_sec=max_mission_sec,
+        mission_path=str(args.mission) if args.mission is not None else None,
+        spec=spec,
+        selector_kind=config.kind,
+        mission_log=mission_log,
+    )
+
+
 def _run_mock_mission(
-    args: argparse.Namespace, decision_model: DecisionModel, defaults: ParamDefaults, settings: RuleModeSettings
+    args: argparse.Namespace, decision_model: DecisionModel, setup: MissionSetup
 ) -> MissionRunResult:
     flight_control, frame_source = build_mock_world()
     pacer = WallClockPacer(args.speed) if args.speed > 0 else None
@@ -264,13 +406,13 @@ def _run_mock_mission(
             pacer(flight_control.now_sec)
 
     return _build_runner(
-        args, flight_control, frame_source, decision_model, defaults, settings,
-        clock=lambda: flight_control.now_sec, advance=advance,
+        args, flight_control, frame_source, decision_model, setup,
+        clock=lambda: flight_control.now_sec, advance=advance, operator=ScriptedOperator(),
     ).run()
 
 
 def _run_browser_mission(
-    args: argparse.Namespace, decision_model: DecisionModel, defaults: ParamDefaults, settings: RuleModeSettings
+    args: argparse.Namespace, decision_model: DecisionModel, setup: MissionSetup
 ) -> MissionRunResult | None:
     """브라우저가 벽시계로 물리를 돌리고 Python 은 따라간다 — 시계는 브라우저 sim 시각이다."""
     components = _load_browser_components()
@@ -293,11 +435,14 @@ def _run_browser_mission(
         detection_source = components.browser_detection_source(bridge, yolo_factory=yolo_factory)
         frame_reader = LatestFrameReader(detection_source)
 
+        # 조종자 모드·운용자 링크는 매 틱 operator 로 읽고, 브리지 자체가 끊기면 중단한다 (D-01, D-02)
         return _build_runner(
-            args, flight_control, frame_reader, decision_model, defaults, settings,
+            args, flight_control, frame_reader, decision_model, setup,
             clock=lambda: flight_control.get_telemetry().time_sec,
             advance=WallTickSleeper(args.tick_hz),
+            operator=BridgeOperatorInput(bridge),
             should_abort=lambda: not bridge.is_connected(),
+            on_status=bridge.set_mission_status,
         ).run()
     finally:
         if frame_reader is not None:
@@ -313,23 +458,48 @@ def _build_runner(
     flight_control: FlightControl,
     frame_source: MissionFrameSource,
     decision_model: DecisionModel,
-    defaults: ParamDefaults,
-    settings: RuleModeSettings,
+    setup: MissionSetup,
     clock: Callable[[], float],
     advance: Callable[[float], None],
+    operator: OperatorInput,
     should_abort: Callable[[], bool] | None = None,
+    on_status: Callable[[dict], None] | None = None,
 ) -> MissionRunner:
+    _record_mission_start(setup, flight_control)
+
+    safety = SafetyMonitor(setup.safety_config) if setup.safety_config is not None else None
+
     return MissionRunner(
         flight_control=flight_control,
         frame_source=frame_source,
         aggregator=TrackAggregator(DEFAULT_CAMERA),
         decision_model=decision_model,
-        param_defaults=defaults,
-        settings=settings,
+        param_defaults=setup.defaults,
+        settings=setup.settings,
         clock=clock,
         advance=advance,
-        config=MissionConfig(max_mission_sec=args.max_mission_sec, tick_hz=args.tick_hz),
+        config=MissionConfig(max_mission_sec=setup.max_mission_sec, tick_hz=args.tick_hz),
         should_abort=should_abort,
+        operator=operator,
+        safety=safety,
+        mission_log=setup.mission_log,
+        on_status=on_status,
+    )
+
+
+def _record_mission_start(setup: MissionSetup, flight_control: FlightControl) -> None:
+    # 홈 = 첫 텔레메트리 GPS(운용자 위치) — 파일에 복귀 지점이 없어 로그로 남긴다 (D-12)
+    telemetry = flight_control.get_telemetry()
+    home_gps = telemetry.gps.to_dict() if telemetry.gps is not None else None
+
+    setup.mission_log.record(
+        KIND_MISSION,
+        telemetry.time_sec,
+        event="start",
+        mission_file=setup.mission_path,
+        mission=dataclasses.asdict(setup.spec) if setup.spec is not None else None,
+        selector=setup.selector_kind,
+        home_gps=home_gps,
     )
 
 
@@ -360,7 +530,7 @@ def _wait_for_simulator(bridge, timeout_sec: float) -> bool:
 
 def _wait_for_ai_mode(bridge, timeout_sec: float) -> bool:
     deadline_sec = time.monotonic() + timeout_sec
-    logger.info("waiting for AI mode: press M in the simulator page")
+    logger.info("waiting for AI mode: press M in the simulator page to start the AI mission")
 
     while not bridge.ai_mode:
         if time.monotonic() >= deadline_sec:

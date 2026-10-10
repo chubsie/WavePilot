@@ -1,17 +1,22 @@
-"""run_mission CLI — mock 헤드리스 임무, 인자 검증, browser 구성(가짜 구성 요소) 연결."""
+"""run_mission CLI — mock 헤드리스 임무, 임무 파일·구조화 로그, 인자 검증, browser 구성(가짜 구성 요소) 연결."""
 
 import ast
+import json
 import logging
 import os
 import subprocess
 import sys
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from modules.drone import run_mission
 from modules.drone.run_scenario import BrowserComponents
+from modules.flight_control.interface import HOME_GPS_FIX, Telemetry
+from modules.mission.operator import LinkStatus, ScriptedOperator
+from modules.rule_mode.interface import SearchArea
 from modules.yolo_detection.interface import Frame
 
 WAVEPILOT_ROOT = Path(__file__).resolve().parents[1]
@@ -24,6 +29,71 @@ LAZY_ONLY_MODULES = frozenset({
     "modules.yolo_detection.jpeg_source",
 })
 SUBPROCESS_TIMEOUT_SEC = 60
+EXAMPLE_MISSION_PATH = WAVEPILOT_ROOT / "missions" / "red_heart.toml"
+
+# missions/red_heart.toml 과 같은 값 — write_mission_file 이 섹션별로 덮어쓴다
+EXAMPLE_MISSION_SECTIONS = {
+    "target": {"class": "person", "upper_color": "red", "action": "heart"},
+    "search_area": {"north_m": [20.0, 120.0], "east_m": [-50.0, 50.0]},
+    "safety": {"geofence_margin_m": 20.0, "battery_reserve_pct": 15.0, "max_flight_sec": 300.0},
+}
+
+
+@pytest.fixture(autouse=True)
+def isolated_log_dir(monkeypatch, tmp_path):
+    """main 을 부르는 테스트가 리포의 logs/ 에 임무 로그를 쓰지 않게 한다."""
+    log_dir = tmp_path / "logs"
+    monkeypatch.setattr(run_mission, "DEFAULT_MISSION_LOG_DIR", log_dir)
+
+    return log_dir
+
+
+def write_mission_file(tmp_path: Path, **section_overrides: dict) -> Path:
+    sections = {name: dict(values) for name, values in EXAMPLE_MISSION_SECTIONS.items()}
+    for name, values in section_overrides.items():
+        sections.setdefault(name, {}).update(values)
+
+    lines = []
+    for name, values in sections.items():
+        lines.append(f"[{name}]")
+        lines.extend(f"{key} = {json.dumps(value)}" for key, value in values.items())
+        lines.append("")
+
+    path = tmp_path / "mission.toml"
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+    return path
+
+
+def read_log_records(log_dir: Path) -> list[dict]:
+    log_paths = list(log_dir.glob("*.jsonl"))
+    assert len(log_paths) == 1, log_paths
+
+    return [json.loads(line) for line in log_paths[0].read_text(encoding="utf-8").splitlines()]
+
+
+class CapturingRunnerFactory:
+    """MissionRunner 대역 — 생성 kwargs 를 기록하고 run() 은 성공 결과를 돌려준다."""
+
+    def __init__(self) -> None:
+        self.kwargs_list: list[dict] = []
+
+    def __call__(self, **kwargs):
+        self.kwargs_list.append(kwargs)
+        return self
+
+    @property
+    def kwargs(self) -> dict:
+        assert len(self.kwargs_list) == 1
+        return self.kwargs_list[0]
+
+    def run(self):
+        return SimpleNamespace(is_success=True)
+
+
+class CapturingSafetyMonitor:
+    def __init__(self, config) -> None:
+        self.config = config
 
 
 # --- mock 임무 ---
@@ -58,11 +128,11 @@ def test_mock_mission_without_target_color_exits_zero(monkeypatch):
     assert exit_code == run_mission.EXIT_OK
 
 
-def test_mock_mission_runs_as_subprocess():
+def test_mock_mission_runs_as_subprocess(tmp_path):
     env = {key: value for key, value in os.environ.items() if key != "WAVEPILOT_SELECTOR"}
 
     completed = subprocess.run(
-        [sys.executable, "-m", "modules.drone.run_mission", "--sim", "mock"],
+        [sys.executable, "-m", "modules.drone.run_mission", "--sim", "mock", "--log-dir", str(tmp_path)],
         cwd=WAVEPILOT_ROOT, env=env, capture_output=True, text=True, timeout=SUBPROCESS_TIMEOUT_SEC,
     )
 
@@ -77,6 +147,140 @@ def test_mock_mission_that_cannot_finish_exits_failure(monkeypatch):
     exit_code = run_mission.main(["--sim", "mock", "--tick-hz", "0.01"])
 
     assert exit_code == run_mission.EXIT_FAILURE
+
+
+# --- 임무 파일 (--mission) ---
+
+
+def test_example_mission_file_lands_and_exits_zero(monkeypatch, tmp_path):
+    monkeypatch.delenv("WAVEPILOT_SELECTOR", raising=False)
+
+    exit_code = run_mission.main(
+        ["--sim", "mock", "--mission", str(EXAMPLE_MISSION_PATH), "--log-dir", str(tmp_path)]
+    )
+
+    assert exit_code == run_mission.EXIT_OK
+
+
+@pytest.mark.parametrize(
+    ("section_overrides", "expected_fragments"),
+    [
+        ({"target": {"upper_color": "blue"}}, ("target.upper_color",)),
+        ({"safety": {"geofence_margin": 20.0}}, ("safety.geofence_margin", "not allowed")),
+    ],
+)
+def test_invalid_mission_file_is_usage_error_with_field_name(
+    monkeypatch, caplog, tmp_path, section_overrides, expected_fragments
+):
+    monkeypatch.delenv("WAVEPILOT_SELECTOR", raising=False)
+    mission_path = write_mission_file(tmp_path, **section_overrides)
+    log_dir = tmp_path / "logs-invalid"
+
+    exit_code = run_mission.main(["--sim", "mock", "--mission", str(mission_path), "--log-dir", str(log_dir)])
+
+    error_lines = [record.getMessage() for record in caplog.records if record.levelno == logging.ERROR]
+    assert exit_code == run_mission.EXIT_USAGE
+    assert any(all(fragment in line for fragment in expected_fragments) for line in error_lines), error_lines
+    assert not list(log_dir.glob("*.jsonl"))
+
+
+def test_missing_mission_file_is_usage_error(monkeypatch, tmp_path):
+    monkeypatch.delenv("WAVEPILOT_SELECTOR", raising=False)
+    log_dir = tmp_path / "logs-missing"
+
+    exit_code = run_mission.main(
+        ["--sim", "mock", "--mission", str(tmp_path / "nope.toml"), "--log-dir", str(log_dir)]
+    )
+
+    assert exit_code == run_mission.EXIT_USAGE
+    assert not list(log_dir.glob("*.jsonl"))
+
+
+def test_mission_file_overrides_area_color_and_safety_limits(monkeypatch, caplog, tmp_path):
+    monkeypatch.delenv("WAVEPILOT_SELECTOR", raising=False)
+    caplog.set_level(logging.INFO, logger="modules.drone.run_mission")
+    mission_path = write_mission_file(
+        tmp_path,
+        target={"upper_color": "any"},
+        search_area={"north_m": [30.0, 90.0], "east_m": [-20.0, 20.0]},
+        safety={"geofence_margin_m": 10.0, "battery_reserve_pct": 25.0, "max_flight_sec": 200.0},
+    )
+    runner_factory = CapturingRunnerFactory()
+    monkeypatch.setattr(run_mission, "MissionRunner", runner_factory)
+    monkeypatch.setattr(run_mission, "SafetyMonitor", CapturingSafetyMonitor)
+
+    exit_code = run_mission.main(
+        ["--sim", "mock", "--mission", str(mission_path), "--target-color", "red", "--log-dir", str(tmp_path)]
+    )
+
+    kwargs = runner_factory.kwargs
+    expected_area = SearchArea(north_min_m=30.0, north_max_m=90.0, east_min_m=-20.0, east_max_m=20.0)
+    assert exit_code == run_mission.EXIT_OK
+    assert kwargs["settings"].search_area == expected_area
+    assert kwargs["settings"].target_upper_color is None  # 파일(any)이 --target-color red 보다 우선
+    assert kwargs["param_defaults"].search_area_north_min_m == 30.0
+    assert kwargs["config"].max_mission_sec == 200.0
+
+    safety_config = kwargs["safety"].config
+    assert safety_config.search_area == expected_area
+    assert safety_config.geofence_margin_m == 10.0
+    assert safety_config.battery_reserve_pct == 25.0
+    assert safety_config.max_flight_sec == 200.0
+    assert isinstance(kwargs["operator"], ScriptedOperator)
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("overrides --target-color red" in message for message in messages)
+
+
+@pytest.mark.parametrize(("color_args", "expected_color"), [([], "red"), (["--target-color", "none"], None)])
+def test_without_mission_file_uses_defaults_and_cli(monkeypatch, tmp_path, color_args, expected_color):
+    monkeypatch.delenv("WAVEPILOT_SELECTOR", raising=False)
+    runner_factory = CapturingRunnerFactory()
+    monkeypatch.setattr(run_mission, "MissionRunner", runner_factory)
+
+    exit_code = run_mission.main(["--sim", "mock", "--max-mission-sec", "450", *color_args])
+
+    kwargs = runner_factory.kwargs
+    assert exit_code == run_mission.EXIT_OK
+    assert kwargs["safety"] is None  # MissionRunner 기본 안전 감시
+    assert kwargs["settings"].target_upper_color == expected_color
+    assert kwargs["config"].max_mission_sec == 450.0
+
+
+# --- 구조화 임무 로그 (--log-dir) ---
+
+
+def test_mission_log_file_has_start_selection_and_end(monkeypatch, tmp_path):
+    monkeypatch.delenv("WAVEPILOT_SELECTOR", raising=False)
+    log_dir = tmp_path / "missions"
+
+    exit_code = run_mission.main(
+        ["--sim", "mock", "--mission", str(EXAMPLE_MISSION_PATH), "--log-dir", str(log_dir)]
+    )
+
+    records = read_log_records(log_dir)
+    start = records[0]
+    assert exit_code == run_mission.EXIT_OK
+    assert start["kind"] == "mission"
+    assert start["event"] == "start"
+    assert start["mission_file"] == str(EXAMPLE_MISSION_PATH)
+    assert start["mission"]["target_class"] == "person"
+    assert start["selector"] == "rule"
+    assert set(start["home_gps"]) == {"latitude_deg", "longitude_deg", "altitude_m"}
+    assert any(record["kind"] == "selection" for record in records)
+    assert any(record["kind"] == "mission" and record.get("event") == "end" for record in records)
+
+
+def test_mission_log_without_mission_file_has_null_mission(monkeypatch, isolated_log_dir):
+    monkeypatch.delenv("WAVEPILOT_SELECTOR", raising=False)
+    monkeypatch.setattr(run_mission, "MissionRunner", CapturingRunnerFactory())
+
+    run_mission.main(["--sim", "mock"])
+
+    start = read_log_records(isolated_log_dir)[0]
+    assert start["event"] == "start"
+    assert start["mission_file"] is None
+    assert start["mission"] is None
 
 
 # --- 인자·환경 검증 ---
@@ -99,8 +303,26 @@ def test_non_positive_values_exit_with_usage_code(flag):
 def test_target_color_defaults_to_red_and_accepts_none():
     parser = run_mission.build_arg_parser()
 
-    assert parser.parse_args([]).target_color == "red"
+    assert parser.parse_args([]).target_color is None  # 미지정 — 임무 파일과 함께 줬는지 구분용
     assert parser.parse_args(["--target-color", "none"]).target_color == "none"
+    assert run_mission.resolve_target_upper_color(None, None) == "red"
+    assert run_mission.resolve_target_upper_color("red", None) == "red"
+    assert run_mission.resolve_target_upper_color("none", None) is None
+
+
+def test_mission_file_color_wins_over_target_color_arg():
+    spec_any = SimpleNamespace(target_upper_color=None)
+    spec_red = SimpleNamespace(target_upper_color="red")
+
+    assert run_mission.resolve_target_upper_color("red", spec_any) is None
+    assert run_mission.resolve_target_upper_color(None, spec_red) == "red"
+    assert run_mission.resolve_target_upper_color("none", spec_red) == "red"
+
+
+def test_no_fault_injection_cli_options():
+    option_strings = set(run_mission.build_arg_parser()._option_string_actions)
+
+    assert not {option for option in option_strings if any(word in option for word in ("gps", "battery", "link"))}
 
 
 def test_unknown_target_color_exits_with_usage_code():
@@ -170,6 +392,12 @@ class FakeConnectedBridge:
     def is_connected(self) -> bool:
         return True
 
+    def operator_link_status(self):
+        return (True, None)
+
+    def set_mission_status(self, status: dict) -> None:
+        pass
+
 
 def test_browser_orin_args_reach_yolo_factory(monkeypatch):
     monkeypatch.delenv("WAVEPILOT_SELECTOR", raising=False)
@@ -198,6 +426,86 @@ def test_browser_orin_args_reach_yolo_factory(monkeypatch):
     assert exit_code == run_mission.EXIT_FAILURE
     assert factory_calls == [("orin", "cpu", "http://10.0.0.5:8082")]
     assert yolo_factories == ["orin-factory"]
+
+
+# --- 브라우저 운용자 링크 (BridgeOperatorInput, 상태 push) ---
+
+
+class FakeOperatorBridge:
+    def __init__(self, ai_mode: bool = True, link_status_value=(True, None)) -> None:
+        self.ai_mode = ai_mode
+        self.link_status_value = link_status_value
+        self.connected = True
+        self.status_list: list[dict] = []
+
+    def is_connected(self) -> bool:
+        return self.connected
+
+    def operator_link_status(self):
+        return self.link_status_value
+
+    def set_mission_status(self, status: dict) -> None:
+        self.status_list.append(status)
+
+
+class FakeTelemetryFlightControl:
+    def get_telemetry(self) -> Telemetry:
+        return Telemetry(
+            time_sec=0.0, north_m=0.0, east_m=0.0, down_m=0.0, roll_deg=0.0, pitch_deg=0.0, yaw_deg=0.0,
+            gimbal_pitch_deg=0.0, gimbal_yaw_deg=0.0, battery_pct=100.0, flight_mode="manual", gps=HOME_GPS_FIX,
+        )
+
+
+class FakeDetectionSource:
+    def close(self) -> None:
+        pass
+
+
+def test_bridge_operator_input_follows_ai_mode_and_link_status():
+    bridge = FakeOperatorBridge(ai_mode=True, link_status_value=(False, 12.5))
+    operator = run_mission.BridgeOperatorInput(bridge)
+
+    assert operator.is_ai_requested() is True
+    assert operator.link_status(42.0) == LinkStatus(False, 12.5)
+
+    bridge.ai_mode = False
+    bridge.link_status_value = (True, None)
+
+    assert operator.is_ai_requested() is False
+    assert operator.link_status(42.0) == LinkStatus(True, None)
+
+
+def test_browser_mission_wires_operator_status_and_abort(monkeypatch, tmp_path):
+    monkeypatch.delenv("WAVEPILOT_SELECTOR", raising=False)
+    bridge = FakeOperatorBridge()
+    components = BrowserComponents(
+        sim_bridge=lambda: bridge,
+        start_sim_server=lambda bridge, host, port: FakeServer(),
+        browser_flight_control=lambda bridge: FakeTelemetryFlightControl(),
+        browser_detection_source=lambda bridge, yolo_factory: FakeDetectionSource(),
+    )
+    runner_factory = CapturingRunnerFactory()
+    monkeypatch.setattr(run_mission, "_load_browser_components", lambda: components)
+    monkeypatch.setattr(run_mission, "create_yolo_factory", lambda kind, device, url: None)
+    monkeypatch.setattr(run_mission, "LatestFrameReader", lambda source: None)
+    monkeypatch.setattr(run_mission, "MissionRunner", runner_factory)
+
+    exit_code = run_mission.main(["--sim", "browser", "--log-dir", str(tmp_path)])
+
+    kwargs = runner_factory.kwargs
+    assert exit_code == run_mission.EXIT_OK
+    assert isinstance(kwargs["operator"], run_mission.BridgeOperatorInput)
+    assert kwargs["operator"]._bridge is bridge
+
+    kwargs["on_status"]({"mode": "AI", "reason": "operator"})
+    assert bridge.status_list == [{"mode": "AI", "reason": "operator"}]
+
+    assert kwargs["should_abort"]() is False
+    bridge.connected = False
+    assert kwargs["should_abort"]() is True
+
+    start = read_log_records(tmp_path)[0]
+    assert start["home_gps"] == HOME_GPS_FIX.to_dict()
 
 
 # --- 보조 클래스 ---
@@ -244,3 +552,4 @@ def test_browser_modules_are_not_imported_at_module_level():
     imported |= {alias.name for node in tree.body if isinstance(node, ast.Import) for alias in node.names}
 
     assert not imported & LAZY_ONLY_MODULES
+
