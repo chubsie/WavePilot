@@ -24,6 +24,7 @@ from modules.decision import (
 from modules.decision.interface.selector import (
     FALLBACK_BAD_RESPONSE,
     FALLBACK_CIRCUIT_OPEN,
+    FALLBACK_INTERNAL_ERROR,
     FALLBACK_LOW_CONFIDENCE,
     FALLBACK_NONE,
     FALLBACK_OUT_OF_MENU,
@@ -96,10 +97,11 @@ def test_source_and_fallback_constants() -> None:
     assert FALLBACK_REASONS == (
         FALLBACK_NONE, FALLBACK_TIMEOUT, FALLBACK_OUT_OF_MENU, FALLBACK_LOW_CONFIDENCE,
         FALLBACK_UNAVAILABLE, FALLBACK_BAD_RESPONSE, FALLBACK_CIRCUIT_OPEN, FALLBACK_SINGLE_OPTION,
+        FALLBACK_INTERNAL_ERROR,
     )
     assert FALLBACK_REASONS == (
         "none", "timeout", "out_of_menu", "low_confidence",
-        "unavailable", "bad_response", "circuit_open", "single_option",
+        "unavailable", "bad_response", "circuit_open", "single_option", "internal_error",
     )
 
 

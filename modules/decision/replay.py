@@ -25,13 +25,14 @@ mode_result 는 01-01 ModeResult 계약(키 rule_mode / outcome / track)을 그�
 orin_ms 는 서버가 timings 를 주지 않아 total − /health RTT 로 낸 추정치다 (RESEARCH §2.3).
 
 선택기 조립: --selector 가 없으면 WAVEPILOT_SELECTOR 를 따르고, d1 서버 주소는 D1_SERVER_URL 이다(01-05 factory 가 읽는다).
-factory(modules.decision.factory)는 main() 안에서만 지연 import 한다. 01-05 와 같은 웨이브에서 병렬로 만들어지므로
-run_replay 와 출력·CSV 함수, 그 테스트가 factory 없이 돌아야 하기 때문이다.
+
+CLI 오류는 traceback 없이 stderr 한 줄로 끝낸다 — 인자 오류는 argparse(종료 코드 2), 픽스처·설정 오류는 EXIT_USAGE,
+CSV 쓰기 실패는 EXIT_FAILURE.
 """
 
 import argparse
 import csv
-import importlib.util
+import itertools
 import json
 import logging
 import math
@@ -42,6 +43,7 @@ from dataclasses import dataclass
 from operator import attrgetter
 from pathlib import Path
 
+from modules.decision.factory import SelectorConfig, create_decision_model
 from modules.decision.interface.selector import (
     FALLBACK_REASONS,
     SOURCES,
@@ -62,7 +64,6 @@ DEFAULT_WARMUP_COUNT = 0
 
 SELECTOR_ENV_NAME = "WAVEPILOT_SELECTOR"
 SELECTOR_CHOICES = ("rule", "d1")
-FACTORY_MODULE = "modules.decision.factory"
 
 PERCENTILES = (50, 90)
 # 표 행 이름과 Latency 필드를 한 곳에 묶는다. 규칙 결과의 orin/network 는 None 이라 표본에서 빠진다
@@ -81,6 +82,8 @@ CSV_COLUMNS = (
     "orin_processing_ms", "network_rtt_ms", "total_ms", "input_tokens", "params",
 )
 CSV_OPTION_SEPARATOR = "|"  # 쉼표 열 구분자와 섞이지 않게
+
+LOG_LEVEL_NAMES = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")  # 오류 메시지용 — 검증은 logging 이름표 전체로 한다
 
 EXIT_OK = 0
 EXIT_FAILURE = 1
@@ -125,6 +128,14 @@ def load_ticks(path: Path) -> tuple[ReplayTick, ...]:
 
     if not ticks:
         raise ValueError(f"{path}: no ticks found")
+
+    # trigger.poll 도 역행을 막지만 재생 도중(SELECT 줄이 이미 나간 뒤) 터진다 — 읽는 시점에 먼저 거른다
+    for previous_tick, tick in itertools.pairwise(ticks):
+        if tick.state.time_sec < previous_tick.state.time_sec:
+            raise ValueError(
+                f"{path}: line {tick.line_no}: time_sec must not go backwards: "
+                f"{tick.state.time_sec} < {previous_tick.state.time_sec} (line {previous_tick.line_no})"
+            )
 
     return tuple(ticks)
 
@@ -378,21 +389,16 @@ def main(argv: list[str] | None = None) -> int:
         logger.error("invalid fixture %s: %s", args.fixture, error)
         return EXIT_USAGE
 
-    # 지연 import — 01-05 factory 가 없어도 이 모듈의 나머지(run_replay·출력·CSV)는 돌아야 한다
-    if importlib.util.find_spec(FACTORY_MODULE) is None:
-        logger.error("selector factory not available: %s (plan 01-05)", FACTORY_MODULE)
-        return EXIT_FAILURE
-    from modules.decision.factory import SelectorConfig, create_decision_model
-
     environ = dict(os.environ)
     if args.selector is not None:
         environ[SELECTOR_ENV_NAME] = args.selector
+    # 조립도 설정 검증의 일부다 — 나쁜 D1_SERVER_URL(ftp:// 등)은 SystemOneClient 생성에서 ValueError 로 난다
     try:
         config = SelectorConfig.from_env(environ)
+        selector = create_decision_model(config)
     except ValueError as error:
         logger.error("invalid selector config: %s", error)
         return EXIT_USAGE
-    selector = create_decision_model(config)
 
     try:
         run = run_replay(
@@ -407,7 +413,11 @@ def main(argv: list[str] | None = None) -> int:
     for line in format_summary_lines(run, Path(args.fixture).name, config.kind):
         print(line)
     if args.csv is not None:
-        write_csv(run, args.csv)
+        try:
+            write_csv(run, args.csv)
+        except OSError as error:
+            logger.error("cannot write csv %s: %s", args.csv, error)
+            return EXIT_FAILURE
         logger.info("csv written: %s rows=%d", args.csv, len(run.records))
 
     return EXIT_OK
@@ -417,6 +427,9 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
     # parser.error 는 종료 코드 2로 끝낸다
     if args.warmup < 0:
         parser.error(f"--warmup must be >= 0, got {args.warmup}")
+    # logging.basicConfig 는 모르는 이름에 ValueError 를 던진다 — 설정 전에 인자 오류로 바꾼다
+    if args.log_level not in logging.getLevelNamesMapping():
+        parser.error(f"--log-level must be one of {', '.join(LOG_LEVEL_NAMES)}, got {args.log_level!r}")
 
 
 if __name__ == "__main__":

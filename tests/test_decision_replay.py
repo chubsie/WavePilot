@@ -6,7 +6,6 @@ d1 경로 재생은 사용자가 Orin 서버를 띄운 뒤 수동으로 확인�
 
 import ast
 import csv
-import importlib.util
 import json
 import re
 from pathlib import Path
@@ -51,7 +50,7 @@ WAVEPILOT_ROOT = Path(__file__).resolve().parents[1]
 FIXTURES_DIR = WAVEPILOT_ROOT / "modules/decision/fixtures"
 PATROL_FIXTURE = FIXTURES_DIR / "patrol_no_target.jsonl"
 CHAIN_FIXTURE = FIXTURES_DIR / "target_found_mode_chain.jsonl"
-FACTORY_MODULE = "modules.decision.factory"  # 01-05 소유 — replay 는 main() 안에서만 지연 import 한다
+FACTORY_MODULE = "modules.decision.factory"  # 01-05 소유 — replay 는 모듈 맨 위에서 바로 import 한다
 
 # 픽스처별 기대 사건 (시각, kind) — 이 상수가 기대값의 정본이다
 EXPECTED_PATROL_EVENTS = [
@@ -423,11 +422,12 @@ def test_write_csv_joins_options_with_pipe(tmp_path):
     assert row["input_tokens"] == "312"
 
 
-# --- factory 지연 import 계약 ---
+# --- factory import 계약 ---
 
 
-def test_factory_is_imported_only_inside_main():
-    tree = ast.parse((WAVEPILOT_ROOT / "modules/decision/replay.py").read_text(encoding="utf-8"))
+def test_factory_is_imported_at_top_level_without_guard():
+    source = (WAVEPILOT_ROOT / "modules/decision/replay.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
 
     top_level_modules = [
         alias.name if isinstance(node, ast.Import) else node.module
@@ -435,19 +435,12 @@ def test_factory_is_imported_only_inside_main():
         if isinstance(node, (ast.Import, ast.ImportFrom))
         for alias in node.names
     ]
-    assert FACTORY_MODULE not in top_level_modules
-
-    main_function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "main")
-    main_imports = [node.module for node in ast.walk(main_function) if isinstance(node, ast.ImportFrom)]
-    assert FACTORY_MODULE in main_imports
+    assert FACTORY_MODULE in top_level_modules
+    # factory 가 이미 있으므로 병렬 웨이브용 find_spec 가드는 남기지 않는다 (IN-05)
+    assert "find_spec" not in source
 
 
 # --- CLI ---
-
-requires_factory = pytest.mark.skipif(
-    importlib.util.find_spec(FACTORY_MODULE) is None, reason="plan 01-05 factory not merged yet"
-)
-
 
 @pytest.fixture
 def clean_selector_env(monkeypatch):
@@ -455,7 +448,6 @@ def clean_selector_env(monkeypatch):
     monkeypatch.delenv("D1_SERVER_URL", raising=False)
 
 
-@requires_factory
 def test_main_rule_prints_selections_and_writes_csv(tmp_path, capsys, clean_selector_env):
     csv_path = tmp_path / "rule.csv"
 
@@ -469,20 +461,17 @@ def test_main_rule_prints_selections_and_writes_csv(tmp_path, capsys, clean_sele
         assert len(list(csv.reader(csv_file))) == 1 + 4
 
 
-@requires_factory
 def test_main_follows_selector_env(monkeypatch, capsys, clean_selector_env):
     monkeypatch.setenv("WAVEPILOT_SELECTOR", "rule")
 
     assert main([str(PATROL_FIXTURE)]) == 0
 
 
-@requires_factory
 def test_main_missing_fixture_is_usage_error(tmp_path, clean_selector_env):
     assert main([str(tmp_path / "missing.jsonl"), "--selector", "rule"]) == 2
 
 
 def test_main_rejects_negative_warmup():
-    # 인자 검증은 factory 보다 먼저 일어나므로 factory 없이도 돈다
     with pytest.raises(SystemExit) as exit_info:
         main([str(PATROL_FIXTURE), "--warmup", "-1"])
 

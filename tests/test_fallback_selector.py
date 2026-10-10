@@ -12,6 +12,7 @@ from modules.decision.interface import (
     EVENT_PERIODIC_CHECK,
     FALLBACK_BAD_RESPONSE,
     FALLBACK_CIRCUIT_OPEN,
+    FALLBACK_INTERNAL_ERROR,
     FALLBACK_LOW_CONFIDENCE,
     FALLBACK_NONE,
     FALLBACK_OUT_OF_MENU,
@@ -95,15 +96,24 @@ def _build_reply(choice: str, options: tuple[str, ...], confidence: float = 0.8)
 class StubClient:
     """SystemOneClient 와 같은 두 메서드만 가진 HTTP 없는 객체 (D-11)."""
 
-    def __init__(self, rtt_ms: float | None = STUB_RTT_MS, reply: ChoiceReply | None = None, error: Exception | None = None):
+    def __init__(
+        self,
+        rtt_ms: float = STUB_RTT_MS,
+        reply: ChoiceReply | None = None,
+        error: Exception | None = None,
+        probe_error: Exception | None = None,
+    ):
         self.rtt_ms = rtt_ms
         self.reply = reply
         self.error = error
+        self.probe_error = probe_error
         self.calls: list[tuple[str, str, str, dict[str, str]]] = []
         self.rtt_calls = 0
 
-    def measure_rtt_ms(self) -> float | None:
+    def probe_rtt_ms(self) -> float:
         self.rtt_calls += 1
+        if self.probe_error is not None:
+            raise self.probe_error
         return self.rtt_ms
 
     def ask_choice(self, state_text: str, question_id: str, instructions: str, criteria: dict[str, str]) -> ChoiceReply:
@@ -151,7 +161,7 @@ def _build_fallback_selector(primary: StubPrimary, clock: FakeClock | None = Non
 
 def _build_d1_result() -> SelectionResult:
     state, event = _build_state(), _build_event()
-    options = filter_options(state, event)
+    options = filter_options(state, event, ParamDefaults().approach_stop_distance_m)
     reply = _build_reply("observe", options)
 
     return _build_d1_selector(StubClient(reply=reply)).select(state, event)
@@ -162,7 +172,7 @@ def _build_d1_result() -> SelectionResult:
 
 def test_d1_selector_returns_d1_result_with_shared_params():
     state, event = _build_state(), _build_event()
-    options = filter_options(state, event)
+    options = filter_options(state, event, ParamDefaults().approach_stop_distance_m)
     client = StubClient(reply=_build_reply("observe", options))
 
     result = _build_d1_selector(client).select(state, event)
@@ -171,7 +181,10 @@ def test_d1_selector_returns_d1_result_with_shared_params():
     assert result.fallback_reason == FALLBACK_NONE
     assert result.rule_mode == "observe"
     assert result.options == options
-    assert result.latency == Latency(STUB_TOTAL_MS, STUB_TOTAL_MS - STUB_RTT_MS, STUB_RTT_MS)
+    # total_ms 는 select 벽시계라 stub 값과 무관하다(CR-02). orin 분해만 POST 왕복으로 한다
+    assert result.latency.total_ms > 0
+    assert result.latency.orin_processing_ms == STUB_TOTAL_MS - STUB_RTT_MS
+    assert result.latency.network_rtt_ms == STUB_RTT_MS
     assert result.input_tokens == STUB_INPUT_TOKENS
     assert result.confidence == 0.8
     assert result.params == fill_params("observe", state, event, ParamDefaults())
@@ -179,7 +192,7 @@ def test_d1_selector_returns_d1_result_with_shared_params():
 
 def test_d1_selector_sends_filtered_options_and_serialized_state():
     state, event = _build_state(), _build_event()
-    options = filter_options(state, event)
+    options = filter_options(state, event, ParamDefaults().approach_stop_distance_m)
     client = StubClient(reply=_build_reply("search", options))
 
     _build_d1_selector(client).select(state, event)
@@ -193,30 +206,45 @@ def test_d1_selector_sends_filtered_options_and_serialized_state():
     assert client.rtt_calls == 1
 
 
-def test_d1_selector_rtt_none_leaves_split_unknown():
+@pytest.mark.parametrize(
+    ("probe_error", "reason"),
+    [
+        (LLMTimeoutError("probe slow"), FALLBACK_TIMEOUT),
+        (LLMUnavailableError("probe refused"), FALLBACK_UNAVAILABLE),
+        (LLMResponseError("probe 404"), FALLBACK_BAD_RESPONSE),
+    ],
+)
+def test_d1_selector_probe_failure_skips_post_with_cause_reason(probe_error: Exception, reason: str):
     state, event = _build_state(), _build_event()
-    client = StubClient(rtt_ms=None, reply=_build_reply("search", filter_options(state, event)))
+    client = StubClient(reply=_build_reply("search", filter_options(state, event, ParamDefaults().approach_stop_distance_m)), probe_error=probe_error)
 
-    result = _build_d1_selector(client).select(state, event)
+    with pytest.raises(D1SelectionError) as raised:
+        _build_d1_selector(client).select(state, event)
 
-    assert result.latency == Latency(STUB_TOTAL_MS, None, None)
+    # probe 가 실패하면 POST 를 보내지 않고, 사유는 probe 실패 원인을 따른다(WR-02)
+    assert raised.value.reason == reason
+    assert raised.value.__cause__ is probe_error
+    assert client.calls == []
+    assert raised.value.latency.orin_processing_ms is None
+    assert raised.value.latency.network_rtt_ms is None
 
 
 def test_estimate_latency_clamps_orin_to_zero():
-    assert estimate_latency(120.0, 150.0) == Latency(120.0, 0.0, 150.0)
-    assert estimate_latency(120.0, None) == Latency(120.0, None, None)
-    assert estimate_latency(120.0, 20.0) == Latency(120.0, 100.0, 20.0)
+    assert estimate_latency(200.0, 120.0, 150.0) == Latency(200.0, 0.0, 150.0)
+    assert estimate_latency(200.0, 120.0, None) == Latency(200.0, None, None)
+    assert estimate_latency(200.0, 120.0, 20.0) == Latency(200.0, 100.0, 20.0)
 
 
 def test_d1_selector_low_confidence_raises_with_latency():
     state, event = _build_state(), _build_event()
-    client = StubClient(reply=_build_reply("search", filter_options(state, event), confidence=0.2))
+    client = StubClient(reply=_build_reply("search", filter_options(state, event, ParamDefaults().approach_stop_distance_m), confidence=0.2))
 
     with pytest.raises(D1SelectionError) as raised:
         _build_d1_selector(client).select(state, event)
 
     assert raised.value.reason == FALLBACK_LOW_CONFIDENCE
-    assert raised.value.latency == estimate_latency(STUB_TOTAL_MS, STUB_RTT_MS)
+    assert raised.value.latency.orin_processing_ms == STUB_TOTAL_MS - STUB_RTT_MS
+    assert raised.value.latency.network_rtt_ms == STUB_RTT_MS
 
 
 @pytest.mark.parametrize(
@@ -243,7 +271,7 @@ def test_d1_selector_maps_client_errors(error: Exception, reason: str):
 
 def test_d1_selector_rejects_choice_outside_options():
     state, event = _build_state(), _build_event()
-    options = filter_options(state, event)
+    options = filter_options(state, event, ParamDefaults().approach_stop_distance_m)
     # 파서를 우회한 응답 — choice 가 보기 밖
     reply = ChoiceReply(choice="teleport", probabilities={options[0]: 1.0}, confidence=0.9, input_tokens=1, total_ms=STUB_TOTAL_MS)
 
@@ -254,7 +282,7 @@ def test_d1_selector_rejects_choice_outside_options():
 
 
 def test_d1_selector_single_option_skips_client(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(d1_selector, "filter_options", lambda state, event: ("hold",))
+    monkeypatch.setattr(d1_selector, "filter_options", lambda state, event, approach_stop_distance_m: ("hold",))
     client = StubClient(reply=None)
 
     with pytest.raises(D1SelectionError) as raised:
@@ -332,7 +360,7 @@ def test_fallback_selector_absorbs_unexpected_exceptions(error: Exception):
 
     assert isinstance(result, SelectionResult)
     assert result.source == SOURCE_RULE
-    assert result.fallback_reason == FALLBACK_BAD_RESPONSE
+    assert result.fallback_reason == FALLBACK_INTERNAL_ERROR
 
 
 def test_fallback_selector_does_not_swallow_keyboard_interrupt():
@@ -402,11 +430,12 @@ def test_emergency_hold_when_rule_selector_also_fails():
     primary = StubPrimary(error=D1SelectionError(FALLBACK_TIMEOUT, Latency(50.0, None, 10.0)))
     selector = FallbackSelector(primary, RaisingFallback(), CIRCUIT_OPEN_SEC, clock=FakeClock(), param_defaults=defaults)
 
-    result = selector.select(_build_state(), _build_event())
+    state, event = _build_state(), _build_event()
+    result = selector.select(state, event)
 
     assert result.rule_mode == EMERGENCY_RULE_MODE == "hold"
-    assert result.options == ("hold",)
-    assert result.probabilities == {"hold": 1.0}
+    assert result.options == filter_options(state, event, defaults.approach_stop_distance_m)
+    assert result.probabilities == {option: (1.0 if option == "hold" else 0.0) for option in result.options}
     assert result.confidence == 1.0
     assert result.params == {"duration_sec": 7.5}
     assert set(result.params) == set(PARAM_KEYS_BY_MODE["hold"])
@@ -424,7 +453,7 @@ def test_emergency_hold_uses_default_param_defaults():
     result = selector.select(_build_state(), _build_event())
 
     assert result.params == {"duration_sec": ParamDefaults().hold_duration_sec}
-    assert result.fallback_reason == FALLBACK_BAD_RESPONSE
+    assert result.fallback_reason == FALLBACK_INTERNAL_ERROR
 
 
 # --- Protocol·검증 ---

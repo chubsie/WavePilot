@@ -5,6 +5,8 @@
   time.monotonic 으로 재고, network_rtt 는 추론 없는 GET /health 왕복으로 추정한다.
 - 두 요청 모두 urllib 가 매번 새 TCP 연결을 열기 때문에 연결 비용이 양쪽에 똑같이 들어가 차감하면 상쇄된다.
   orin_processing_ms = max(0, total_ms − network_rtt_ms) 차감 자체는 01-05 D1Selector 몫이다.
+- /health probe timeout 은 min(HEALTH_TIMEOUT_SEC, request_timeout_sec) 이다 — 사용자가 준 요청 timeout 보다
+  probe 가 오래 막지 않게 한다(WR-02).
 
 예외 매핑 (modules.llm_report.interface 의 예외만 쓴다):
 | 상황                                               | 예외                 |
@@ -132,7 +134,7 @@ def parse_choice_response(body: dict, question_id: str, allowed: tuple[str, ...]
 class SystemOneClient:
     """d1-3B llama-server 의 /v1/systemone 에 choice 질문 1개를 보내고, /health 로 RTT 를 잰다."""
 
-    __slots__ = ("_base_url", "_request_timeout_sec", "_opener")
+    __slots__ = ("_base_url", "_request_timeout_sec", "_health_timeout_sec", "_opener")
 
     def __init__(self, base_url: str, request_timeout_sec: float) -> None:
         _validate_base_url(base_url)
@@ -140,6 +142,7 @@ class SystemOneClient:
 
         self._base_url = base_url.rstrip("/")
         self._request_timeout_sec = request_timeout_sec
+        self._health_timeout_sec = min(HEALTH_TIMEOUT_SEC, request_timeout_sec)
         # 빈 프록시 표를 준 opener: d1 서버는 LAN(Orin)이라 프록시가 필요 없다.
         # 개발 머신의 HTTP_PROXY 가 상태 JSON 을 밖으로 내보내는 것을 막는다(T-01-04-03)
         self._opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -152,27 +155,32 @@ class SystemOneClient:
         request = self._build_request(HEALTH_PATH, payload=None)
 
         try:
-            self._fetch_json(request, HEALTH_TIMEOUT_SEC)
+            self._fetch_json(request, self._health_timeout_sec)
         except LLMBackendError:
             return False
 
         return True
 
-    def measure_rtt_ms(self) -> float | None:
-        """추론 없는 GET /health 왕복 시간(ms) — 네트워크 몫 추정치(rtt_method health_probe). 실패하면 None.
+    def probe_rtt_ms(self) -> float:
+        """추론 없는 GET /health 왕복 시간(ms) — 네트워크 몫 추정치(rtt_method health_probe).
 
-        01-05 가 orin_processing_ms = max(0, total_ms − 이 값) 으로 쓴다.
+        실패하면 ask_choice 와 같은 LLMBackendError 계열을 그대로 올린다 — 01-05 D1Selector 가 원인별로
+        timeout·unavailable·bad_response 를 가르고, 실패한 probe 뒤에는 POST 를 보내지 않는다(WR-02).
         """
         request = self._build_request(HEALTH_PATH, payload=None)
 
         started_sec = time.monotonic()
-        try:
-            self._fetch_json(request, HEALTH_TIMEOUT_SEC)
-        except LLMBackendError:
-            return None
+        self._fetch_json(request, self._health_timeout_sec)
         elapsed_sec = time.monotonic() - started_sec
 
         return elapsed_sec * MS_PER_SEC
+
+    def measure_rtt_ms(self) -> float | None:
+        """probe_rtt_ms 와 같되 실패하면 None 을 돌려준다(원인이 필요 없는 진단·라이브 테스트용)."""
+        try:
+            return self.probe_rtt_ms()
+        except LLMBackendError:
+            return None
 
     def ask_choice(self, state_text: str, question_id: str, instructions: str, criteria: dict[str, str]) -> ChoiceReply:
         """choice 질문 1개를 보내 검증된 ChoiceReply 를 돌려준다. 보기는 criteria 의 키다(D-02).
@@ -280,10 +288,22 @@ def _summarize_body(body: object) -> str:
 
 
 def _validate_base_url(base_url: str) -> None:
-    """urllib 은 file:// 등도 열 수 있으므로 http/https + 호스트가 있는 URL 만 허용한다(T-01-04-01)."""
+    """urllib 은 file:// 등도 열 수 있으므로 http/https + 호스트가 있는 URL 만 허용한다(T-01-04-01).
+
+    설정 오타가 매 요청 unavailable("서버 다운")로 보이지 않게 생성 시점에 거른다(WR-06).
+    공백은 strip 하지 않고 거부한다 — 환경 변수 값 정리는 factory 몫이다.
+    """
+    if base_url != base_url.strip():
+        raise ValueError(f"base_url must not have leading or trailing whitespace, got {base_url!r}")
+
     parts = urllib.parse.urlsplit(base_url)
-    if parts.scheme not in ALLOWED_URL_SCHEMES or not parts.netloc:
+    if parts.scheme not in ALLOWED_URL_SCHEMES or not parts.hostname:
         raise ValueError(f"base_url must be an http(s) URL with a host, got {base_url!r}")
+    # 포트가 숫자가 아니거나 범위 밖이면 port 속성 접근에서 ValueError 가 난다
+    try:
+        parts.port
+    except ValueError as error:
+        raise ValueError(f"base_url has an invalid port: {base_url!r}") from error
 
 
 def _validate_timeout(request_timeout_sec: float) -> None:
