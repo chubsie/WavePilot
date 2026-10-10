@@ -1,0 +1,97 @@
+{
+  "schema_version": 1,
+  "time_sec": 24.0,
+  "drone": {
+    "position_ned_m": {
+      "north": 0.0,
+      "east": 0.0,
+      "down": -40.0
+    },
+    "altitude_m": 40.0,
+    "attitude_deg": {
+      "roll": 0.0,
+      "pitch": 0.0,
+      "yaw": 0.0
+    },
+    "gimbal_deg": {
+      "pitch": -55.0,
+      "yaw": 0.0
+    },
+    "battery_pct": 97.5,
+    "flight_mode": "hover"
+  },
+  "tracks": [
+    {
+      "track_id": "T1",
+      "class": "car",
+      "position_ned_m": {
+        "north": 30.2,
+        "east": 4.1
+      },
+      "first_seen_sec": 0.3,
+      "last_seen_sec": 23.9,
+      "observation_count": 230,
+      "mean_confidence": 0.88,
+      "is_active": true
+    },
+    {
+      "track_id": "T2",
+      "class": "truck",
+      "position_ned_m": {
+        "north": 48.7,
+        "east": -10.4
+      },
+      "first_seen_sec": 2.0,
+      "last_seen_sec": 23.9,
+      "observation_count": 210,
+      "mean_confidence": 0.83,
+      "is_active": true
+    },
+    {
+      "track_id": "T4",
+      "class": "bus",
+      "position_ned_m": {
+        "north": 60.1,
+        "east": 15.0
+      },
+      "first_seen_sec": 5.5,
+      "last_seen_sec": 23.9,
+      "observation_count": 180,
+      "mean_confidence": 0.79,
+      "is_active": true
+    },
+    {
+      "track_id": "T6",
+      "class": "person",
+      "position_ned_m": {
+        "north": 22.4,
+        "east": 18.3
+      },
+      "first_seen_sec": 8.0,
+      "last_seen_sec": 23.9,
+      "observation_count": 150,
+      "mean_confidence": 0.74,
+      "is_active": true
+    },
+    {
+      "track_id": "T7",
+      "class": "person",
+      "position_ned_m": {
+        "north": 23.9,
+        "east": 19.6
+      },
+      "first_seen_sec": 8.4,
+      "last_seen_sec": 23.9,
+      "observation_count": 146,
+      "mean_confidence": 0.71,
+      "is_active": true
+    }
+  ],
+  "counts_by_class": {
+    "bus": 1,
+    "car": 1,
+    "person": 2,
+    "truck": 1
+  },
+  "omitted_track_count": 0
+}

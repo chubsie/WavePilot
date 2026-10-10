@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "time_sec": 12.4,
+  "drone": {
+    "position_ned_m": {
+      "north": 0.0,
+      "east": 0.0,
+      "down": -40.0
+    },
+    "altitude_m": 40.0,
+    "attitude_deg": {
+      "roll": 0.0,
+      "pitch": 0.0,
+      "yaw": 0.0
+    },
+    "gimbal_deg": {
+      "pitch": -55.0,
+      "yaw": 0.0
+    },
+    "battery_pct": 97.5,
+    "flight_mode": "hover"
+  },
+  "tracks": [
+    {
+      "track_id": "T3",
+      "class": "car",
+      "position_ned_m": {
+        "north": 30.2,
+        "east": 4.1
+      },
+      "first_seen_sec": 0.3,
+      "last_seen_sec": 12.3,
+      "observation_count": 118,
+      "mean_confidence": 0.84,
+      "is_active": true
+    }
+  ],
+  "counts_by_class": {
+    "car": 1
+  },
+  "omitted_track_count": 0
+}

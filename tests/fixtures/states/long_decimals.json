@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "time_sec": 12.437519,
+  "drone": {
+    "position_ned_m": {
+      "north": 0.0,
+      "east": 0.0,
+      "down": -40.0
+    },
+    "altitude_m": 40.0,
+    "attitude_deg": {
+      "roll": 0.0,
+      "pitch": 0.0,
+      "yaw": 0.0
+    },
+    "gimbal_deg": {
+      "pitch": -55.0,
+      "yaw": 0.0
+    },
+    "battery_pct": 97.5,
+    "flight_mode": "hover"
+  },
+  "tracks": [
+    {
+      "track_id": "T3",
+      "class": "car",
+      "position_ned_m": {
+        "north": 30.248117,
+        "east": 4.061932
+      },
+      "first_seen_sec": 0.312455,
+      "last_seen_sec": 12.337519,
+      "observation_count": 118,
+      "mean_confidence": 0.843219,
+      "is_active": true
+    },
+    {
+      "track_id": "T8",
+      "class": "person",
+      "position_ned_m": {
+        "north": -12.509374,
+        "east": 27.004821
+      },
+      "first_seen_sec": 3.900213,
+      "last_seen_sec": 12.337519,
+      "observation_count": 95,
+      "mean_confidence": 0.771138,
+      "is_active": true
+    }
+  ],
+  "counts_by_class": {
+    "car": 1,
+    "person": 1
+  },
+  "omitted_track_count": 0
+}
