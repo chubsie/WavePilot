@@ -14,7 +14,7 @@
   body {
     margin: 0; background: var(--bg); color: var(--text);
     font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
-    display: grid; grid-template-columns: 1fr 340px; overflow: hidden;
+    display: grid; grid-template-columns: 1fr 20%; overflow: hidden;
   }
   #view { position: relative; min-width: 0; min-height: 0; }
   #view canvas { display: block; width: 100%; height: 100%; }
@@ -77,12 +77,17 @@
     margin: 0; min-height: 80px; max-height: 160px; overflow-y: auto; font: 12px/1.35 ui-monospace, Consolas, monospace;
     background: #1d212b; border: 1px solid var(--border); border-radius: 8px; padding: 8px; color: var(--muted); white-space: pre-wrap;
   }
-  /* Drone gimbal camera inset: this canvas is what gets recorded for YOLO */
-  #view #camView {
-    position: absolute; right: 16px; bottom: 16px; width: min(40%, 480px); height: auto; aspect-ratio: 16 / 9;
-    border: 2px solid var(--border); border-radius: 6px;
+  /* D-03: drone gimbal camera window (top-left). Its canvas is always 1280x720; this is what goes to YOLO */
+  #camWrap {
+    position: absolute; left: 16px; top: 16px; width: min(32%, 420px); aspect-ratio: 16 / 9;
+    border: 2px solid var(--border); border-radius: 6px; overflow: hidden;
   }
-  #view.recording #camView { border-color: var(--bad); }
+  #camWrap canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+  #camOverlay { pointer-events: none; }
+  /* D-04: simulator link panel */
+  #simLink, #simTelemetry, .simList { font: 12px/1.4 ui-monospace, Consolas, monospace; color: var(--muted); }
+  #simTelemetry { margin: 0; white-space: pre; overflow-x: auto; }
+  .simList { margin: 0; padding-left: 16px; min-height: 1.4em; }
   @media (max-width: 760px) {
     body { grid-template-columns: 1fr; grid-template-rows: 55vh auto; overflow: auto; }
     aside { border-left: 0; border-top: 1px solid var(--border); }
@@ -90,12 +95,28 @@
 </style>
 </head>
 <body>
-  <div id="view"><div id="aiBanner"></div><div id="modeBadge" role="status" aria-live="polite"><span class="pip"></span><span id="modeBadgeText">MANUAL</span></div><div id="hint">Red arms = front of the drone · camera follows from behind · inset = drone camera (recorded for YOLO)</div></div>
+  <div id="view"><div id="aiBanner"></div><div id="modeBadge" role="status" aria-live="polite"><span class="pip"></span><span id="modeBadgeText">MANUAL</span></div><div id="camWrap"><canvas id="camOverlay" width="1280" height="720"></canvas></div><div id="hint">Red arms = front of the drone · camera follows from behind · top-left = drone camera (sent to YOLO)</div></div>
   <aside>
     <div>
       <h1><span id="dot" class="dot"></span>Glove Visualizer</h1>
       <div id="status">Not connected. For USB, close the Arduino Serial Monitor first.</div>
     </div>
+    <fieldset>
+      <legend>Simulator link</legend>
+      <div id="simLink">Python: disconnected</div>
+    </fieldset>
+    <fieldset>
+      <legend>Telemetry</legend>
+      <pre id="simTelemetry"></pre>
+    </fieldset>
+    <fieldset>
+      <legend>Recent commands</legend>
+      <ul id="simCommands" class="simList"></ul>
+    </fieldset>
+    <fieldset>
+      <legend>Detections</legend>
+      <ul id="simDetections" class="simList"></ul>
+    </fieldset>
     <div class="buttons">
       <button id="connect" class="primary">Connect USB</button>
       <button id="connectBle" class="primary">Connect Bluetooth</button>
@@ -133,11 +154,6 @@
       <button id="home" style="padding:4px 10px">Return home</button>
       <div id="flightInfo" style="color:var(--muted);font-size:12px;margin-top:6px;white-space:pre-line">Tilt = lean the drone, bend = throttle (50% hovers), yaw = turn. Thumb button (or M) switches Manual / AI. Middle finger button (or hold L) flashes the drone LEDs.</div>
     </fieldset>
-    <fieldset>
-      <legend>Drone camera → YOLO</legend>
-      <button id="record" class="primary" title="R key">Record</button>
-      <div id="recInfo" style="color:var(--muted);font-size:12px;margin-top:6px;white-space:pre-line">Records the inset camera at 10 fps to serve_camera.py.</div>
-    </fieldset>
     <div>
       <canvas id="chart"></canvas>
       <div class="legend">
@@ -152,6 +168,7 @@
 <script src="three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/DRACOLoader.js"></script>
+<script src="sim_link.js"></script>
 <script>
 // ---------- Stream format from firmware/glove/glove.ino ----------
 // G,<seq>,<roll_deg>,<pitch_deg>,<yaw_rate_dps>,<flex0>,<flex1>  at 50 Hz
@@ -214,18 +231,18 @@ $('flexBent').onclick = () => calibrateFlex('bent');
 // ---------- Buttons and flight mode ----------
 // Firmware sends a bitmask: bit0 = middle finger (flash LEDs while held), bit1 = thumb (toggle mode).
 const buttons = { mask: 0, middle: false, key: false };
-const mode = { ai: false, aiYaw: 0, aiAgl: 9 };   // aiAgl: height above ground to hold while in AI mode
+// D-05: in AI mode only Python commands move the drone; glove tilt/throttle are ignored, the mode button still works.
+const mode = { ai: false };
 function setMode(ai) {
   mode.ai = ai;
-  if (ai) {
-    mode.aiYaw = shown.yaw;                                   // keep the current heading
-    mode.aiAgl = Math.max(2, flight.alt - Math.max(terrainHeight(flight.pos.x, flight.pos.z), 0));   // keep the current height
-  }
-  $('mode').textContent = ai ? 'Mode: AI (circling)' : 'Mode: Manual';
+  if (ai) autopilot.enterAi(getPose());   // hold the current position until a command arrives
+  else autopilot.cancel();                // a stale command must never resume later
+
+  $('mode').textContent = ai ? 'Mode: AI (Python)' : 'Mode: Manual';
   $('modeBadge').classList.toggle('ai', ai);
   $('view').classList.toggle('ai', ai);
   $('modeBadgeText').textContent = ai ? 'AI MODE' : 'MANUAL';
-  log(ai ? 'AI mode: hovering in a circle (placeholder)' : 'Manual mode');
+  log(ai ? 'AI mode: following Python commands' : 'Manual mode');
 }
 $('mode').onclick = () => setMode(!mode.ai);
 addEventListener('keydown', (e) => {
@@ -257,7 +274,7 @@ const NUS = {
   rx: '6e400002-b5a3-f393-e0a9-e50e24dcca9e',   // PC -> glove (commands)
   tx: '6e400003-b5a3-f393-e0a9-e50e24dcca9e',   // glove -> PC (notifications)
 };
-let link = null;   // { kind: 'usb' | 'ble', send(text), close() }
+let gloveLink = null;   // { kind: 'usb' | 'ble', send(text), close() }
 let rxBuf = '';
 
 function setConnected(on, kind) {
@@ -295,7 +312,7 @@ async function connectUsb() {
   const decoder = new TextDecoderStream();
   pipeDone = port.readable.pipeTo(decoder.writable).catch(() => {});
   reader = decoder.readable.getReader();
-  const me = link = {
+  const me = gloveLink = {
     kind: 'usb', port,
     send: (t) => writer.write(new TextEncoder().encode(t)),
     async close() {
@@ -315,7 +332,7 @@ async function connectUsb() {
         feed(value);
       }
     } catch (e) { log('Read stopped: ' + e.message); }
-    if (link === me) disconnect();
+    if (gloveLink === me) disconnect();
   })();
 }
 
@@ -336,7 +353,7 @@ async function connectBle() {
     const decoder = new TextDecoder();
     tx.addEventListener('characteristicvaluechanged', (e) => feed(decoder.decode(e.target.value, { stream: true })));
     await tx.startNotifications();
-    const me = link = {
+    const me = gloveLink = {
       kind: 'ble',
       send: (t) => {
         const data = new TextEncoder().encode(t);
@@ -345,27 +362,27 @@ async function connectBle() {
       async close() { try { device.gatt.disconnect(); } catch {} },
     };
     device.addEventListener('gattserverdisconnected', () => {
-      if (link === me) { log('Bluetooth connection lost.'); link = null; setConnected(false); }
+      if (gloveLink === me) { log('Bluetooth connection lost.'); gloveLink = null; setConnected(false); }
     });
     state.lastSeq = null; rxBuf = '';
     setConnected(true, 'ble');
     log('Connected to ' + (device.name || 'glove') + ' over Bluetooth.');
   } catch (e) {
     try { device?.gatt.disconnect(); } catch {}
-    link = null; setConnected(false);
+    gloveLink = null; setConnected(false);
     if (e.name !== 'NotFoundError') log('Bluetooth connect failed: ' + e.message);   // NotFoundError = user closed the picker
   }
 }
 
 async function disconnect() {
-  const l = link;
-  link = null;
+  const l = gloveLink;
+  gloveLink = null;
   try { await l?.close(); } catch {}
   setConnected(false);
 }
 
 async function send(ch) {
-  try { await link?.send(ch); } catch (e) { log('Send failed: ' + e.message); }
+  try { await gloveLink?.send(ch); } catch (e) { log('Send failed: ' + e.message); }
 }
 
 function handleLine(line) {
@@ -393,13 +410,13 @@ function handleLine(line) {
   if (history.length > HISTORY) history.shift();
 }
 
-$('connect').onclick = () => (link ? disconnect() : connectUsb());
-$('connectBle').onclick = () => (link ? disconnect() : connectBle());
+$('connect').onclick = () => (gloveLink ? disconnect() : connectUsb());
+$('connectBle').onclick = () => (gloveLink ? disconnect() : connectBle());
 $('zero').onclick = () => { send('c'); state.yaw = 0; };
 $('gyro').onclick = () => { send('g'); log('Calibrating gyro, keep the glove still…'); };
 $('info').onclick = () => send('i');
 if ('serial' in navigator) {
-  navigator.serial.addEventListener('disconnect', (e) => { if (link?.port === e.target) { log('Device unplugged.'); disconnect(); } });
+  navigator.serial.addEventListener('disconnect', (e) => { if (gloveLink?.port === e.target) { log('Device unplugged.'); disconnect(); } });
 } else {
   log('Web Serial is not available in this browser. Open this page in Chrome or Edge.');
 }
@@ -408,8 +425,8 @@ if (!navigator.bluetooth) $('connectBle').title = 'Web Bluetooth is not availabl
 setInterval(() => {
   state.hz = state.samples;
   state.samples = 0;
-  if (link) $('status').textContent = state.hz
-    ? `Streaming at ${state.hz} Hz over ${link.kind === 'ble' ? 'Bluetooth' : 'USB'}`
+  if (gloveLink) $('status').textContent = state.hz
+    ? `Streaming at ${state.hz} Hz over ${gloveLink.kind === 'ble' ? 'Bluetooth' : 'USB'}`
     : 'Connected, no data (check the board is running glove.ino)';
 }, 1000);
 
@@ -540,29 +557,30 @@ const R = 0.95;
   leds.push(led);
 });
 
-// ---------- Drone camera (YOLO test): gimbal camera, people and cars, frame recording ----------
-// Frames are POSTed to serve_camera.py, saved as jpg, then scripts/check_yolo_camera.sh runs yolo11n on them.
+// ---------- Drone camera: gimbal camera, people and cars ----------
+// Frames go to the Python sim server through SimLink (sim_link.js), always at 1280x720 whatever the window size (D-03).
 const CAM_WIDTH = 1280, CAM_HEIGHT = 720;   // same as WavePilot DEFAULT_CAMERA
-const CAM_VFOV_DEG = 45;
-const CAM_TILT_DEG = 20;                     // gimbal looks this far down and stays level (stabilised)
+const CAM_VFOV_DEG = 58.72;                  // 2·atan(tan(45°)·720/1280) → HFOV 90° = DEFAULT_CAMERA (X-07)
 const CAM_DROP = 0.25;                       // m below the body
-const RECORD_FPS = 10;                       // = run_yolo.py --fps default
-const JPEG_QUALITY = 0.9;
-const AUTO_RECORD_DELAY_MS = 3000;           // ?record=<sec>: wait for models to appear first
 const MODEL_BASE = 'https://raw.githubusercontent.com/mrdoob/three.js/r128/examples/models/gltf/';
 const DRACO_DECODER_PATH = 'https://www.gstatic.com/draco/versioned/decoders/1.4.1/';
 
 const camRenderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
 camRenderer.setPixelRatio(1);
 camRenderer.setSize(CAM_WIDTH, CAM_HEIGHT, false);
-camRenderer.domElement.id = 'camView';
-view.appendChild(camRenderer.domElement);
+$('camWrap').prepend(camRenderer.domElement);   // under the YOLO overlay canvas
 const droneCam = new THREE.PerspectiveCamera(CAM_VFOV_DEG, CAM_WIDTH / CAM_HEIGHT, 0.1, 600);
+const overlayCtx = $('camOverlay').getContext('2d');
 
+// Camera = body attitude, then gimbal yaw, then gimbal pitch (rotation_camera_to_ned = R_body · R_gimbal in geometry.py),
+// so the pixels match the telemetry snapshot (D-11). This replaces the old world-stabilised camera.
+const gimbalEuler = new THREE.Euler(), gimbalQuat = new THREE.Quaternion();
 function updateDroneCam() {
   droneCam.position.copy(drone.position);
   droneCam.position.y -= CAM_DROP;
-  droneCam.rotation.set(-CAM_TILT_DEG * D2R, -shown.yaw * D2R, 0, 'YXZ');
+  gimbalEuler.set(autopilot.gimbal.pitchDeg * D2R, -autopilot.gimbal.yawDeg * D2R, 0, 'YXZ');
+  gimbalQuat.setFromEuler(gimbalEuler);
+  droneCam.quaternion.copy(drone.quaternion).multiply(gimbalQuat);
 }
 
 // People and cars ahead of home (-Z), where the drone looks at start. dx/dz in m from home.
@@ -618,69 +636,6 @@ function updateActors(dt) {
 }
 const D2R_ACTOR = Math.PI / 180;
 
-// Recording: one jpg per 1/RECORD_FPS s, POSTed in order; "done" tells the server to print the YOLO command
-const rec = { on: false, session: null, index: 0, sinceLast: 0, pending: 0, failed: 0 };
-const canRecord = location.protocol.startsWith('http');
-if (!canRecord) {
-  $('record').disabled = true;
-  $('recInfo').textContent = 'Recording needs the local server:\npython tools/visualizer/serve_camera.py\nthen open http://127.0.0.1:8765/drone_camera.html';
-}
-
-function startRecording() {
-  if (!canRecord || rec.on) return;
-  rec.session = new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
-  Object.assign(rec, { on: true, index: 0, sinceLast: 0, failed: 0 });
-  $('record').textContent = 'Stop';
-  view.classList.add('recording');
-  log(`Recording drone camera -> recordings/${rec.session}`);
-}
-
-async function stopRecording() {
-  if (!rec.on) return;
-  rec.on = false;
-  $('record').textContent = 'Record';
-  view.classList.remove('recording');
-  while (rec.pending > 0) await new Promise((resolve) => setTimeout(resolve, 50));
-  try {
-    await fetch(`/frames/done?session=${rec.session}`, { method: 'POST' });
-  } catch (e) { log('Could not reach serve_camera.py: ' + e.message); }
-  log(`Saved ${rec.index - rec.failed} frames to recordings/${rec.session}. YOLO log: see the serve_camera.py terminal.`);
-}
-
-function captureFrame(dt) {
-  if (!rec.on) return;
-  rec.sinceLast += dt;
-  if (rec.sinceLast < 1 / RECORD_FPS) return;
-  rec.sinceLast = Math.min(rec.sinceLast - 1 / RECORD_FPS, 1 / RECORD_FPS);   // no bursts after a slow frame
-
-  const index = rec.index++;
-  const session = rec.session;
-  rec.pending++;
-  camRenderer.domElement.toBlob(async (blob) => {
-    try {
-      const res = await fetch(`/frames?session=${session}&index=${index}`, { method: 'POST', body: blob });
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-    } catch (e) {
-      if (rec.failed++ === 0) log('Frame upload failed: ' + e.message);
-    } finally {
-      rec.pending--;
-    }
-  }, 'image/jpeg', JPEG_QUALITY);
-  $('recInfo').textContent = `REC ${rec.session} · ${rec.index} frames`;
-}
-
-$('record').onclick = () => (rec.on ? stopRecording() : startRecording());
-addEventListener('keydown', (e) => { if (!e.repeat && (e.key === 'r' || e.key === 'R')) $('record').click(); });
-
-// ?record=<sec> starts a timed recording on load (used for scripted runs)
-const autoRecordSec = Number(new URLSearchParams(location.search).get('record'));
-if (autoRecordSec > 0) {
-  setTimeout(() => {
-    startRecording();
-    setTimeout(stopRecording, autoRecordSec * 1000);
-  }, AUTO_RECORD_DELAY_MS);
-}
-
 function resize() {
   const w = view.clientWidth, h = view.clientHeight;
   renderer.setSize(w, h, false);
@@ -731,7 +686,6 @@ const HOVER_BAND = 0.04;      // bend 46..54% counts as exactly 50% throttle
 const flight = { pos: new THREE.Vector3(0, 0, 0), vel: new THREE.Vector3(), alt: HOVER_AGL, terrainAt: null, throttle: 0.5, auto: true, onGround: false };
 const tiltEuler = new THREE.Euler(), tiltUp = new THREE.Vector3();
 
-const AI_RADIUS = 20, AI_SPEED = 6;   // m, m/s
 const pct = (v) => Math.round(v * 100) + '%';
 const deadband = (deg) => Math.abs(deg) < TILT_DEADBAND ? 0 : deg - Math.sign(deg) * TILT_DEADBAND;
 
@@ -793,42 +747,114 @@ function updateRotors(dt, m) {
   });
 }
 
-// ---------- Render loop ----------
+// ---------- Simulator link: telemetry out, commands in (Python side: 02 sim server) ----------
+// Scene axes -> NED with HOME as origin: north = -(z - HOME.z), east = x - HOME.x, down = -(alt - home ground).
 const D2R = Math.PI / 180;
-const shown = { roll: 0, pitch: 0, yaw: 0 };
+const shown = { roll: 0, pitch: 0, yaw: 0 };   // deg: +pitch = nose up, +roll = right side down, +yaw = clockwise from north
+const nowSec = () => performance.now() / 1000;
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+const homeGround = Math.max(terrainHeight(HOME.x, HOME.z), 0);
+const batteryStartPct = SimLink.parseBatteryStartPct(location.search);   // ?battery=<0..100>
+const autopilot = SimLink.createAutopilot({ onHeart: (trackId) => SimLink.startHeart(trackId, nowSec()) });
+
+function getPose() {
+  return {
+    northM: -(flight.pos.z - HOME.z),
+    eastM: flight.pos.x - HOME.x,
+    downM: -(flight.alt - homeGround),
+    yawDeg: SimLink.wrapYawDeg(shown.yaw),
+    onGround: flight.onGround,
+  };
+}
+
+const MANUAL_MOVING_MPS = 0.5;
+function getManualFlightMode() {
+  if (flight.onGround) return 'grounded';
+  const isMoving = Math.hypot(flight.vel.x, flight.vel.z) > MANUAL_MOVING_MPS || Math.abs(flight.vel.y) > MANUAL_MOVING_MPS;
+  return isMoving ? 'moving' : 'hover';
+}
+
+// Exact Telemetry.to_dict shape; Python rounds where it needs to
+function buildTelemetry() {
+  const pose = getPose();
+  const timeSec = nowSec();
+
+  return {
+    time_sec: timeSec,
+    north_m: pose.northM,
+    east_m: pose.eastM,
+    down_m: pose.downM,
+    roll_deg: shown.roll,
+    pitch_deg: shown.pitch,
+    yaw_deg: pose.yawDeg,
+    gimbal_pitch_deg: autopilot.gimbal.pitchDeg,
+    gimbal_yaw_deg: autopilot.gimbal.yawDeg,
+    battery_pct: SimLink.batteryPctAt(batteryStartPct, timeSec),
+    flight_mode: mode.ai ? autopilot.flightMode : getManualFlightMode(),
+    gps: SimLink.nedToGps(pose.northM, pose.eastM, pose.downM),
+  };
+}
+
+// Python sim link (the glove connection above is gloveLink)
+const link = SimLink.createLink({
+  canvas: camRenderer.domElement,
+  getTelemetry: buildTelemetry,
+  isAiMode: () => mode.ai,
+  onCommand: (cmd) => {
+    const isApplied = autopilot.apply(cmd, nowSec());
+    if (!isApplied) log('Rejected command ' + cmd.kind);
+    return isApplied;
+  },
+  takeEvents: () => autopilot.takeEvents(),
+  log,
+});
+link.start();
+
+const PANEL_REFRESH_MS = 200;
+const simPanel = { link: $('simLink'), telemetry: $('simTelemetry'), commands: $('simCommands'), detections: $('simDetections') };
+setInterval(() => SimLink.renderPanel(simPanel, buildTelemetry(), link.state), PANEL_REFRESH_MS);
+
+// ---------- Render loop ----------
+const AI_VELOCITY_LAG_PER_SEC = 3;   // first-order lag toward the autopilot velocity
+const AI_TILT_DEG_PER_MPS = 1.5, AI_MAX_TILT_DEG = 10;
 const clock = new THREE.Clock();
-const fwd = new THREE.Vector3(), right = new THREE.Vector3(), target = new THREE.Vector3();
+const fwd = new THREE.Vector3(), right = new THREE.Vector3(), target = new THREE.Vector3(), aiTargetVel = new THREE.Vector3();
 function frame() {
   requestAnimationFrame(frame);
   const dt = Math.min(clock.getDelta(), 0.05);
   const m = mapped();
-  // Light smoothing so 50 Hz data looks fluid at 60+ fps
-  shown.roll += (m.roll - shown.roll) * 0.35;
-  shown.pitch += (m.pitch - shown.pitch) * 0.35;
-  shown.yaw += (m.yaw - shown.yaw) * 0.35;
+  let aiCmd = null;
   if (mode.ai) {
-    // Placeholder autopilot: fly a level circle to the right at a fixed radius, banking into the turn
-    mode.aiYaw += (AI_SPEED / AI_RADIUS) / D2R * dt;
-    shown.yaw = mode.aiYaw;
-    shown.roll = Math.atan(AI_SPEED * AI_SPEED / (AI_RADIUS * G)) / D2R;
-    shown.pitch = -5;
+    // D-05: glove tilt/yaw are ignored; the autopilot owns heading and velocity
+    aiCmd = autopilot.step(dt, nowSec(), getPose());
+    shown.yaw = aiCmd.yawDeg;
+  } else {
+    // Light smoothing so 50 Hz data looks fluid at 60+ fps
+    shown.roll += (m.roll - shown.roll) * 0.35;
+    shown.pitch += (m.pitch - shown.pitch) * 0.35;
+    shown.yaw += (m.yaw - shown.yaw) * 0.35;
   }
-  // +pitch = nose up, +roll = right side down, +yaw = nose right
-  drone.rotation.set(shown.pitch * D2R, -shown.yaw * D2R, -shown.roll * D2R, 'YXZ');
-  updateRotors(dt, m);
 
   // Heading vectors (front of the drone is -Z at yaw 0)
   const psi = shown.yaw * D2R;
   fwd.set(Math.sin(psi), 0, -Math.cos(psi));
   right.set(Math.cos(psi), 0, Math.sin(psi));
 
+  if (mode.ai) {
+    // Display attitude from body-frame velocity: moving forward = nose down, moving right = right side down
+    shown.pitch = -clamp(flight.vel.dot(fwd) * AI_TILT_DEG_PER_MPS, -AI_MAX_TILT_DEG, AI_MAX_TILT_DEG);
+    shown.roll = clamp(flight.vel.dot(right) * AI_TILT_DEG_PER_MPS, -AI_MAX_TILT_DEG, AI_MAX_TILT_DEG);
+  }
+  // +pitch = nose up, +roll = right side down, +yaw = nose right
+  drone.rotation.set(shown.pitch * D2R, -shown.yaw * D2R, -shown.roll * D2R, 'YXZ');
+  updateRotors(dt, mode.ai ? shown : m);
+
   const ground = Math.max(terrainHeight(flight.pos.x, flight.pos.z), 0);
   let thrustAccel = 0;
   if (mode.ai) {
-    // Constant-speed circle; hold altitude above the terrain
-    flight.vel.set(fwd.x * AI_SPEED, flight.vel.y, fwd.z * AI_SPEED);
-    const target = ground + mode.aiAgl;
-    flight.vel.y = (target - flight.alt) * 1.5;
+    // NED velocity -> scene axes (x = east, y = up, z = south)
+    aiTargetVel.set(aiCmd.velEastMps, -aiCmd.velDownMps, -aiCmd.velNorthMps);
+    flight.vel.lerp(aiTargetVel, Math.min(1, dt * AI_VELOCITY_LAG_PER_SEC));
     flight.auto = true;
     flight.throttle = 0.5;
   } else if (opts.fly) {
@@ -887,7 +913,7 @@ function frame() {
 
   const speed = Math.hypot(flight.vel.x, flight.vel.z);
   $('flightInfo').textContent = (opts.fly || mode.ai)
-    ? `${mode.ai ? 'AI MODE · circling ' + AI_RADIUS + ' m radius\n' : ''}Throttle ${Math.round(flight.throttle * 100)}%${flight.auto ? ' (auto hover, calibrate the flex)' : ''}${flight.onGround ? ' · landed' : ''}
+    ? `${mode.ai ? `AI MODE · ${autopilot.flightMode}\n` : ''}Throttle ${Math.round(flight.throttle * 100)}%${flight.auto ? ' (auto hover, calibrate the flex)' : ''}${flight.onGround ? ' · landed' : ''}
 ` +
       `Speed ${speed.toFixed(1)} m/s · climb ${flight.vel.y >= 0 ? '+' : ''}${flight.vel.y.toFixed(1)} m/s · ${(flight.alt - groundNow).toFixed(0)} m above ground · ${Math.hypot(flight.pos.x - HOME.x, flight.pos.z - HOME.z).toFixed(0)} m from home
 ` +
@@ -915,7 +941,8 @@ function frame() {
   renderer.render(scene, camera);
   updateDroneCam();
   camRenderer.render(scene, droneCam);
-  captureFrame(dt);
+  link.afterRender(dt);   // frames and telemetry go out in manual mode too; only commands are gated
+  SimLink.drawOverlay(overlayCtx, link.state, nowSec());
 }
 frame();
 </script>
