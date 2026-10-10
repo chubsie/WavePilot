@@ -91,7 +91,7 @@ def test_convert_boxes_rounds_xyxy_to_one_decimal() -> None:
 def test_convert_boxes_output_round_trips_through_frame_json() -> None:
     boxes = make_boxes([
         ([1.0, 2.0, 30.0, 40.0], 0, 0.9, 1.0),
-        ([5.0, 6.0, 50.0, 60.0], 2, 0.8, None),
+        ([5.0, 6.0, 50.0, 60.0], 2, 0.8, 2.0),
     ])
     frame = _build_frame(convert_boxes(boxes))
 
