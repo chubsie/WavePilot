@@ -172,7 +172,10 @@ def test_d1_selector_returns_d1_result_with_shared_params():
     assert result.fallback_reason == FALLBACK_NONE
     assert result.rule_mode == "observe"
     assert result.options == options
-    assert result.latency == Latency(STUB_TOTAL_MS, STUB_TOTAL_MS - STUB_RTT_MS, STUB_RTT_MS)
+    # total_ms 는 select 벽시계라 stub 값과 무관하다(CR-02). orin 분해만 POST 왕복으로 한다
+    assert result.latency.total_ms > 0
+    assert result.latency.orin_processing_ms == STUB_TOTAL_MS - STUB_RTT_MS
+    assert result.latency.network_rtt_ms == STUB_RTT_MS
     assert result.input_tokens == STUB_INPUT_TOKENS
     assert result.confidence == 0.8
     assert result.params == fill_params("observe", state, event, ParamDefaults())
@@ -194,19 +197,24 @@ def test_d1_selector_sends_filtered_options_and_serialized_state():
     assert client.rtt_calls == 1
 
 
-def test_d1_selector_rtt_none_leaves_split_unknown():
+def test_d1_selector_rtt_none_raises_unavailable_without_post():
     state, event = _build_state(), _build_event()
     client = StubClient(rtt_ms=None, reply=_build_reply("search", filter_options(state, event, ParamDefaults().approach_stop_distance_m)))
 
-    result = _build_d1_selector(client).select(state, event)
+    with pytest.raises(D1SelectionError) as raised:
+        _build_d1_selector(client).select(state, event)
 
-    assert result.latency == Latency(STUB_TOTAL_MS, None, None)
+    # probe 실패는 서버 도달 불가로 보고 POST 를 보내지 않는다(WR-02)
+    assert raised.value.reason == FALLBACK_UNAVAILABLE
+    assert client.calls == []
+    assert raised.value.latency.orin_processing_ms is None
+    assert raised.value.latency.network_rtt_ms is None
 
 
 def test_estimate_latency_clamps_orin_to_zero():
-    assert estimate_latency(120.0, 150.0) == Latency(120.0, 0.0, 150.0)
-    assert estimate_latency(120.0, None) == Latency(120.0, None, None)
-    assert estimate_latency(120.0, 20.0) == Latency(120.0, 100.0, 20.0)
+    assert estimate_latency(200.0, 120.0, 150.0) == Latency(200.0, 0.0, 150.0)
+    assert estimate_latency(200.0, 120.0, None) == Latency(200.0, None, None)
+    assert estimate_latency(200.0, 120.0, 20.0) == Latency(200.0, 100.0, 20.0)
 
 
 def test_d1_selector_low_confidence_raises_with_latency():
@@ -217,7 +225,8 @@ def test_d1_selector_low_confidence_raises_with_latency():
         _build_d1_selector(client).select(state, event)
 
     assert raised.value.reason == FALLBACK_LOW_CONFIDENCE
-    assert raised.value.latency == estimate_latency(STUB_TOTAL_MS, STUB_RTT_MS)
+    assert raised.value.latency.orin_processing_ms == STUB_TOTAL_MS - STUB_RTT_MS
+    assert raised.value.latency.network_rtt_ms == STUB_RTT_MS
 
 
 @pytest.mark.parametrize(

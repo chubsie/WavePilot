@@ -43,8 +43,8 @@ PROBABILITY_SUM_TOLERANCE = 1e-6
 
 @dataclass(frozen=True, slots=True)
 class Latency:
-    total_ms: float  # 선택 1회 전체 시간
-    orin_processing_ms: float | None  # 서버가 timings 를 주지 않아 total − /health RTT 로 추정. 규칙 선택기는 None
+    total_ms: float  # select() 1회 전체 벽시계 — d1 은 필터·직렬화·/health probe·POST 포함
+    orin_processing_ms: float | None  # 서버가 timings 를 주지 않아 POST 왕복 − /health RTT 로 추정. 규칙 선택기는 None
     network_rtt_ms: float | None  # /health 왕복 시간. 규칙 선택기는 None
 
     def __post_init__(self) -> None:

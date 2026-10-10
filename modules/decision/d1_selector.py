@@ -4,12 +4,16 @@
 1. filter_options 로 보기를 거른다(D-02). 보기가 2개 미만이면 물을 것이 없어 single_option 으로 실패한다.
 2. 질문(instructions, criteria)과 상태 JSON 을 만든다.
 3. GET /health 로 RTT 를 잰다 — 질문 직전에 둬서 같은 네트워크 상태를 잰다.
+   probe 가 실패하면 서버에 닿지 않는 것으로 보고 POST 없이 unavailable 로 실패한다(WR-02).
 4. POST /v1/systemone 으로 choice 질문 1개를 보낸다.
 5. 응답 choice 를 보기와 다시 대조하고(방어), 확신도가 기준 미만이면 low_confidence 로 실패한다.
 6. 파라미터는 규칙 선택기와 같은 fill_params 로 채운다(D-03, D-04) — d1 은 모드 이름만 고른다.
 
-지연 추정(SEL-02, RESEARCH §2.3): 응답에 timings 가 없어 orin_processing_ms = max(0, total_ms − /health RTT) 로 추정한다.
-RTT probe 가 실패하면 분해할 수 없으므로 orin·network 둘 다 None 이다.
+지연(SEL-02, RESEARCH §2.3, CR-02):
+- total_ms 는 select() 시작부터 응답을 받을 때까지의 벽시계다 — 필터·직렬화·/health probe·POST 를 모두 넣어
+  RuleSelector 의 total_ms 와 같은 범위로 비교한다. 실패 경로도 같은 시작 시각부터 잰다.
+- 응답에 timings 가 없어 orin_processing_ms = max(0, POST 왕복 − /health RTT) 로 추정한다.
+  RTT 를 모르면 분해할 수 없으므로 orin·network 둘 다 None 이다.
 
 실패는 모두 D1SelectionError(reason, latency) 로 올린다. 클라이언트 예외 네 계열 밖의 예외는 그대로 올려
 FallbackSelector 가 bad_response 로 흡수한다.
@@ -54,13 +58,20 @@ class D1SelectionError(Exception):
         self.latency = latency
 
 
-def estimate_latency(total_ms: float, network_rtt_ms: float | None) -> Latency:
-    """POST 왕복 시간과 /health RTT 로 지연을 분해한다. RTT 를 모르면 분해하지 않는다."""
-    if network_rtt_ms is None:
-        return Latency(total_ms=total_ms, orin_processing_ms=None, network_rtt_ms=None)
+def estimate_latency(selection_ms: float, request_ms: float, network_rtt_ms: float | None) -> Latency:
+    """select 벽시계를 total 로 두고, POST 왕복에서 /health RTT 를 빼 Orin 처리 시간을 추정한다.
 
-    orin_processing_ms = max(0.0, total_ms - network_rtt_ms)
-    return Latency(total_ms=total_ms, orin_processing_ms=orin_processing_ms, network_rtt_ms=network_rtt_ms)
+    RTT 를 모르면 분해하지 않는다.
+    """
+    if network_rtt_ms is None:
+        return Latency(total_ms=selection_ms, orin_processing_ms=None, network_rtt_ms=None)
+
+    orin_processing_ms = max(0.0, request_ms - network_rtt_ms)
+    return Latency(total_ms=selection_ms, orin_processing_ms=orin_processing_ms, network_rtt_ms=network_rtt_ms)
+
+
+def _get_elapsed_ms(started_sec: float) -> float:
+    return (time.perf_counter() - started_sec) * MS_PER_SEC
 
 
 class D1Selector:
@@ -73,7 +84,10 @@ class D1Selector:
         self._confidence_threshold = confidence_threshold
 
     def select(self, state: SelectionState, event: SelectionEvent) -> SelectionResult:
+        started_sec = time.perf_counter()
+
         options = filter_options(state, event, self._defaults.approach_stop_distance_m)
+        # filter_options 가 search·hold·return_home 을 늘 남겨 오늘은 도달하지 않는다 — 보기 규칙이 바뀔 때의 가드
         if len(options) < MIN_OPTION_COUNT:
             raise D1SelectionError(FALLBACK_SINGLE_OPTION, None, f"only {options} left after filtering")
 
@@ -81,8 +95,13 @@ class D1Selector:
         state_text = serialize_request_state(state, event)
 
         network_rtt_ms = self._client.measure_rtt_ms()
-        reply = self._ask_rule_mode(state_text, instructions, criteria, network_rtt_ms)
-        latency = estimate_latency(reply.total_ms, network_rtt_ms)
+        if network_rtt_ms is None:
+            # probe 가 못 닿은 서버에 POST 를 보내면 request timeout 만큼 더 막힌다(WR-02)
+            latency = Latency(total_ms=_get_elapsed_ms(started_sec), orin_processing_ms=None, network_rtt_ms=None)
+            raise D1SelectionError(FALLBACK_UNAVAILABLE, latency, "health probe failed")
+
+        reply = self._ask_rule_mode(state_text, instructions, criteria, network_rtt_ms, started_sec)
+        latency = estimate_latency(_get_elapsed_ms(started_sec), reply.total_ms, network_rtt_ms)
 
         if reply.choice not in options:
             # 파서가 이미 막지만 응답 변조·서버 버전 차이에 대비해 한 번 더 본다(T-01-05-01)
@@ -106,14 +125,17 @@ class D1Selector:
         )
 
     def _ask_rule_mode(
-        self, state_text: str, instructions: str, criteria: dict[str, str], network_rtt_ms: float | None
+        self,
+        state_text: str,
+        instructions: str,
+        criteria: dict[str, str],
+        network_rtt_ms: float,
+        started_sec: float,
     ) -> ChoiceReply:
-        """클라이언트 예외를 fallback 사유로 바꾼다.
+        """클라이언트 예외를 fallback 사유로 바꾼다. 실패 지연도 select 시작 시각(started_sec)부터 잰다.
 
         except 순서가 의미를 가진다 — OutOfMenuError 는 LLMResponseError 의 하위 클래스라 먼저 잡는다.
         """
-        started_sec = time.perf_counter()
-
         try:
             return self._client.ask_choice(state_text, QUESTION_ID_RULE_MODE, instructions, criteria)
         except OutOfMenuError as error:
@@ -129,6 +151,5 @@ class D1Selector:
             reason = FALLBACK_BAD_RESPONSE
             cause = error
 
-        elapsed_ms = (time.perf_counter() - started_sec) * MS_PER_SEC
-        latency = Latency(total_ms=elapsed_ms, orin_processing_ms=None, network_rtt_ms=network_rtt_ms)
+        latency = Latency(total_ms=_get_elapsed_ms(started_sec), orin_processing_ms=None, network_rtt_ms=network_rtt_ms)
         raise D1SelectionError(reason, latency, str(cause)) from cause
