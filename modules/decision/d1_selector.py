@@ -42,7 +42,7 @@ from modules.decision.interface import (
 from modules.decision.options import filter_options
 from modules.decision.params import ParamDefaults, fill_params
 from modules.decision.prompt import QUESTION_ID_RULE_MODE, build_rule_mode_question, serialize_request_state
-from modules.decision.systemone_client import ChoiceReply, OutOfMenuError, SystemOneClient
+from modules.decision.systemone_client import OutOfMenuError, SystemOneClient
 from modules.llm_report.interface import LLMBackendError, LLMResponseError, LLMTimeoutError, LLMUnavailableError
 
 MIN_OPTION_COUNT = 2  # 보기가 1개면 서버 답이 정해져 있어 물을 필요가 없다
