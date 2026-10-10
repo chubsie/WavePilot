@@ -7,12 +7,15 @@ d1 은 모드 이름만 고르고 파라미터는 규칙 코드가 채운다(D-0
 표 3 — 모드별 파라미터 (키는 이 순서, 정확히 이 집합):
 | rule_mode    | 키                                                                    | 값 출처                                                    | 쓰는 phase |
 |--------------|-----------------------------------------------------------------------|------------------------------------------------------------|------------|
-| search       | timeout_sec                                                           | search_timeout_sec                                         | Phase 3 RM-01 (구역은 Phase 5 임무 파일) |
+| search       | timeout_sec                                                           | search_timeout_sec                                         | Phase 3 RM-01 (구역 기본값은 ParamDefaults.search_area_*, Phase 5 임무 파일이 덮어씀) |
 | approach     | target_track, stop_distance_m, timeout_sec                            | 가장 가까운 approach 대상, approach_stop_distance_m, approach_timeout_sec | Phase 3 RM-03 |
 | aim_and_fire | target_track, center_tolerance_ratio, stable_frame_count, timeout_sec | 가장 가까운 aim_and_fire 대상, aim_center_tolerance_ratio, aim_stable_frame_count, aim_timeout_sec | Phase 4 RM-06, HRT-01 |
 | observe      | target_track, timeout_sec                                             | 가장 가까운 observe 대상, observe_timeout_sec              | Phase 4 RM-02 |
 | hold         | duration_sec                                                          | hold_duration_sec                                          | Phase 3 RM-04 |
 | return_home  | home_north_m, home_east_m, return_altitude_m                          | home_north_m, home_east_m, return_altitude_m               | Phase 3 RM-05 (Phase 5 임무 파일이 덮어씀) |
+
+search 구역·고도·레인 간격(search_area_*, search_altitude_m, search_lane_spacing_m)은 fill_params 키가 아니라
+임무 루프가 RuleModeSettings 로 옮기는 기본값이다 (D-05, Phase 5 임무 파일이 덮어씀).
 
 모드별 대상(get_target_tracks — 후보·확정에서 방금 실패한 (모드, track) 을 뺀 것)과 가장 가까운 track 판정은
 options.py 와 같은 함수를 쓴다 — 보기 필터와 대상 선택이 어긋나지 않는다.
@@ -34,6 +37,14 @@ Params = dict[str, str | int | float | None]
 @dataclass(frozen=True, slots=True)
 class ParamDefaults:
     search_timeout_sec: float = 120.0
+    # search 구역 — 홈 기준 북쪽 사각형, NED m. Phase 5 임무 파일이 덮어씀 (D-05)
+    search_area_north_min_m: float = 20.0
+    search_area_north_max_m: float = 120.0
+    search_area_east_min_m: float = -50.0  # NED 라 음수 허용
+    search_area_east_max_m: float = 50.0
+    search_altitude_m: float = 15.0
+    # 20 m 면 기본 구역 순찰이 125 s 로 search_timeout_sec 120 s 를 넘는다 — 25 m 는 517.5 m / 5 m/s = 103.5 s
+    search_lane_spacing_m: float = 25.0
     approach_stop_distance_m: float = 5.0
     approach_timeout_sec: float = 30.0
     aim_center_tolerance_ratio: float = 0.05  # 프레임 폭 대비
@@ -48,12 +59,26 @@ class ParamDefaults:
     def __post_init__(self) -> None:
         for name in (
             "search_timeout_sec", "approach_stop_distance_m", "approach_timeout_sec", "aim_timeout_sec",
-            "observe_timeout_sec", "hold_duration_sec", "return_altitude_m",
+            "observe_timeout_sec", "hold_duration_sec", "return_altitude_m", "search_altitude_m",
+            "search_lane_spacing_m",
         ):
             _require_positive(name, getattr(self, name))
 
         _require_finite("home_north_m", self.home_north_m)
         _require_finite("home_east_m", self.home_east_m)
+
+        for name in ("search_area_north_min_m", "search_area_north_max_m", "search_area_east_min_m", "search_area_east_max_m"):
+            _require_finite(name, getattr(self, name))
+        if self.search_area_north_min_m >= self.search_area_north_max_m:
+            raise ValueError(
+                f"field 'search_area_north_min_m' must be < search_area_north_max_m, "
+                f"got {self.search_area_north_min_m!r} >= {self.search_area_north_max_m!r}"
+            )
+        if self.search_area_east_min_m >= self.search_area_east_max_m:
+            raise ValueError(
+                f"field 'search_area_east_min_m' must be < search_area_east_max_m, "
+                f"got {self.search_area_east_min_m!r} >= {self.search_area_east_max_m!r}"
+            )
 
         frame_count = self.aim_stable_frame_count
         if not isinstance(frame_count, int) or isinstance(frame_count, bool) or frame_count < 1:
