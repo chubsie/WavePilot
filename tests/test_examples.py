@@ -12,6 +12,8 @@ import re
 import socket
 import subprocess
 import sys
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -202,3 +204,133 @@ def test_run_demo_fake_backend_end_to_end(wavepilot_root: Path) -> None:
     assert result.returncode == 0, output
     assert re.search(REPORT_SENTENCE_PATTERN, output), output
     assert "LINK disconnected" in output
+
+
+# --- scripts/run_llama_server_mac.sh ---
+
+EXPECTED_SERVER_FLAGS = (
+    "-hf nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M",
+    "--alias nemotron-3-nano-4b",
+    "--host 127.0.0.1",
+    "--port 8080",
+    "-c 4096",
+    "-np 1",
+    "-ngl 999",
+    "--jinja",
+    "--chat-template-kwargs",
+    "enable_thinking",
+)
+
+
+def test_llama_server_print_command_has_ai_spec_flags(wavepilot_root: Path) -> None:
+    result = _run(wavepilot_root, ["bash", "scripts/run_llama_server_mac.sh", "--print-command"])
+
+    assert result.returncode == 0, result.stderr
+    assert len(result.stdout.strip().splitlines()) == 1
+    for flag in EXPECTED_SERVER_FLAGS:
+        assert flag in result.stdout, flag
+
+
+def test_llama_server_port_is_overridable(wavepilot_root: Path) -> None:
+    result = _run(
+        wavepilot_root, ["bash", "scripts/run_llama_server_mac.sh", "--print-command"], env_extra={"LLAMA_PORT": "8099"}
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "--port 8099" in result.stdout
+
+
+# --- scripts/smoke_llama_server.py ---
+
+SMOKE_CHECK_NAMES = ("health", "models", "json_schema_nested", "json_schema_flat", "enum_grammar", "thinking_off")
+
+
+def _get_requested_schema(response_format: dict) -> dict:
+    # 중첩형(OpenAI)과 평평한 형태(llama.cpp json_object + schema) 둘 다 받는다
+    if "json_schema" in response_format:
+        return response_format["json_schema"].get("schema", {})
+
+    return response_format.get("schema", {})
+
+
+def _make_fake_llama_handler(think_leak: bool) -> type[BaseHTTPRequestHandler]:
+    class FakeLlamaHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            if self.path == "/health":
+                self._send_json({"status": "ok"})
+            elif self.path == "/v1/models":
+                self._send_json({"data": [{"id": "nemotron-3-nano-4b"}]})
+            else:
+                self._send_json({"error": "not found"}, status=404)
+
+        def do_POST(self) -> None:
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            schema = _get_requested_schema(body.get("response_format", {}))
+
+            has_track_ids = "track_ids" in schema.get("properties", {})
+            content = json.dumps({"track_ids": ["T-7"]} if has_track_ids else {"answer": "ok"})
+            if think_leak:
+                content = "<think>x</think>" + content
+
+            self._send_json(
+                {"choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}]}
+            )
+
+        def _send_json(self, payload: dict, status: int = 200) -> None:
+            data = json.dumps(payload).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+    return FakeLlamaHandler
+
+
+@pytest.fixture
+def fake_llama_server(request):
+    think_leak = getattr(request, "param", {}).get("think_leak", False)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _make_fake_llama_handler(think_leak))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+
+    yield f"http://127.0.0.1:{server.server_address[1]}"
+
+    server.shutdown()
+    server.server_close()
+
+
+def test_smoke_passes_against_healthy_server(wavepilot_root: Path, fake_llama_server: str) -> None:
+    result = _run(
+        wavepilot_root,
+        [sys.executable, "scripts/smoke_llama_server.py", "--url", fake_llama_server, "--ready-timeout-sec", "5"],
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    passed_names = re.findall(r"^PASS (\w+)", result.stdout, re.MULTILINE)
+    assert passed_names == list(SMOKE_CHECK_NAMES)
+    assert "FAIL" not in result.stdout
+
+
+@pytest.mark.parametrize("fake_llama_server", [{"think_leak": True}], indirect=True)
+def test_smoke_fails_when_thinking_leaks(wavepilot_root: Path, fake_llama_server: str) -> None:
+    result = _run(
+        wavepilot_root,
+        [sys.executable, "scripts/smoke_llama_server.py", "--url", fake_llama_server, "--ready-timeout-sec", "5"],
+    )
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert re.search(r"^FAIL thinking_off", result.stdout, re.MULTILINE), result.stdout
+
+
+def test_smoke_unreachable_server_exits_2(wavepilot_root: Path) -> None:
+    result = _run(
+        wavepilot_root,
+        [sys.executable, "scripts/smoke_llama_server.py", "--url", _closed_port_url(), "--ready-timeout-sec", "1"],
+    )
+
+    assert result.returncode == 2
+    assert "server not reachable" in result.stderr
+    assert "Traceback" not in result.stderr
