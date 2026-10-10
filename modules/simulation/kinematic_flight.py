@@ -5,6 +5,10 @@ tools/visualizer/sim_link.js 의 createAutopilot 의미를 따른다: 지면은 
 시간은 advance(dt_sec) 로만 흐른다 — 호출하는 쪽(테스트·미션 루프)이 시계를 쥔다.
 
 reject_commands=True 면 모든 명령을 거부해 링크 끊김/수동 조종 같은 상황을 흉내 낸다 (D-04 failure 경로).
+
+gps_lost / gps_offset_m / battery_offset_pct 는 Phase 5 안전 감시를 브라우저 없이 시험하기 위한 이상 주입이다 (D-19).
+브라우저 Fault injection 버튼(GPS lost, GPS jump, Battery −30%)과 같은 의미로, 텔레메트리의 gps 와 battery_pct 만
+바꾸고 NED north_m/east_m/down_m 은 참값으로 남는다 — 안전 감시는 GPS 이상 중에도 NED 로 복귀한다.
 """
 
 import math
@@ -14,6 +18,7 @@ from modules.flight_control.interface import (
     CommandAck,
     FireHeart,
     GoTo,
+    GpsFix,
     Land,
     ReturnToHome,
     SetGimbal,
@@ -51,6 +56,9 @@ class KinematicFlightControl:
         gimbal_pitch_deg: float = DEFAULT_GIMBAL_PITCH_DEG,
     ) -> None:
         self.reject_commands = False
+        self.gps_lost = False
+        self.gps_offset_m: tuple[float, float] = (0.0, 0.0)  # (north, east) — GPS 점프 주입
+        self.battery_offset_pct = 0.0
 
         self._start_time_sec = start_time_sec
         self._elapsed_sec = 0.0
@@ -109,7 +117,7 @@ class KinematicFlightControl:
         self._down_m = min(0.0, self._down_m)
 
     def get_telemetry(self) -> Telemetry:
-        battery_pct = FULL_BATTERY_PCT - self._elapsed_sec * BATTERY_DRAIN_PCT_PER_SEC
+        battery_pct = FULL_BATTERY_PCT - self._elapsed_sec * BATTERY_DRAIN_PCT_PER_SEC - self.battery_offset_pct
 
         return Telemetry(
             time_sec=self.now_sec,
@@ -123,9 +131,18 @@ class KinematicFlightControl:
             gimbal_yaw_deg=self._gimbal_yaw_deg,
             battery_pct=max(0.0, min(FULL_BATTERY_PCT, battery_pct)),
             flight_mode=self._flight_mode,
-            gps=ned_to_gps(self._north_m, self._east_m, self._down_m),
+            gps=self._get_gps(),
             height_above_ground_m=max(0.0, -self._down_m),  # 평지 — 지면은 down 0
         )
+
+    def _get_gps(self) -> GpsFix | None:
+        """주입 상태를 반영한 GPS — 끊김이 점프보다 우선한다."""
+        if self.gps_lost:
+            return None
+
+        offset_north_m, offset_east_m = self.gps_offset_m
+
+        return ned_to_gps(self._north_m + offset_north_m, self._east_m + offset_east_m, self._down_m)
 
     def _apply_command(self, command: Command) -> None:
         if isinstance(command, TakeOff):

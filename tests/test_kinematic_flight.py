@@ -2,7 +2,16 @@ import math
 
 import pytest
 
-from modules.flight_control.interface import FireHeart, FlightControl, GoTo, Land, ReturnToHome, SetGimbal, TakeOff
+from modules.flight_control.interface import (
+    FireHeart,
+    FlightControl,
+    GoTo,
+    Land,
+    ReturnToHome,
+    SetGimbal,
+    TakeOff,
+    ned_to_gps,
+)
 from modules.simulation.kinematic_flight import KinematicFlightControl
 
 TICK_SEC = 0.1
@@ -116,3 +125,70 @@ def test_telemetry_time_follows_now_sec():
 
     assert control.get_telemetry().time_sec == control.now_sec
     assert control.now_sec == pytest.approx(6.0)
+
+
+def _flying_control() -> KinematicFlightControl:
+    control = KinematicFlightControl(start_north_m=20.0, start_east_m=-10.0, start_altitude_m=15.0)
+    _advance(control, 10.0)
+
+    return control
+
+
+def test_fault_injection_defaults_keep_telemetry_unchanged():
+    control = _flying_control()
+
+    telemetry = control.get_telemetry()
+
+    assert (control.gps_lost, control.gps_offset_m, control.battery_offset_pct) == (False, (0.0, 0.0), 0.0)
+    assert telemetry.gps == ned_to_gps(20.0, -10.0, -15.0)
+    assert telemetry.battery_pct == pytest.approx(100.0 - 10.0 * 100.0 / 600.0)
+
+
+def test_gps_lost_hides_gps_but_keeps_true_ned():
+    control = _flying_control()
+
+    control.gps_lost = True
+    lost = control.get_telemetry()
+    control.gps_lost = False
+    restored = control.get_telemetry()
+
+    assert lost.gps is None
+    assert (lost.north_m, lost.east_m) == (20.0, -10.0)
+    assert lost.battery_pct == restored.battery_pct
+    assert restored.gps == ned_to_gps(20.0, -10.0, -15.0)
+
+
+def test_gps_offset_shifts_gps_only():
+    control = _flying_control()
+
+    control.gps_offset_m = (500.0, 0.0)
+    telemetry = control.get_telemetry()
+
+    assert telemetry.gps == ned_to_gps(520.0, -10.0, -15.0)
+    assert telemetry.gps.latitude_deg > ned_to_gps(20.0, -10.0, -15.0).latitude_deg
+    assert (telemetry.north_m, telemetry.east_m) == (20.0, -10.0)
+
+
+def test_gps_lost_wins_over_gps_offset():
+    control = _flying_control()
+
+    control.gps_lost = True
+    control.gps_offset_m = (500.0, 0.0)
+
+    assert control.get_telemetry().gps is None
+
+
+@pytest.mark.parametrize(
+    ("offset_pct", "expected_pct"),
+    [
+        (30.0, 100.0 - 10.0 * 100.0 / 600.0 - 30.0),
+        (150.0, 0.0),
+        (-50.0, 100.0),
+    ],
+)
+def test_battery_offset_is_subtracted_and_clamped(offset_pct, expected_pct):
+    control = _flying_control()
+
+    control.battery_offset_pct = offset_pct
+
+    assert control.get_telemetry().battery_pct == pytest.approx(expected_pct)
