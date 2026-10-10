@@ -7,6 +7,7 @@ dependencies = []
 
 [dependency-groups]
 dev = ["pytest>=9"]
+yolo = ["ultralytics>=8.3", "lap>=0.5.12"]
 
 [tool.uv]
 package = false
@@ -17,5 +18,6 @@ pythonpath = ["."]
 markers = [
     "llm: needs a running llama-server (set LLAMA_SERVER_URL)",
     "e2e: spawns operator and drone processes",
+    "yolo: needs ultralytics + yolo11n weights (network on first run)",
 ]
-addopts = "-m 'not llm and not e2e'"
+addopts = "-m 'not llm and not e2e and not yolo'"
