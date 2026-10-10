@@ -2,7 +2,13 @@
 
 import pytest
 
-from modules.yolo_detection.interface.detection import COCO_CLASS_IDS, Detection, DetectionSource, Frame
+from modules.yolo_detection.interface.detection import (
+    COCO_CLASS_IDS,
+    UPPER_COLORS,
+    Detection,
+    DetectionSource,
+    Frame,
+)
 
 
 def _make_detection(track_id: int | None = 3) -> Detection:
@@ -64,6 +70,10 @@ def test_frame_round_trip() -> None:
         ("track_id", "3"),
         ("class_id", "2"),
         ("xyxy", [1.0, 2.0, 3.0]),
+        ("upper_color", "blue"),
+        ("upper_color", 1),
+        ("upper_color", True),
+        ("upper_color", ""),
     ],
 )
 def test_detection_from_dict_rejects_bad_field(field: str, bad_value: object) -> None:
@@ -72,6 +82,47 @@ def test_detection_from_dict_rejects_bad_field(field: str, bad_value: object) ->
 
     with pytest.raises(ValueError):
         Detection.from_dict(data)
+
+
+def test_upper_colors_are_red_and_other() -> None:
+    assert UPPER_COLORS == ("red", "other")
+
+
+def test_detection_upper_color_defaults_to_none_and_is_always_serialized() -> None:
+    detection = _make_detection()
+
+    data = detection.to_dict()
+
+    assert detection.upper_color is None
+    assert data["upper_color"] is None
+    assert list(data) == ["class_id", "class_name", "confidence", "xyxy", "track_id", "upper_color"]
+
+
+@pytest.mark.parametrize("upper_color", ["red", "other"])
+def test_detection_round_trip_keeps_upper_color(upper_color: str) -> None:
+    detection = Detection(0, "person", 0.9, (10.0, 20.0, 50.0, 120.0), 4, upper_color=upper_color)
+
+    assert Detection.from_dict(detection.to_dict()) == detection
+
+
+def test_detection_from_dict_reads_missing_or_null_upper_color_as_none() -> None:
+    null_data = _make_detection().to_dict()
+    null_data["upper_color"] = None
+    missing_data = dict(null_data)
+    del missing_data["upper_color"]
+
+    assert Detection.from_dict(null_data).upper_color is None
+    assert Detection.from_dict(missing_data).upper_color is None
+
+
+def test_frame_round_trip_keeps_detection_upper_color() -> None:
+    person = Detection(0, "person", 0.9, (10.0, 20.0, 50.0, 120.0), 4, upper_color="red")
+    frame = Frame(1, 0.1, 1280, 720, (person, _make_detection()))
+
+    restored = Frame.from_dict(frame.to_dict())
+
+    assert restored == frame
+    assert restored.detections[0].upper_color == "red"
 
 
 def test_detection_from_dict_rejects_missing_key() -> None:

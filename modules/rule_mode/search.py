@@ -3,7 +3,7 @@
 레인은 북쪽 방향이고, 드론에서 가장 가까운 레인 끝에서 시작한다. 웨이포인트마다 GoTo 를 한 번씩 보내고
 텔레메트리가 arrival_tolerance_m 이내가 되면 다음으로 넘어간다 (Phase 2 D-09).
 
-- success: target_class 의 활성·미하트 track 이 FOUND_STREAK_TICKS tick 연속 관측되면 그 track 으로 끝난다 (D-06)
+- success: target_class 의 활성·미하트·색 어긋나지 않은 track 이 FOUND_STREAK_TICKS tick 연속 관측되면 그 track 으로 끝난다 (D-06)
 - failure: 타깃 없이 모든 웨이포인트에 도달 (D-07), 또는 GoTo 거부 (D-04)
 - timeout: 경과 시간 >= timeout_sec (D-07)
 끝난 뒤 step 을 다시 부르면 RuntimeError ("정확히 한 번" 계약).
@@ -133,6 +133,7 @@ class SearchMode:
             if track.class_name == self._settings.target_class
             and track.is_active
             and track.track_id not in tick.hearted_track_ids
+            and not self._is_color_mismatch(track.upper_color)
         ]
         # 후보가 아닌 id 는 버린다 — 공백이 한 번이라도 있으면 streak 이 리셋된다
         self._streak_by_track = {
@@ -145,6 +146,14 @@ class SearchMode:
 
         # 가장 긴 streak, 동률은 가장 작은 track_id
         return min(found_id_list, key=lambda track_id: (-self._streak_by_track[track_id], track_id))
+
+    # options.py 후보 정의와 같다 — 색을 모르는 track 은 후보로 남긴다
+    def _is_color_mismatch(self, upper_color: str | None) -> bool:
+        target_upper_color = self._settings.target_upper_color
+        if target_upper_color is None or upper_color is None:
+            return False
+
+        return upper_color != target_upper_color
 
     def _has_arrived(self, tick: ModeTick) -> bool:
         waypoint = self._waypoints[self._waypoint_index]

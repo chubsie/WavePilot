@@ -5,11 +5,13 @@ pipeline.py / run_scenario.py 는 건드리지 않는 별도 컴포지션 루트
 
 실행 예시 (WavePilot 루트에서):
     uv run python -m modules.drone.run_mission --sim mock
+    uv run python -m modules.drone.run_mission --sim mock --target-color none   (색 조건 없음, Phase 3 동작)
     uv run --group yolo python -m modules.drone.run_mission --sim browser
     uv run python -m modules.drone.run_mission --sim browser --yolo orin --yolo-url http://<orin-ip>:8082
     (browser: http://127.0.0.1:8766/drone_camera.html 을 열고 AI 모드로 전환한다)
 
---sim mock 은 헤드리스다. KinematicFlightControl 과 스크립트 대상(person 1명)으로 YOLO 없이 돈다.
+--sim mock 은 헤드리스다. KinematicFlightControl 과 스크립트 대상(빨간 옷 1명 + 다른 색 1명)으로 YOLO 없이 돈다.
+--target-color red(기본)면 빨간 옷 사람에게만 하트를 쏜다. none 이면 색을 따지지 않는다.
 --speed 0 은 벽시계를 기다리지 않고 최대 속도로 돈다. 로그(stderr)에 선택마다 selection 줄,
 모드 종료마다 mode_end 줄이 나온다. return_home 이 착지하면 종료 코드 0, 그 밖의 종료는 1 이다.
 """
@@ -67,8 +69,16 @@ DEFAULT_AI_MODE_TIMEOUT_SEC = 120.0
 SIM_CONNECT_POLL_SEC = 0.1
 AI_MODE_POLL_SEC = 0.5
 
-# mock 세계 — 홈 북쪽 수색 구역 안에 사람 1명. 시야 안에 들어와야 보이도록 탐지 거리를 제한한다
-DEFAULT_MOCK_TARGETS = (ScriptedTarget(track_id=1, class_name="person", north_m=60.0, east_m=0.0),)
+DEFAULT_TARGET_COLOR = "red"
+TARGET_COLOR_NONE = "none"
+TARGET_COLOR_CHOICES = (DEFAULT_TARGET_COLOR, TARGET_COLOR_NONE)
+
+# mock 세계 — 홈 북쪽 수색 구역 안에 빨간 옷 1명 + 다른 색 1명 (D-06, D-07).
+# 시야 안에 들어와야 보이도록 탐지 거리를 제한한다
+DEFAULT_MOCK_TARGETS = (
+    ScriptedTarget(track_id=1, class_name="person", north_m=60.0, east_m=0.0, upper_color="red"),
+    ScriptedTarget(track_id=2, class_name="person", north_m=95.0, east_m=30.0, upper_color="other"),
+)
 MOCK_DETECTION_RANGE_M = 40.0
 
 
@@ -184,6 +194,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--ai-mode-timeout-sec", type=float, default=DEFAULT_AI_MODE_TIMEOUT_SEC,
         help="how long to wait for AI mode to be switched on in the page (--sim browser)",
     )
+    parser.add_argument(
+        "--target-color", choices=TARGET_COLOR_CHOICES, default=DEFAULT_TARGET_COLOR,
+        help="upper-body color the mission targets; none = any color (Phase 3 behavior)",
+    )
     parser.add_argument("--device", default=DEFAULT_YOLO_DEVICE, help="YOLO device for --sim browser: auto | mps | cpu | 0")
     parser.add_argument(
         "--yolo", choices=YOLO_CHOICES, default=YOLO_LOCAL, help="YOLO for --sim browser: local (Mac) | orin (remote server)"
@@ -208,7 +222,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         logger.error("invalid selector configuration: %s", error)
         return EXIT_USAGE
 
-    settings = build_rule_mode_settings(config.param_defaults)
+    # Phase 5 임무 파일이 대상 색을 덮어쓸 자리다
+    target_upper_color = None if args.target_color == TARGET_COLOR_NONE else args.target_color
+    settings = build_rule_mode_settings(config.param_defaults, target_upper_color=target_upper_color)
     try:
         if args.sim == SIM_BROWSER:
             result = _run_browser_mission(args, decision_model, config.param_defaults, settings)
@@ -224,13 +240,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     return EXIT_OK if result.is_success else EXIT_FAILURE
 
 
+def build_mock_world(
+    targets: Sequence[ScriptedTarget] = DEFAULT_MOCK_TARGETS,
+) -> tuple[KinematicFlightControl, RangeLimitedTargetSource]:
+    """mock 임무 세계 — 가짜 비행과 탐지 거리 제한 스크립트 대상. CLI 와 헤드리스 E2E 가 같은 세계를 쓴다."""
+    flight_control = KinematicFlightControl()
+    frame_source = RangeLimitedTargetSource(
+        ScriptedTargetSource(flight_control, targets), flight_control, MOCK_DETECTION_RANGE_M
+    )
+
+    return flight_control, frame_source
+
+
 def _run_mock_mission(
     args: argparse.Namespace, decision_model: DecisionModel, defaults: ParamDefaults, settings: RuleModeSettings
 ) -> MissionRunResult:
-    flight_control = KinematicFlightControl()
-    frame_source = RangeLimitedTargetSource(
-        ScriptedTargetSource(flight_control, DEFAULT_MOCK_TARGETS), flight_control, MOCK_DETECTION_RANGE_M
-    )
+    flight_control, frame_source = build_mock_world()
     pacer = WallClockPacer(args.speed) if args.speed > 0 else None
 
     def advance(dt_sec: float) -> None:

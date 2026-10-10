@@ -3,9 +3,12 @@
 perception 이 만들고 llm_report 가 받는다 (D-06). LLM 레이어는 픽셀·프레임을 보지 않고
 이 목록과 Telemetry 만으로 상황을 판단한다. track_id 는 YOLO 와 같은 int 이고,
 상태 JSON·보고에서는 "T{track_id}" 문자열 라벨로 바꿔 쓴다.
+상체 색 세 필드는 기본값이 있어 이 키가 없는 옛 dict 도 그대로 읽힌다(하위 호환).
 """
 
 from dataclasses import dataclass
+
+from modules.yolo_detection.interface.detection import UPPER_COLORS
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,6 +22,9 @@ class Track:
     observation_count: int
     mean_confidence: float
     is_active: bool
+    upper_color: str | None = None  # 최근 창 다수결로 확정된 상체 색, 미확정이면 None (D-04)
+    upper_color_ratio: float | None = None  # 창 안 1위 색 비율 0~1, 표가 0개면 None
+    upper_color_vote_count: int = 0  # 창 안 unknown 아닌 표 수
 
     def to_dict(self) -> dict:
         return {
@@ -31,6 +37,9 @@ class Track:
             "observation_count": self.observation_count,
             "mean_confidence": self.mean_confidence,
             "is_active": self.is_active,
+            "upper_color": self.upper_color,
+            "upper_color_ratio": self.upper_color_ratio,
+            "upper_color_vote_count": self.upper_color_vote_count,
         }
 
     @classmethod
@@ -51,6 +60,12 @@ class Track:
         if not isinstance(class_name, str):
             raise ValueError(f"field 'class_name' must be str, got {class_name!r}")
 
+        upper_color = _read_optional_upper_color(data)
+        upper_color_ratio = _read_optional_ratio(data, "upper_color_ratio")
+        upper_color_vote_count = data.get("upper_color_vote_count", 0)
+        if not _is_int(upper_color_vote_count) or upper_color_vote_count < 0:
+            raise ValueError(f"field 'upper_color_vote_count' must be int >= 0, got {upper_color_vote_count!r}")
+
         return cls(
             track_id=_require_int(data, "track_id"),
             class_name=class_name,
@@ -61,10 +76,36 @@ class Track:
             observation_count=observation_count,
             mean_confidence=_require_number(data, "mean_confidence"),
             is_active=is_active,
+            upper_color=upper_color,
+            upper_color_ratio=upper_color_ratio,
+            upper_color_vote_count=upper_color_vote_count,
         )
 
 
 # --- 모듈 내부 검증 도우미 ---
+
+
+def _is_int(value: object) -> bool:
+    # bool 은 int 의 하위 타입이라 따로 막는다
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _read_optional_upper_color(data: dict) -> str | None:
+    value = data.get("upper_color")
+    if value is None:
+        return None
+    if not isinstance(value, str) or value not in UPPER_COLORS:
+        raise ValueError(f"field 'upper_color' must be one of {UPPER_COLORS} or null, got {value!r}")
+    return value
+
+
+def _read_optional_ratio(data: dict, key: str) -> float | None:
+    value = data.get(key)
+    if value is None:
+        return None
+    if not (_is_int(value) or isinstance(value, float)) or not 0.0 <= value <= 1.0:
+        raise ValueError(f"field '{key}' must be a number in [0, 1] or null, got {value!r}")
+    return float(value)
 
 
 def _require_key(data: dict, key: str) -> object:

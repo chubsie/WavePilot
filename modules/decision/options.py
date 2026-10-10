@@ -11,6 +11,7 @@ d1 선택기와 규칙 선택기가 같은 필터를 쓴다(D-04) — 두 선택
   임무가 색을 요구하지 않으면 후보 = 확정.
 - 방금 하트 보낸 track: event 가 mode_ended 이고 mode_result 가 aim_and_fire·success 이면 그 target_track.
   상태의 hearted_tracks 가 한 틱 늦게 갱신돼도 다시 겨누지 않도록 hearted 로 취급한다.
+- hearted_tracks: 임무 루프가 발사 지점 반경 안의 새 track 도 hearted_tracks 에 넣는다(D-13) — 이 모듈은 hearted_tracks 만 본다.
 - 방금 실패한 (모드, track): event 가 mode_ended 이고 outcome 이 failure/timeout 이고 rule_mode 가 TARGET_MODES 이면
   그 (rule_mode, target_track). 같은 대상에 같은 모드로 곧바로 다시 실패하지 않도록 그 모드의 대상에서만 뺀다.
 - 모드별 대상 track(get_target_tracks): approach·observe 는 후보, aim_and_fire 는 확정 track 에서 방금 실패한
@@ -24,7 +25,7 @@ d1 선택기와 규칙 선택기가 같은 필터를 쓴다(D-04) — 두 선택
 |--------------|-------------------------------------------------------|-----------------------------------------------|------|
 | search       | 항상                                                  | 없음                                          | 후보가 있어도 다른 구역을 더 보는 선택은 가능하다 |
 | approach     | approach 대상 1개 이상                                | 후보 없음, 또는 남은 후보가 방금 approach 에 실패한 track 뿐 | 다가갈 대상이 없다 |
-| aim_and_fire | aim_and_fire 대상 중 가장 가까운 것이 조준 가능 거리 안 | 확정 없음, 방금 조준 실패한 track 뿐, 또는 가장 가까운 대상이 조준 가능 거리 밖 | 색을 모르는 사람·먼 사람에게 하트를 보내지 않는다. Phase 1 은 upper_color 가 늘 None 이라 색 요구 임무에서는 항상 빠진다 |
+| aim_and_fire | aim_and_fire 대상 중 가장 가까운 것이 조준 가능 거리 안 | 확정 없음, 방금 조준 실패한 track 뿐, 또는 가장 가까운 대상이 조준 가능 거리 밖 | 색을 모르는 사람·먼 사람에게 하트를 보내지 않는다. Phase 4 부터 upper_color 는 track 다수결 색이라, 색 요구 임무에서는 색이 확정되기 전까지 빠진다 |
 | observe      | observe 대상 1개 이상                                 | 후보 없음, 또는 남은 후보가 방금 observe 에 실패한 track 뿐 | 지켜볼 대상이 없다 |
 | hold         | 항상                                                  | 없음                                          | 언제나 안전한 선택 |
 | return_home  | 항상                                                  | 없음                                          | 언제나 안전한 선택. 비상 RETURN 판정은 Phase 5 안전 감시 몫 |

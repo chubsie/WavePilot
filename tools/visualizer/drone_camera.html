@@ -590,10 +590,11 @@ function updateDroneCam() {
 
 // People and cars ahead of home (-Z), where the drone looks at start. dx/dz in m from home.
 // HOME (below) is chosen so that every spot here is dry and roughly level.
+// shirtColor = upper-body (shirt) colour for the Phase 4 red-shirt demo: one red soldier + one blue soldier.
 const WALK_SPEED = 1.2;                      // m/s
 const ACTOR_SPECS = [
-  { model: 'Soldier.glb', dx: -3, dz: -16, headingDeg: 90, walkM: 6 },
-  { model: 'Soldier.glb', dx: 4, dz: -19, headingDeg: 20 },
+  { model: 'Soldier.glb', dx: -3, dz: -16, headingDeg: 90, walkM: 6, shirtColor: 0xd01818 },
+  { model: 'Soldier.glb', dx: 4, dz: -19, headingDeg: 20, shirtColor: 0x1f4fd0 },
   { model: 'ferrari.glb', dx: 9, dz: -25, headingDeg: 60 },
   { model: 'ferrari.glb', dx: -9, dz: -28, headingDeg: -30 },
 ];
@@ -603,6 +604,37 @@ const dracoLoader = new THREE.DRACOLoader();
 dracoLoader.setDecoderPath(DRACO_DECODER_PATH);
 const gltfLoader = new THREE.GLTFLoader();
 gltfLoader.setDRACOLoader(dracoLoader);
+
+// Soldier.glb has no upper-body mesh or material: vanguard_Mesh is one skinned body with one texture.
+// So the shirt is painted with vertex colours, picked by bind-pose height (position z, cm, feet 0 → head ~183).
+// T-pose arms sit at the same height, so the sleeves get painted too.
+const SHIRT_MESH_NAME = 'vanguard_Mesh';
+const SHIRT_MIN_Z_CM = 95;                   // above the hips
+const SHIRT_MAX_Z_CM = 150;                  // below the neck
+const SHIRT_BRIGHTNESS = 2.0;                // final colour = texture × vertex colour, the texture is dark
+const UNPAINTED_COLOR = new THREE.Color(1, 1, 1);   // vertex colour that leaves the texture as is
+
+function applyShirtColor(root, shirtColor) {
+  root.traverse((obj) => {
+    if (!obj.isMesh || obj.name !== SHIRT_MESH_NAME) return;
+    // Own copies, so two soldiers never share (and mix) colours
+    obj.geometry = obj.geometry.clone();
+    obj.material = obj.material.clone();
+
+    const shirt = new THREE.Color(shirtColor).multiplyScalar(SHIRT_BRIGHTNESS);
+    const positions = obj.geometry.attributes.position;
+    const colors = new Float32Array(positions.count * 3);
+    for (let i = 0; i < positions.count; i++) {
+      const z = positions.getZ(i);
+      const c = z >= SHIRT_MIN_Z_CM && z <= SHIRT_MAX_Z_CM ? shirt : UNPAINTED_COLOR;
+      colors.set([c.r, c.g, c.b], i * 3);
+    }
+
+    obj.geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+    obj.material.vertexColors = true;
+    obj.material.needsUpdate = true;
+  });
+}
 
 for (const spec of ACTOR_SPECS) {
   gltfLoader.load(MODEL_BASE + spec.model, (gltf) => {
@@ -614,6 +646,7 @@ for (const spec of ACTOR_SPECS) {
       const clip = gltf.animations.find((c) => c.name === (spec.walkM ? 'Walk' : 'Idle'));
       if (clip) actor.mixer.clipAction(clip).play();
     }
+    if (spec.shirtColor !== undefined) applyShirtColor(gltf.scene, spec.shirtColor);
     scene.add(gltf.scene);
     actors.push(actor);
     placeActor(actor);

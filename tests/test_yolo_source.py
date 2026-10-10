@@ -172,3 +172,30 @@ def test_yolo_source_rejects_invalid_args_before_importing(
 
     with pytest.raises(ValueError, match=field_name):
         YoloDetectionSource([], **kwargs)
+
+
+def test_yolo_source_attaches_classifier_color_only_to_person_boxes() -> None:
+    calls: list[tuple[object, tuple[float, float, float, float]]] = []
+
+    def fake_classifier(image, xyxy):
+        calls.append((image, xyxy))
+        return "red"
+
+    image = object()
+    boxes = make_boxes([([1.0, 2.0, 30.0, 40.0], 0, 0.9, 1.0), ([50.0, 60.0, 90.0, 80.0], 2, 0.8, 2.0)])
+    source = YoloDetectionSource([(0.0, image)], model=FakeYoloModel([FakeResult(boxes=boxes)]), color_classifier=fake_classifier)
+
+    person, car = source.read_frame().detections
+
+    assert person.upper_color == "red"
+    assert car.upper_color is None
+    assert calls == [(image, (1.0, 2.0, 30.0, 40.0))]
+
+
+def test_yolo_source_default_classifier_gives_none_for_opaque_image() -> None:
+    source = YoloDetectionSource(_make_image_source([0.0]), model=FakeYoloModel(_make_results(1)))
+
+    frame = source.read_frame()
+
+    assert frame.detections[0].class_name == "person"
+    assert frame.detections[0].upper_color is None

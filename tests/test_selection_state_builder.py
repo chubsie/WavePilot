@@ -97,3 +97,21 @@ def test_works_with_height_above_ground(height_above_ground_m):
     state = build_selection_state(12.0, telemetry, (_make_track(1),), "person")
 
     assert state.drone.altitude_m == 15.0
+
+
+@pytest.mark.parametrize("upper_color", ["red", "other", None])
+def test_track_upper_color_is_copied_to_track_state(upper_color):
+    state = build_selection_state(12.0, _make_telemetry(), (_make_track(1, upper_color=upper_color),), "person")
+
+    assert state.tracks[0].upper_color == upper_color
+
+
+def test_target_upper_color_goes_to_mission_and_state_json():
+    tracks = (_make_track(1, upper_color="red"), _make_track(2, upper_color="other"))
+
+    state = build_selection_state(12.0, _make_telemetry(), tracks, "person", target_upper_color="red")
+    request = build_request_state(state, SelectionEvent(EVENT_PERIODIC_CHECK, None))
+
+    assert state.mission.target_upper_color == "red"
+    assert request["mission"]["upper_color"] == "red"
+    assert [track["upper_color"] for track in request["tracks"]] == ["red", "other"]

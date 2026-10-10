@@ -33,7 +33,7 @@ def test_mock_mission_exits_zero_and_logs_selections(monkeypatch, caplog):
     monkeypatch.delenv("WAVEPILOT_SELECTOR", raising=False)
     caplog.set_level(logging.INFO, logger="modules.drone.mission_loop")
 
-    exit_code = run_mission.main(["--sim", "mock", "--max-mission-sec", "300"])
+    exit_code = run_mission.main(["--sim", "mock", "--max-mission-sec", "600"])
 
     messages = [record.getMessage() for record in caplog.records]
     selection_lines = [message for message in messages if message.startswith("selection")]
@@ -42,8 +42,20 @@ def test_mock_mission_exits_zero_and_logs_selections(monkeypatch, caplog):
     assert any("mode=search" in line for line in selection_lines)
     assert any("mode=approach" in line for line in selection_lines)
     assert any(
+        message.startswith("mode_end") and "mode=aim_and_fire outcome=success" in message for message in messages
+    )
+    assert any(message.startswith("heart ") for message in messages)
+    assert any(
         message.startswith("mode_end") and "mode=return_home outcome=success" in message for message in messages
     )
+
+
+def test_mock_mission_without_target_color_exits_zero(monkeypatch):
+    monkeypatch.delenv("WAVEPILOT_SELECTOR", raising=False)
+
+    exit_code = run_mission.main(["--sim", "mock", "--target-color", "none", "--max-mission-sec", "600"])
+
+    assert exit_code == run_mission.EXIT_OK
 
 
 def test_mock_mission_runs_as_subprocess():
@@ -80,6 +92,20 @@ def test_invalid_selector_env_is_usage_error(monkeypatch):
 def test_non_positive_values_exit_with_usage_code(flag):
     with pytest.raises(SystemExit) as error:
         run_mission.main([flag, "0"])
+
+    assert error.value.code == 2
+
+
+def test_target_color_defaults_to_red_and_accepts_none():
+    parser = run_mission.build_arg_parser()
+
+    assert parser.parse_args([]).target_color == "red"
+    assert parser.parse_args(["--target-color", "none"]).target_color == "none"
+
+
+def test_unknown_target_color_exits_with_usage_code():
+    with pytest.raises(SystemExit) as error:
+        run_mission.main(["--target-color", "bogus"])
 
     assert error.value.code == 2
 

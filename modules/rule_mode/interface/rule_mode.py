@@ -1,4 +1,4 @@
-"""rule_mode 공유 계약 — search / approach / hold / return_home 과 미션 루프가 함께 쓰는 입력·설정·Protocol.
+"""rule_mode 공유 계약 — search / approach / hold / return_home / observe / aim_and_fire 와 미션 루프가 함께 쓰는 입력·설정·Protocol.
 
 모드는 tick(10 Hz)마다 step 으로 한 번씩 불린다. 모드는 FlightControl 로 상위 명령만 보내고, 끝나면
 ModeResult(decision.interface.state)를 정확히 한 번 돌려준다 (RM-07).
@@ -67,6 +67,10 @@ class RuleModeSettings:
     search_lane_spacing_m: float = 25.0
     camera: CameraIntrinsics = DEFAULT_CAMERA
     arrival_tolerance_m: float = 1.5
+    target_upper_color: str | None = None  # None 이면 색 조건 없음
+    heart_burst_count: int = 10  # D-12: aim_and_fire 한 번에 쏘는 하트 수
+    heart_burst_interval_sec: float = 0.2  # 10발 약 2 s
+    target_lost_grace_sec: float = 1.0  # D-11: observe / aim_and_fire 놓침 유예
 
     def __post_init__(self) -> None:
         if not isinstance(self.target_class, str) or not self.target_class:
@@ -77,6 +81,23 @@ class RuleModeSettings:
         _require_positive("search_altitude_m", self.search_altitude_m)
         _require_positive("search_lane_spacing_m", self.search_lane_spacing_m)
         _require_positive("arrival_tolerance_m", self.arrival_tolerance_m)
+
+        # 색 값 집합(UPPER_COLORS) 검증은 Detection/Track 쪽 책임 — 여기서는 형태만 본다
+        if self.target_upper_color is not None and (
+            not isinstance(self.target_upper_color, str) or not self.target_upper_color
+        ):
+            raise ValueError(
+                f"field 'target_upper_color' must be None or a non-empty str, got {self.target_upper_color!r}"
+            )
+        if (
+            not isinstance(self.heart_burst_count, int)
+            or isinstance(self.heart_burst_count, bool)
+            or self.heart_burst_count < 1
+        ):
+            raise ValueError(f"field 'heart_burst_count' must be an int >= 1, got {self.heart_burst_count!r}")
+
+        _require_positive("heart_burst_interval_sec", self.heart_burst_interval_sec)
+        _require_positive("target_lost_grace_sec", self.target_lost_grace_sec)
 
 
 @dataclass(frozen=True, slots=True)

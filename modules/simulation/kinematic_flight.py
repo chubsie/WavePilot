@@ -150,7 +150,7 @@ class KinematicFlightControl:
             self._gimbal_pitch_deg = max(GIMBAL_PITCH_MIN_DEG, min(GIMBAL_PITCH_MAX_DEG, command.pitch_deg))
             self._gimbal_yaw_deg = max(-GIMBAL_YAW_LIMIT_DEG, min(GIMBAL_YAW_LIMIT_DEG, command.yaw_deg))
         elif isinstance(command, FireHeart):
-            pass  # 수락만 하고 아무것도 하지 않는다 (발사는 Phase 4)
+            pass  # 수락만 한다 — 발사 기록은 commands_received (mock 구현, D-15/SC5)
 
     def _start_goal(self, north_m: float, east_m: float, down_m: float, flight_mode: str) -> None:
         self._clear_motion()

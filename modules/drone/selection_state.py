@@ -5,6 +5,7 @@
 
 상태 JSON 에는 짧은 토큰만 들어가야 한다. YOLO 클래스 이름은 소문자·"_" 토큰으로 바꾸고,
 그래도 CLASS_NAME_PATTERN 에 맞지 않는 track 은 상태에서 뺀다.
+상체 색은 track 다수결 확정값(tracks[].upper_color)과 임무 목표 색(mission.upper_color)을 그대로 싣는다 (ATTR-01).
 """
 
 import logging
@@ -30,6 +31,7 @@ def build_selection_state(
     tracks: Sequence[Track],
     target_class: str,
     hearted_labels: Iterable[str] = (),
+    target_upper_color: str | None = None,
 ) -> SelectionState:
     track_state_list = []
     for track in tracks:
@@ -41,7 +43,7 @@ def build_selection_state(
         time_sec=now_sec,
         drone=_build_drone_state(telemetry),
         tracks=tuple(track_state_list),
-        mission=MissionSummary(target_class, None, tuple(hearted_labels)),
+        mission=MissionSummary(target_class, target_upper_color, tuple(hearted_labels)),
     )
 
 
@@ -80,7 +82,7 @@ def _build_track_state(track: Track) -> TrackState | None:
         observation_count=track.observation_count,
         mean_confidence=min(1.0, max(0.0, track.mean_confidence)),  # 부동소수 오차 보정
         is_active=track.is_active,
-        upper_color=None,  # Phase 4 가 채운다
+        upper_color=track.upper_color,
     )
 
 
