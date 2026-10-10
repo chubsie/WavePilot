@@ -315,7 +315,9 @@
 
   // ---------- 와이어 프로토콜 클라이언트 ----------
   function createLink(options) {
-    const { canvas, getTelemetry, isAiMode, onCommand, takeEvents, onPaired, log } = options;
+    const { canvas, getTelemetry, isAiMode, isOperatorLinkUp, onCommand, takeEvents, onPaired, log } = options;
+    // 운용자 링크 heartbeat — 옵션이 없으면 늘 연결(Phase 5 D-01)
+    const readOperatorLink = isOperatorLinkUp || (() => true);
     const nowSec = () => performance.now() / 1000;
     const state = {
       connected: false,
@@ -328,6 +330,7 @@
       detectionsAtSec: -Infinity,
       recentCommands: [],
       discardedCount: 0,
+      mission: null,
     };
 
     function refreshConnected() {
@@ -370,6 +373,8 @@
         state.detections = body.detections;
         state.detectionsAtSec = state.lastOkSec;
       }
+      // Python 이 임무 상태를 안 보내면 지난 값을 지운다(D-02)
+      state.mission = body.mission && typeof body.mission === 'object' ? body.mission : null;
       handleCommands(body.commands);
     }
 
@@ -385,7 +390,7 @@
         const response = await fetch('/sim/telemetry', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ telemetry: getTelemetry(), ai_mode: isAiMode(), events }),
+          body: JSON.stringify({ telemetry: getTelemetry(), ai_mode: isAiMode(), operator_link: readOperatorLink(), events }),
         });
         if (response.status !== 200) throw new Error('HTTP ' + response.status);
         handleTelemetryResponse(await response.json(), sentAtSec);
@@ -541,16 +546,19 @@
     const fixed = (value, digits) => Number(value).toFixed(digits);
     const gps = telemetry.gps;
 
-    const lines = [
-      `GPS      ${fixed(gps.latitude_deg, 6)}, ${fixed(gps.longitude_deg, 6)}`,
-      `GPS alt  ${fixed(gps.altitude_m, 1)} m`,
-    ];
+    // GPS lost 주입 시 gps 는 null — 패널이 터지지 않게 한 줄로 줄인다
+    const lines = gps
+      ? [
+        `GPS      ${fixed(gps.latitude_deg, 6)}, ${fixed(gps.longitude_deg, 6)}`,
+        `GPS alt  ${fixed(gps.altitude_m, 1)} m`,
+      ]
+      : ['GPS      lost (no fix)'];
     if (homeGps) {
-      const toHome = measureToHome(gps, homeGps);
-      lines.push(
-        `Home     ${fixed(homeGps.latitude_deg, 6)}, ${fixed(homeGps.longitude_deg, 6)}`,
-        `To home  ${fixed(toHome.distanceM, 1)} m · bearing ${fixed(toHome.bearingDeg, 0)}° · Δalt ${fixed(toHome.altitudeDiffM, 1)} m`,
-      );
+      lines.push(`Home     ${fixed(homeGps.latitude_deg, 6)}, ${fixed(homeGps.longitude_deg, 6)}`);
+      if (gps) {
+        const toHome = measureToHome(gps, homeGps);
+        lines.push(`To home  ${fixed(toHome.distanceM, 1)} m · bearing ${fixed(toHome.bearingDeg, 0)}° · Δalt ${fixed(toHome.altitudeDiffM, 1)} m`);
+      }
     } else {
       lines.push('Home     (set when Python pairs)');
     }
@@ -566,11 +574,25 @@
     return lines.join('\n');
   }
 
+  // Python 임무 상태 한 줄 — 서버 값은 String() 으로 감싸 객체가 와도 글자로만 보인다(D-02)
+  function formatMissionStatus(mission) {
+    if (!mission) return 'AI mission: – (no mission running)';
+
+    const reasonText = mission.reason ? ` (${String(mission.reason)})` : '';
+    const linkText = ` · link ${mission.link_connected ? 'up' : 'lost'}`;
+    const heartbeatSec = mission.link_last_heartbeat_sec;
+    const heartbeatText = Number.isFinite(heartbeatSec) ? ` (last t=${heartbeatSec.toFixed(1)})` : '';
+
+    return `AI mission: ${String(mission.mode)}${reasonText}${linkText}${heartbeatText}`;
+  }
+
   function renderPanel(elements, telemetry, linkState, homeGps) {
     const yoloText = linkState.yoloLatencyMs === null ? '–' : linkState.yoloLatencyMs.toFixed(0);
     const roundTripText = linkState.roundTripMs === null ? '–' : linkState.roundTripMs.toFixed(0);
     elements.link.textContent = `Python: ${linkState.connected ? 'connected' : 'disconnected'}`
       + ` · frames ${linkState.frameFps.toFixed(1)} fps · YOLO ${yoloText} ms · RTT ${roundTripText} ms`;
+
+    if (elements.mission) elements.mission.textContent = formatMissionStatus(linkState.mission);
 
     elements.telemetry.textContent = formatTelemetry(telemetry, homeGps);
 
@@ -597,7 +619,7 @@
     MAX_RANGEFINDER_M,
     wrapYawDeg, nedToGps, heightAboveGroundM, measureToHome, parseBatteryStartPct, batteryPctAt,
     createAutopilot, createLink,
-    startHeart, drawOverlay, renderPanel,
+    startHeart, drawOverlay, renderPanel, formatMissionStatus,
   };
 
   root.SimLink = api;
