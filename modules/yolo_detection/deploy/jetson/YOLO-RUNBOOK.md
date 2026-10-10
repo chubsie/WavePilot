@@ -8,6 +8,7 @@
 | 읽기 전용 | 1, 3 | Orin 상태를 바꾸지 않는다 (점검만) |
 | 상태 변경 | 0, 2, 4 ~ 12 | 파일 복사, 이미지 pull, 컨테이너·엔진·전력 모드, 측정 실행과 로그 생성 |
 | 보고 | 13 | 결과를 붙여 넣어 에이전트에게 전달 |
+| 실시간 서버 (Phase 7) | R0 ~ R8, 보고 양식 | 맨 아래 "실시간 YOLO 서버 (Phase 7)" 절의 표에서 단계별로 구분한다 |
 
 측정 실행과 로그 생성 단계(9 ~ 11)도 디스크와 프로세스를 바꾸므로 상태 변경으로 분류한다.
 
@@ -340,4 +341,196 @@ A3 결과: --device 0 사용 가능 / 생략 (8단계)
 
 fps_mean, latency_ms_p95 는 bench JSON 값을 그대로 붙인다. 에이전트가 `.planning/phases/01.1-yolo-detectionsource/01.1-JETSON-RESULTS.md` 에 옮긴다.
 
-참고: 이 런북은 측정까지만 한다. 라이브 시뮬레이터 연동과 드론 조립부 (`modules.drone.run_scenario`) 교체는 범위 밖이다.
+참고: 0 ~ 13단계는 Orin 단독 측정까지만 한다. Mac 시뮬레이터가 Orin 의 YOLO 서버로 프레임을 보내는 라이브 연동은 아래 "실시간 YOLO 서버 (Phase 7)" 절에서 한다.
+
+---
+
+## 실시간 YOLO 서버 (Phase 7)
+
+> **이 절의 모든 명령도 사용자가 실행한다. 에이전트는 실행하지 않는다.**
+> Orin 에서 YOLO 를 HTTP 서버(`yolo-server`, 포트 8082)로 띄우고, Mac 의 시뮬레이터·실행기가 프레임을 보내 탐지 결과를 받는다.
+> Mac 쪽 전환은 `--yolo orin --yolo-url http://<orin-ip>:8082` 플래그뿐이다 (`--yolo local` 이 기본값).
+
+| 구분 | 단계 | 성격 |
+|------|------|------|
+| 읽기 전용 | R1, R5 | 엔진 파일·서버 상태 확인만 한다 |
+| 상태 변경 | R0, R2, R3, R4, R6, R7, R8 | 파일 복사, 컨테이너 기동·정지, 방화벽, 서버 트래커 상태, 실행 로그 |
+| 보고 | 보고 양식 | 결과를 붙여 넣어 에이전트에게 전달 |
+
+구성 요약:
+
+- compose: 이 디렉터리의 `compose.yaml` — 프로젝트 이름 `wavepilot-yolo`, 서비스 `yolo-server`, 이미지 `ultralytics/ultralytics:latest-jetson-jetpack6`.
+- 서버 명령 (compose 가 실행): `python -m modules.yolo_detection.remote.server --weights models/yolo11n.engine --host 0.0.0.0 --port 8082 --device 0 --imgsz 640`. `lap` 이 없으면 기동 전에 lapx 를 설치한다 (3단계와 같은 대체).
+- 인증 없음 (해커톤 정책): 바인딩 주소 `YOLO_BIND_ADDR` 와 ufw 로만 접근을 좁힌다.
+- 엔진은 compose 와 같은 이미지 태그에서 export 한 것만 쓴다. 이미지를 바꾸면 6단계부터 다시 한다.
+
+아래에서 `<user>`, `<orin-ip>`, `<mac-ip>`, `<orin-lan-ip>`, `<port>`, `<dir>` 는 실제 값으로 바꾼다.
+
+### R0. 코드 전달 (상태 변경, Mac)
+
+**목적:** 서버 모듈(`modules/yolo_detection/remote/`)과 이 compose 파일을 Orin 의 `~/wavepilot` 로 복사한다. git push 가 아니라 파일 복사다.
+
+**명령 (Mac, WavePilot 디렉터리에서):**
+
+```bash
+rsync -avR modules/__init__.py modules/yolo_detection <user>@<orin-ip>:~/wavepilot/
+```
+
+디렉터리가 아직 없으면 0단계 첫 줄 (`mkdir -p ~/wavepilot/models ~/wavepilot/logs`) 을 먼저 한다.
+
+**기대 결과:** Orin 에 `~/wavepilot/modules/yolo_detection/remote/` 와 `~/wavepilot/modules/yolo_detection/deploy/jetson/compose.yaml` 이 생긴다.
+
+**실패 시:** ssh 불가면 IP·계정·네트워크를 확인한다 (0단계와 같다).
+
+### R1. 엔진 확인 (읽기 전용, Orin)
+
+**목적:** 서버가 읽을 `models/yolo11n.engine` 이 있는지 확인한다.
+
+**명령 (Orin):**
+
+```bash
+ls -la ~/wavepilot/models/yolo11n.engine
+docker image inspect --format '{{index .RepoDigests 0}}' ultralytics/ultralytics:latest-jetson-jetpack6
+```
+
+**기대 결과:** 엔진 파일이 있고, 이미지 digest 가 엔진을 export 할 때 (2단계 보고) 와 같다.
+
+**실패 시:** 엔진이 없거나 digest 가 다르면 2 ~ 6단계 (컨테이너, lapx, 가중치, export) 를 한 뒤 `docker rm -f yolo-bench` 로 측정 컨테이너를 지우고 R2 로 간다.
+
+### R2. 메모리 확보 (상태 변경, Orin)
+
+**목적:** 8 GB 공유 메모리에서 서버가 엔진을 올릴 자리를 만든다.
+
+**명령 (Orin):**
+
+```bash
+free -h
+docker ps
+docker rm -f yolo-bench
+cd ~/wavepilot/modules/llm_report/deploy/jetson && docker compose stop llama-report
+cd ~/wavepilot/modules/decision/deploy/jetson && docker compose stop llama-decision
+```
+
+세 번째 줄부터는 해당 컨테이너가 떠 있고 메모리가 빠듯하며, 지금 그 서버를 쓰지 않을 때만 실행한다. 무엇을 멈췄는지 적어 둔다 (R8 에서 되돌린다).
+
+**기대 결과:** `free -h` 의 available 이 2 GB 이상이다.
+
+**실패 시:** 여유가 부족한 채로 R3 을 해도 되지만, OOM 이면 보고에 `free -h` 와 함께 적는다.
+
+### R3. 서버 기동 (상태 변경, Orin)
+
+**목적:** compose 로 `yolo-server` 를 띄운다.
+
+**명령 (Orin):**
+
+```bash
+cd ~/wavepilot/modules/yolo_detection/deploy/jetson && docker compose up -d yolo-server
+docker compose ps
+```
+
+한 인터페이스에만 열려면 `YOLO_BIND_ADDR=<orin-lan-ip> docker compose up -d yolo-server` 로 띄운다. 모델 로드·워밍업이 끝나야 리슨하므로 `docker compose ps` 가 `healthy` 가 될 때까지 (최대 수 분) 다시 본다.
+
+**기대 결과:** `yolo-server` 가 `Up (healthy)` 다.
+
+**실패 시:** `docker compose logs --tail 50 yolo-server` 를 보고한다. `pip install lapx` 가 실패하면 3단계처럼 https://pypi.org/project/lapx/ 를 확인한다. 엔진 로드 오류면 R1 (이미지 digest) 을 다시 확인한다.
+
+### R4. 접근 제한 (상태 변경, Orin, 선택)
+
+**목적:** 인증 없는 포트 8082 를 Mac 에서만 닿게 좁힌다. 해커톤 정책상 키 인증은 두지 않고 바인딩 주소와 ufw 로만 막는다.
+
+**명령 (Orin):**
+
+```bash
+sudo ufw status
+sudo ufw allow from <mac-ip> to any port 8082 proto tcp
+```
+
+**기대 결과:** `sudo ufw status` 에 8082 규칙이 Mac 주소로만 보인다. ufw 가 꺼져 있으면 (inactive) 이 단계는 건너뛰고 R3 의 `YOLO_BIND_ADDR` 만 쓴다.
+
+**실패 시:** 규칙을 잘못 넣었으면 `sudo ufw status numbered` 로 번호를 보고 `sudo ufw delete <번호>` 로 지운다.
+
+### R5. Mac 헬스 확인 (읽기 전용, Mac)
+
+**목적:** Mac 에서 서버가 보이는지 확인한다.
+
+**명령 (Mac):**
+
+```bash
+curl -s http://<orin-ip>:8082/health
+```
+
+**기대 결과:** `{"status": "ok", "weights": "models/yolo11n.engine", "device": ..., "frames": ...}` 형태의 JSON.
+
+**실패 시:** 연결 거부면 R3 의 `docker compose ps` 와 R4 의 ufw 규칙, `YOLO_BIND_ADDR` 를 확인한다. 타임아웃이면 Mac 과 Orin 이 같은 네트워크인지 확인한다.
+
+### R6. 벤치 (상태 변경: 서버 트래커 상태, Mac)
+
+**목적:** 시뮬레이터 없이 JPEG 디렉터리를 순서대로 보내 프레임당 지연을 total (Mac 왕복) / orin (서버 처리) / net (차이) 으로 나눠 잰다.
+
+**명령 (Mac, WavePilot 디렉터리에서):**
+
+```bash
+uv run python -m modules.yolo_detection.remote.bench --url http://<orin-ip>:8082 --images <dir> --count 200
+```
+
+`<dir>` 은 시뮬레이터 녹화 프레임 JPEG 디렉터리다. 없으면 5단계의 `bench_frames` 를 `rsync -av <user>@<orin-ip>:~/wavepilot/bench_frames/ <dir>/` 로 받아 쓴다.
+
+**기대 결과:** n, 그리고 total_ms / orin_ms / net_ms 각각의 p50 / p95 / max 와 실패 수가 표로 나온다.
+
+**실패 시:** 연결 오류면 R5 를 다시 한다. 실패 수가 많으면 출력 전체와 `docker compose logs --tail 50 yolo-server` 를 보고한다.
+
+### R7. 시뮬레이터 연동 (상태 변경, Mac)
+
+**목적:** 브라우저 시뮬레이터 프레임을 Orin 서버로 탐지해 실제 실행 경로에서 지연을 잰다.
+
+**명령 (Mac, WavePilot 디렉터리에서, 둘 중 하나 또는 둘 다):**
+
+```bash
+uv run python -m modules.drone.run_scenario --sim browser --yolo orin --yolo-url http://<orin-ip>:8082 --operator-port <port>
+uv run python -m modules.drone.sim_demo --live --yolo orin --yolo-url http://<orin-ip>:8082
+```
+
+`--yolo local` (기본값) 로 바꾸면 다른 변경 없이 Mac 로컬 YOLO 로 돌아간다. orin 모드에서는 Mac 에 yolo uv 그룹이 없어도 된다.
+
+**기대 결과:** 브라우저 오버레이에 탐지 상자가 나오고, 종료 시 INFO 로그에 n 과 total / orin / net 의 p50 / p95 / max, 실패 수 요약이 찍힌다.
+
+**실패 시:** 시작하자마자 오류로 끝나면 서버 미기동이다 (R3·R5 확인). 연속 실패로 멈추면 그 직전 경고 로그와 `docker compose logs --tail 50 yolo-server` 를 보고한다.
+
+### R8. 종료 (상태 변경, Orin)
+
+**목적:** 서버를 내리고 R2 에서 멈춘 서버를 되돌린다.
+
+**명령 (Orin):**
+
+```bash
+cd ~/wavepilot/modules/yolo_detection/deploy/jetson && docker compose down
+cd ~/wavepilot/modules/llm_report/deploy/jetson && docker compose up -d llama-report
+```
+
+두 번째 줄은 R2 에서 llama-report 를 멈췄고 다시 쓸 때만 실행한다 (llama-decision 도 같은 방식으로 자기 디렉터리에서).
+
+**기대 결과:** `docker ps` 에 `yolo-server` 가 없다.
+
+**실패 시:** `down` 이 멈추면 `docker compose kill yolo-server` 후 다시 `down` 한다.
+
+### 보고 양식 (Phase 7)
+
+맨 앞에 `orin yolo server ok` (또는 실패한 R 단계) 를 적고, 아래 항목을 붙여 넣는다.
+
+```text
+orin yolo server ok
+Docker 이미지 태그 / digest: (R1)
+yolo11n.engine 크기: (R1)
+/health JSON: (R5)
+Mac <-> Orin 연결: Wi-Fi / Ethernet
+bench n: / 실패 수:
+bench total_ms p50 / p95 / max:
+bench orin_ms p50 / p95 / max:
+bench net_ms p50 / p95 / max:
+run_scenario 또는 sim_demo 종료 요약 (n, total / orin / net 의 p50 / p95 / max, 실패 수):
+실행 중 free -h Mem used/total: (Orin)
+R2 에서 멈춘 서버: 없음 / llama-report / llama-decision
+실패 시: R 단계 + docker compose logs --tail 50 yolo-server
+```
+
+에이전트가 `.planning/phases/07-orin-yolo/07-ORIN-RESULTS.md` 에 옮긴다.
