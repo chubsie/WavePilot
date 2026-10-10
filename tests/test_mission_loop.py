@@ -17,7 +17,6 @@ from modules.drone.mission_loop import (
     END_LANDED,
     END_RETURN_FAILED,
     END_TAKEOFF_REJECTED,
-    EVENT_MAX_MISSION_TIME,
     EVENT_RETURN_RETRY,
     SOURCE_FORCED,
     MissionConfig,
@@ -26,6 +25,19 @@ from modules.drone.mission_loop import (
 )
 from modules.drone.run_mission import MOCK_DETECTION_RANGE_M, RangeLimitedTargetSource
 from modules.flight_control.interface import CommandAck, FireHeart, TakeOff
+from modules.mission.mission_log import (
+    KIND_DETECTION,
+    KIND_HEART,
+    KIND_LINK,
+    KIND_MISSION,
+    KIND_MODE_TRANSITION,
+    KIND_RETURN,
+    KIND_SELECTION,
+    MissionLog,
+)
+from modules.mission.mode_machine import MODE_AI, MODE_MANUAL, REASON_OPERATOR, ModeTransition
+from modules.mission.operator import ScriptedOperator
+from modules.mission.safety import REASON_MAX_FLIGHT_TIME
 from modules.perception.interface import DEFAULT_CAMERA
 from modules.perception.tracking import TrackAggregator
 from modules.rule_mode.factory import SUPPORTED_RULE_MODES, create_rule_mode
@@ -201,8 +213,10 @@ def build_runner(
     settings=None,
     source_wrapper=None,
     control_wrapper=None,
+    on_advance=None,
     **overrides,
 ):
+    """on_advance(flight) 는 advance 직후 불린다 — 시각 기준으로 ScriptedOperator·flight 속성을 바꿔 주입한다."""
     flight = KinematicFlightControl()
     defaults = ParamDefaults()
     source = RangeLimitedTargetSource(ScriptedTargetSource(flight, list(targets)), flight, MOCK_DETECTION_RANGE_M)
@@ -210,6 +224,11 @@ def build_runner(
         source = source_wrapper(source, flight)
     if control_wrapper is not None:
         flight = control_wrapper(flight)
+
+    def advance(dt_sec: float) -> None:
+        flight.advance(dt_sec)
+        if on_advance is not None:
+            on_advance(flight)
 
     runner = MissionRunner(
         flight_control=flight,
@@ -219,7 +238,7 @@ def build_runner(
         param_defaults=defaults,
         settings=settings or build_rule_mode_settings(defaults),
         clock=lambda: flight.now_sec,
-        advance=flight.advance,
+        advance=advance,
         config=config or MissionConfig(max_mission_sec=120.0),
         **overrides,
     )
@@ -406,7 +425,7 @@ def test_loop_accepts_any_decision_model():
 # --- 임무 루프: 최대 임무 시간 / 복귀 재시도 / 이륙 거절 ---
 
 
-def test_max_mission_time_forces_return_home_without_selector():
+def test_max_flight_time_forces_return_home_without_selector():
     selector = ScriptedSelector(["hold"])
     runner, _ = build_runner(selector, config=MissionConfig(max_mission_sec=20.0))
 
@@ -414,13 +433,17 @@ def test_max_mission_time_forces_return_home_without_selector():
 
     assert result.is_success
     assert result.forced_return
+    assert result.return_reason == REASON_MAX_FLIGHT_TIME
     assert result.final_flight_mode == "grounded"
     assert len(selector.calls) == 1
     forced = result.selections[-1]
-    assert forced.event_kind == EVENT_MAX_MISSION_TIME
+    assert forced.event_kind == REASON_MAX_FLIGHT_TIME
     assert forced.source == SOURCE_FORCED
+    assert forced.confidence is None
     assert forced.rule_mode == "return_home"
     assert result.mode_results[-1].rule_mode == "return_home"
+    last_transition = result.transitions[-1]
+    assert (last_transition.from_mode, last_transition.to_mode, last_transition.reason) == ("AI", "RETURN", REASON_MAX_FLIGHT_TIME)
 
 
 def _make_short_timeout_factory(short_count: int):
@@ -471,3 +494,167 @@ def test_takeoff_rejected_ends_without_selection():
     assert result.end_reason == END_TAKEOFF_REJECTED
     assert not result.is_success
     assert selector.calls == []
+
+
+# --- 임무 루프: 운용 모드 MANUAL/AI (MIS-02, MIS-03, D-07, D-08) ---
+
+
+def get_commands_between(flight, start_sec: float, end_sec: float) -> list:
+    return [command for time_sec, command in flight.commands_received if start_sec <= time_sec < end_sec]
+
+
+def get_transition_pairs(result) -> list[tuple[str, str, str]]:
+    return [(transition.from_mode, transition.to_mode, transition.reason) for transition in result.transitions]
+
+
+def test_default_operator_switches_manual_to_ai_on_first_tick_and_takes_off():
+    selector = ScriptedSelector(["return_home"])
+    runner, flight = build_runner(selector)
+
+    result = runner.run()
+
+    assert result.is_success
+    assert result.transitions == (ModeTransition(0.0, MODE_MANUAL, MODE_AI, REASON_OPERATOR),)
+    assert flight.commands_received[0][1] == TakeOff(15.0)
+    assert result.return_reason is None
+    assert result.selections[0].confidence == 1.0
+
+
+def test_mission_waits_in_manual_until_operator_requests_ai():
+    operator = ScriptedOperator(ai_requested=False)
+
+    def request_ai_after_three_seconds(flight):
+        if flight.now_sec >= 3.0:
+            operator.ai_requested = True
+
+    selector = ScriptedSelector(["return_home"])
+    runner, flight = build_runner(selector, operator=operator, on_advance=request_ai_after_three_seconds)
+
+    result = runner.run()
+
+    first_time_sec, first_command = flight.commands_received[0]
+    assert result.end_reason == END_LANDED
+    assert first_command == TakeOff(15.0)
+    assert first_time_sec >= 3.0
+    assert result.transitions[0].time_sec == first_time_sec
+
+
+def test_manual_during_takeoff_pauses_and_resends_takeoff():
+    operator = ScriptedOperator()
+
+    def take_over_between_one_and_four_seconds(flight):
+        operator.ai_requested = not 1.0 <= flight.now_sec < 4.0
+
+    selector = ScriptedSelector(["return_home"])
+    runner, flight = build_runner(selector, operator=operator, on_advance=take_over_between_one_and_four_seconds)
+
+    result = runner.run()
+
+    takeoffs = [command for _, command in flight.commands_received if isinstance(command, TakeOff)]
+    assert result.end_reason == END_LANDED
+    assert len(takeoffs) == 2
+    assert get_commands_between(flight, 1.0, 4.0) == []
+    assert get_transition_pairs(result) == [
+        (MODE_MANUAL, MODE_AI, REASON_OPERATOR),
+        (MODE_AI, MODE_MANUAL, REASON_OPERATOR),
+        (MODE_MANUAL, MODE_AI, REASON_OPERATOR),
+    ]
+
+
+def test_ai_to_manual_stops_commands_and_resume_selects_immediately():
+    operator = ScriptedOperator()
+
+    def take_over_between_thirty_and_forty_seconds(flight):
+        operator.ai_requested = not 30.0 <= flight.now_sec < 40.0
+
+    selector = ScriptedSelector(["search", "return_home"])
+    runner, flight = build_runner(
+        selector, targets=(), operator=operator, on_advance=take_over_between_thirty_and_forty_seconds
+    )
+
+    result = runner.run()
+
+    resume = result.transitions[-1]
+    assert result.end_reason == END_LANDED
+    assert get_commands_between(flight, 30.0, 40.0) == []
+    assert get_transition_pairs(result) == [
+        (MODE_MANUAL, MODE_AI, REASON_OPERATOR),
+        (MODE_AI, MODE_MANUAL, REASON_OPERATOR),
+        (MODE_MANUAL, MODE_AI, REASON_OPERATOR),
+    ]
+    assert resume.time_sec >= 40.0
+    assert len(selector.calls) == 2
+    assert result.selections[1].time_sec == resume.time_sec
+    assert result.selections[1].event_kind == "periodic_check"
+    assert result.selections[1].rule_mode == "return_home"
+
+
+def test_resume_after_manual_keeps_hearted_tracks():
+    operator = ScriptedOperator()
+    takeover = {}
+
+    def take_over_after_burst(flight):
+        hearts = get_fire_hearts(flight)
+        if len(hearts) >= 10 and "start_sec" not in takeover:
+            takeover["start_sec"] = flight.now_sec
+            operator.ai_requested = False
+        if "start_sec" in takeover and flight.now_sec >= takeover["start_sec"] + 5.0:
+            operator.ai_requested = True
+
+    selector = ScriptedSelector(["search", "aim_and_fire", "hold"])
+    runner, flight = build_runner(selector, operator=operator, on_advance=take_over_after_burst)
+
+    result = runner.run()
+
+    resume = result.transitions[2]
+    selector_records = [record for record in result.selections if record.source != SOURCE_FORCED]
+    resume_index = next(index for index, record in enumerate(selector_records) if record.time_sec == resume.time_sec)
+    resume_state, _ = selector.calls[resume_index]
+    assert result.end_reason == END_LANDED
+    assert (resume.from_mode, resume.to_mode) == (MODE_MANUAL, MODE_AI)
+    assert resume_state.mission.hearted_tracks == ("T1",)
+    assert [heart.track_id for heart in get_fire_hearts(flight)] == [1] * 10
+
+
+# --- 임무 루프: 상태 알림·구조화 로그 (LOG-01, GUARD-03) ---
+
+
+def test_on_status_reports_mode_link_and_running_mode_every_tick():
+    statuses = []
+    selector = ScriptedSelector(["return_home"])
+    runner, _ = build_runner(selector, on_status=statuses.append)
+
+    result = runner.run()
+
+    assert result.is_success
+    assert len(statuses) > 10
+    assert all(
+        set(status) == {"mode", "reason", "link_connected", "link_last_heartbeat_sec", "running_mode", "t"}
+        for status in statuses
+    )
+    assert all(status["mode"] == MODE_AI for status in statuses)
+    assert statuses[0]["reason"] == REASON_OPERATOR
+    assert statuses[-1]["running_mode"] == "return_home"
+    assert statuses[-1]["link_connected"] is True
+    assert statuses[-1]["link_last_heartbeat_sec"] == statuses[-1]["t"]
+
+
+def test_mission_log_records_structured_kinds():
+    mission_log = MissionLog()
+    selector = RuleSelector(ParamDefaults())
+    runner, _ = build_runner(selector, config=MissionConfig(max_mission_sec=300.0), mission_log=mission_log)
+
+    result = runner.run()
+
+    records = mission_log.records
+    kinds = {record["kind"] for record in records}
+    selection_records = [record for record in records if record["kind"] == KIND_SELECTION]
+    mission_records = [record for record in records if record["kind"] == KIND_MISSION]
+    detection_records = [record for record in records if record["kind"] == KIND_DETECTION]
+    assert result.is_success
+    assert {KIND_MODE_TRANSITION, KIND_SELECTION, KIND_DETECTION, KIND_HEART, KIND_RETURN, KIND_LINK, KIND_MISSION} <= kinds
+    assert all({"source", "confidence", "fallback", "params", "mode"} <= set(record) for record in selection_records)
+    assert len(mission_records) == 1
+    assert mission_records[0]["event"] == "end"
+    assert mission_records[0]["end_reason"] == END_LANDED
+    assert 0 < len(detection_records) < 10
