@@ -201,10 +201,13 @@ $('flexBent').onclick = () => calibrateFlex('bent');
 // ---------- Buttons and flight mode ----------
 // Firmware sends a bitmask: bit0 = middle finger (flash LEDs while held), bit1 = thumb (toggle mode).
 const buttons = { mask: 0, middle: false, key: false };
-const mode = { ai: false, aiYaw: 0 };
+const mode = { ai: false, aiYaw: 0, aiAgl: 9 };   // aiAgl: height above ground to hold while in AI mode
 function setMode(ai) {
   mode.ai = ai;
-  if (ai) mode.aiYaw = shown.yaw;
+  if (ai) {
+    mode.aiYaw = shown.yaw;                                   // keep the current heading
+    mode.aiAgl = Math.max(2, flight.alt - Math.max(terrainHeight(flight.pos.x, flight.pos.z), 0));   // keep the current height
+  }
   $('mode').textContent = ai ? 'Mode: AI (circling)' : 'Mode: Manual';
   $('modeBadge').classList.toggle('ai', ai);
   $('view').classList.toggle('ai', ai);
@@ -662,7 +665,7 @@ function frame() {
   if (mode.ai) {
     // Constant-speed circle; hold altitude above the terrain
     flight.vel.set(fwd.x * AI_SPEED, flight.vel.y, fwd.z * AI_SPEED);
-    const target = ground + HOVER_AGL;
+    const target = ground + mode.aiAgl;
     flight.vel.y = (target - flight.alt) * 1.5;
     flight.auto = true;
     flight.throttle = 0.5;
