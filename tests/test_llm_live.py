@@ -87,6 +87,8 @@ def build_minimal_report_schema(track_ids: tuple[str, ...]) -> dict:
             "track_ids": {
                 "type": "array",
                 "minItems": 1,
+                # 상한이 없으면 4B 모델이 enum 안의 ID 를 끝없이 반복해 max_tokens 에서 잘린다(Orin 실측)
+                "maxItems": len(track_ids),
                 "items": {"type": "string", "enum": sorted(track_ids)},
             },
         },

@@ -37,7 +37,7 @@ ANSWER_SCHEMA = {
 TRACK_IDS_SCHEMA = {
     "type": "object",
     "properties": {
-        "track_ids": {"type": "array", "items": {"type": "string", "enum": ["T-7"]}, "minItems": 1},
+        "track_ids": {"type": "array", "items": {"type": "string", "enum": ["T-7"]}, "minItems": 1, "maxItems": 2},
     },
     "required": ["track_ids"],
     "additionalProperties": False,
