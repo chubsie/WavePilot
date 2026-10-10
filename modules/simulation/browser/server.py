@@ -7,7 +7,9 @@
 와이어 프로토콜:
 1. POST /sim/frame?seq=<0..2^31>  — body image/jpeg, 헤더 X-Telemetry(Telemetry JSON) → 204
 2. POST /sim/telemetry            — body JSON {telemetry, ai_mode, events, operator_link?} → 200 {commands, detections, status, mission}
-3. GET  /<file>                   — tools/visualizer/ 정적 파일 (페이지 /drone_camera.html)
+                                     events 의 kind 는 goal_reached | heart_shot (heart_shot 은 Phase 6 D-10 발사 판정)
+3. GET  /sim/scenario?id=<id>     — 200 브라우저 시나리오 dict (Phase 6 C1) / 400 잘못된 id·파일 / 404 파일 없음
+4. GET  /<file>                   — tools/visualizer/ 정적 파일 (페이지 /drone_camera.html)
 
 잘못된 요청은 400 으로 거절하고 bridge 를 건드리지 않는다. 본문은 길이를 먼저 검증한 뒤에만 읽는다.
 표준 라이브러리만 쓴다. 기본은 루프백 바인딩이고 인증은 없다(로컬 시뮬레이터 전용).
@@ -25,7 +27,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from modules.flight_control.interface import Telemetry
-from modules.simulation.browser.bridge import BrowserFrame, SimBridge
+from modules.simulation.browser.bridge import HEART_SHOT_EVENT, BrowserFrame, SimBridge
 
 VISUALIZER_DIR = Path(__file__).resolve().parents[3] / "tools" / "visualizer"
 DEFAULT_HOST = "127.0.0.1"
@@ -35,15 +37,23 @@ MAX_FRAME_BYTES = 10 * 1024 * 1024  # 1280x720 jpg 는 수백 KB — 이보다 �
 MAX_TELEMETRY_BYTES = 64 * 1024
 MAX_TELEMETRY_HEADER_BYTES = 8 * 1024
 MAX_FRAME_SEQ = 2**31
-MAX_EVENTS_PER_POST = 32
+MAX_EVENTS_PER_POST = 32  # sim_link.js MAX_EVENTS_PER_POST 와 같은 값
+MAX_ACTOR_ID_CHARS = 32
 
 FRAME_PATH = "/sim/frame"
 TELEMETRY_PATH = "/sim/telemetry"
+SCENARIO_PATH = "/sim/scenario"
 GOAL_REACHED_EVENT = "goal_reached"
 
 
 class SimRequestHandler(SimpleHTTPRequestHandler):
-    """POST 는 와이어 프로토콜, GET 은 SimpleHTTPRequestHandler 그대로(directory= 안으로 한정)."""
+    """POST 와 GET /sim/scenario 는 와이어 프로토콜, 나머지 GET 은 SimpleHTTPRequestHandler 그대로(directory= 안으로 한정)."""
+
+    def do_GET(self) -> None:
+        if urlparse(self.path).path == SCENARIO_PATH:
+            self._handle_scenario()
+        else:
+            super().do_GET()
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
@@ -54,6 +64,31 @@ class SimRequestHandler(SimpleHTTPRequestHandler):
             self._handle_telemetry()
         else:
             self.send_error(HTTPStatus.NOT_FOUND)
+
+    def _handle_scenario(self) -> None:
+        scenario_id = _get_single(parse_qs(urlparse(self.path).query), "id")
+        if scenario_id is None:
+            self.send_error(HTTPStatus.BAD_REQUEST, "id is required")
+            return
+
+        # 지연 import — compare_scenario(06-01)가 없어도 서버·기존 테스트가 import 되게
+        from modules.simulation.compare_scenario import (
+            SCENARIOS_DIR,
+            load_compare_scenario,
+            scenario_to_browser_dict,
+        )
+
+        scenarios_dir = self.server.scenarios_dir or SCENARIOS_DIR
+        try:
+            scenario = load_compare_scenario(scenario_id, scenarios_dir)
+        except FileNotFoundError:
+            self.send_error(HTTPStatus.NOT_FOUND, f"scenario not found: {scenario_id}")
+            return
+        except ValueError as error:  # id 패턴 불일치(경로 조작 방지)·TOML 문법·필드 오류
+            self.send_error(HTTPStatus.BAD_REQUEST, f"invalid scenario: {error}")
+            return
+
+        self._send_json(scenario_to_browser_dict(scenario))
 
     def _handle_frame(self) -> None:
         seq_text = _get_single(parse_qs(urlparse(self.path).query), "seq")
@@ -111,8 +146,10 @@ class SimRequestHandler(SimpleHTTPRequestHandler):
             "status": bridge.status(),
             "mission": bridge.mission_status(),
         }
+        self._send_json(response)
 
-        payload = json.dumps(response).encode("utf-8")
+    def _send_json(self, body: dict) -> None:
+        payload = json.dumps(body).encode("utf-8")
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(payload)))
@@ -172,9 +209,16 @@ def parse_telemetry_post(payload: object) -> tuple[Telemetry, bool, list[dict], 
 
 
 def _parse_event(event: object) -> dict:
-    if not isinstance(event, dict) or event.get("kind") != GOAL_REACHED_EVENT:
-        raise ValueError(f"event must be {{'kind': '{GOAL_REACHED_EVENT}', ...}}, got {event!r}")
+    kind = event.get("kind") if isinstance(event, dict) else None
 
+    if kind == GOAL_REACHED_EVENT:
+        return _parse_goal_reached(event)
+    if kind == HEART_SHOT_EVENT:
+        return _parse_heart_shot(event)
+    raise ValueError(f"event kind must be '{GOAL_REACHED_EVENT}' or '{HEART_SHOT_EVENT}', got {event!r}")
+
+
+def _parse_goal_reached(event: dict) -> dict:
     command_id = event.get("command_id")
     if not isinstance(command_id, int) or isinstance(command_id, bool):
         raise ValueError(f"event 'command_id' must be an int, got {command_id!r}")
@@ -187,17 +231,45 @@ def _parse_event(event: object) -> dict:
     return {"kind": GOAL_REACHED_EVENT, "command_id": command_id, "time_sec": float(time_sec)}
 
 
+def _parse_heart_shot(event: dict) -> dict:
+    """발 1개 = 이벤트 1개. actor_id 는 화면 중앙 광선에 맞은 배우 id, 빗나가면 None (Phase 6 D-10)."""
+    track_id = event.get("track_id")
+    if not isinstance(track_id, int) or isinstance(track_id, bool):
+        raise ValueError(f"event 'track_id' must be an int, got {track_id!r}")
+
+    time_sec = event.get("time_sec")
+    if not isinstance(time_sec, (int, float)) or isinstance(time_sec, bool):
+        raise ValueError(f"event 'time_sec' must be a number, got {time_sec!r}")
+
+    actor_id = event.get("actor_id")
+    is_valid_actor_id = isinstance(actor_id, str) and 1 <= len(actor_id) <= MAX_ACTOR_ID_CHARS
+    if actor_id is not None and not is_valid_actor_id:
+        raise ValueError(f"event 'actor_id' must be null or a 1..{MAX_ACTOR_ID_CHARS} char string, got {actor_id!r}")
+
+    # 화이트리스트한 키만 남긴다
+    return {"kind": HEART_SHOT_EVENT, "track_id": track_id, "time_sec": float(time_sec), "actor_id": actor_id}
+
+
 def _get_single(query: dict, key: str) -> str | None:
     values = query.get(key)
     return values[0] if values else None
 
 
-def start_sim_server(bridge: SimBridge, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> ThreadingHTTPServer:
-    """백그라운드 데몬 스레드에서 서버를 띄운다. port=0 이면 OS 가 빈 포트를 고른다(server.server_address)."""
+def start_sim_server(
+    bridge: SimBridge,
+    host: str = DEFAULT_HOST,
+    port: int = DEFAULT_PORT,
+    scenarios_dir: Path | None = None,
+) -> ThreadingHTTPServer:
+    """백그라운드 데몬 스레드에서 서버를 띄운다. port=0 이면 OS 가 빈 포트를 고른다(server.server_address).
+
+    scenarios_dir 이 None 이면 GET /sim/scenario 는 compare_scenario.SCENARIOS_DIR 를 쓴다(테스트만 tmp 경로를 넘긴다).
+    """
     handler = functools.partial(SimRequestHandler, directory=str(VISUALIZER_DIR))
 
     server = ThreadingHTTPServer((host, port), handler)
     server.sim_bridge = bridge  # 핸들러는 self.server.sim_bridge 로 읽는다 — 클래스 상태 없음
+    server.scenarios_dir = scenarios_dir
     server.daemon_threads = True
 
     threading.Thread(target=server.serve_forever, daemon=True, name="sim-http").start()

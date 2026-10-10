@@ -7,6 +7,7 @@ import pytest
 
 from modules.flight_control.interface import FireHeart, GoTo, Telemetry
 from modules.simulation.browser.bridge import (
+    HEART_SHOT_LIMIT,
     LINK_TIMEOUT_SEC,
     OPERATOR_LINK_TIMEOUT_SEC,
     RECENT_EVENT_LIMIT,
@@ -70,6 +71,7 @@ def test_new_bridge_is_empty(bridge: SimBridge) -> None:
     assert bridge.status() == {"frame_fps": 0.0, "yolo_latency_ms": None}
     assert bridge.operator_link_status() == (False, None)
     assert bridge.mission_status() is None
+    assert bridge.drain_heart_shots() == []
 
 
 # --- 텔레메트리·연결 ---
@@ -199,6 +201,49 @@ def test_recent_events_are_copied(bridge: SimBridge, hover_telemetry: Telemetry)
     event["kind"] = "tampered"
 
     assert bridge.recent_events() == ({"kind": "heart_hit"},)
+
+
+# --- heart_shot 큐 (Phase 6 D-10) ---
+
+
+def _make_heart_shot(track_id: int, time_sec: float, actor_id: str | None = "red_1") -> dict:
+    return {"kind": "heart_shot", "track_id": track_id, "time_sec": time_sec, "actor_id": actor_id}
+
+
+def test_heart_shots_are_queued_apart_from_recent_events(bridge: SimBridge, hover_telemetry: Telemetry) -> None:
+    goal = {"kind": "goal_reached", "command_id": 1, "time_sec": 1.0}
+    first_shot = _make_heart_shot(3, 1.1)
+    second_shot = _make_heart_shot(3, 1.2, actor_id=None)
+
+    bridge.update_from_browser(hover_telemetry, True, [goal, first_shot, second_shot])
+
+    assert bridge.recent_events() == (goal,)
+    assert bridge.drain_heart_shots() == [first_shot, second_shot]
+
+
+def test_heart_shots_drain_once(bridge: SimBridge, hover_telemetry: Telemetry) -> None:
+    bridge.update_from_browser(hover_telemetry, True, [_make_heart_shot(1, 0.5)])
+
+    assert bridge.drain_heart_shots() == [_make_heart_shot(1, 0.5)]
+    assert bridge.drain_heart_shots() == []
+
+
+def test_heart_shots_keep_last_limit(bridge: SimBridge, hover_telemetry: Telemetry) -> None:
+    shots = [_make_heart_shot(n, float(n)) for n in range(HEART_SHOT_LIMIT + 5)]
+
+    bridge.update_from_browser(hover_telemetry, True, shots)
+
+    assert HEART_SHOT_LIMIT == 1000
+    assert bridge.drain_heart_shots() == shots[5:]
+
+
+def test_heart_shots_are_copied(bridge: SimBridge, hover_telemetry: Telemetry) -> None:
+    shot = _make_heart_shot(2, 3.0)
+
+    bridge.update_from_browser(hover_telemetry, True, [shot])
+    shot["actor_id"] = "tampered"
+
+    assert bridge.drain_heart_shots() == [_make_heart_shot(2, 3.0)]
 
 
 # --- 프레임 슬롯 ---

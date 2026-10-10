@@ -1,8 +1,12 @@
-"""시뮬레이터 HTTP 서버 — 정적 파일, POST /sim/frame, POST /sim/telemetry 와이어 프로토콜 (SIM-02, X-01)."""
+"""시뮬레이터 HTTP 서버 — 정적 파일, POST /sim/frame, POST /sim/telemetry, GET /sim/scenario 와이어 프로토콜 (SIM-02, X-01).
+
+Phase 6: 텔레메트리 events 의 heart_shot(발마다 맞은 배우, D-10), 비교 시나리오 GET(D-05), sim_link.js 헬퍼 node 테스트.
+"""
 
 import http.client
 import json
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 
@@ -44,6 +48,12 @@ def make_telemetry_post(**overrides: object) -> dict:
     }
     body.update(overrides)
     return body
+
+
+def make_heart_shot(**overrides: object) -> dict:
+    shot = {"kind": "heart_shot", "track_id": 3, "time_sec": 4.5, "actor_id": "red_1"}
+    shot.update(overrides)
+    return shot
 
 
 @pytest.fixture
@@ -265,9 +275,16 @@ def test_parse_telemetry_post_returns_operator_link() -> None:
         make_telemetry_post(events=[{"kind": "other", "command_id": 1, "time_sec": 1.0}]),
         make_telemetry_post(events=[{"kind": "goal_reached", "command_id": True, "time_sec": 1.0}]),
         make_telemetry_post(operator_link="yes"),
+        make_telemetry_post(events=[make_heart_shot(track_id=True)]),
+        make_telemetry_post(events=[make_heart_shot(track_id="3")]),
+        make_telemetry_post(events=[make_heart_shot(time_sec="4.5")]),
+        make_telemetry_post(events=[make_heart_shot(actor_id="")]),
+        make_telemetry_post(events=[make_heart_shot(actor_id="a" * 33)]),
+        make_telemetry_post(events=[make_heart_shot(actor_id=7)]),
     ],
     ids=["not-json", "json-list", "ai-mode-str", "missing-telemetry", "events-not-list", "event-kind-other",
-         "event-id-bool", "operator-link-str"],
+         "event-id-bool", "operator-link-str", "shot-track-bool", "shot-track-str", "shot-time-str",
+         "shot-actor-empty", "shot-actor-long", "shot-actor-int"],
 )
 def test_invalid_telemetry_post_does_not_drain_commands(sim_server, body) -> None:
     bridge, port = sim_server
@@ -291,3 +308,96 @@ def test_oversize_telemetry_post_is_rejected_and_keeps_commands(sim_server) -> N
     assert status == 400
     _, _, valid_body = post_telemetry(port, make_telemetry_post())
     assert json.loads(valid_body)["commands"] == [{"id": 1, **GOTO_COMMAND.to_dict()}]
+
+
+# --- heart_shot 이벤트 (Phase 6 D-10) ---
+
+
+def test_heart_shot_event_reaches_bridge_queue(sim_server) -> None:
+    bridge, port = sim_server
+
+    status, _, _ = post_telemetry(port, make_telemetry_post(events=[make_heart_shot(extra=1)]))
+
+    assert status == 200
+    assert bridge.drain_heart_shots() == [make_heart_shot()]
+    assert bridge.recent_events() == ()
+
+
+def test_heart_shot_with_null_actor_is_accepted(sim_server) -> None:
+    bridge, port = sim_server
+
+    status, _, _ = post_telemetry(port, make_telemetry_post(events=[make_heart_shot(actor_id=None)]))
+
+    assert status == 200
+    assert bridge.drain_heart_shots() == [make_heart_shot(actor_id=None)]
+
+
+# --- GET /sim/scenario (Phase 6 D-05) ---
+
+BASIC_SCENARIO_TOML = """\
+name = "basic"
+description = "red soldier and a car"
+mission = "missions/compare.toml"
+battery_pct = 100.0
+
+[[actors]]
+id = "red_1"
+model = "soldier"
+north_m = 16.0
+east_m = -3.0
+heading_deg = 90.0
+walk_m = 6.0
+shirt = "red"
+shirt_rgb = [208, 24, 24]
+
+[[actors]]
+id = "car_1"
+model = "car"
+north_m = 25.0
+east_m = 9.0
+heading_deg = 60.0
+"""
+
+
+@pytest.fixture
+def scenario_server(tmp_path: Path) -> Iterator[int]:
+    (tmp_path / "basic.toml").write_text(BASIC_SCENARIO_TOML, encoding="utf-8")
+    (tmp_path / "broken.toml").write_text("name = [unclosed\n", encoding="utf-8")
+    bridge = SimBridge()
+    server = start_sim_server(bridge, port=0, scenarios_dir=tmp_path)
+
+    yield server.server_address[1]
+
+    bridge.close()
+    server.shutdown()
+    server.server_close()
+
+
+def test_scenario_get_returns_browser_dict(scenario_server) -> None:
+    status, headers, body = request(scenario_server, "GET", "/sim/scenario?id=basic")
+
+    scenario = json.loads(body)
+    assert status == 200
+    assert headers["Content-Type"] == "application/json"
+    assert scenario["id"] == "basic"
+    assert scenario["actors"][0]["id"] == "red_1"
+    assert scenario["actors"][0]["model"] == "Soldier.glb"
+    assert scenario["actors"][0]["dx"] == -3.0
+    assert scenario["actors"][0]["dz"] == -16.0
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/sim/scenario", "/sim/scenario?id=../pyproject", "/sim/scenario?id=BAD", "/sim/scenario?id=broken"],
+    ids=["missing-id", "path-traversal", "bad-pattern", "broken-toml"],
+)
+def test_scenario_get_rejects_bad_id(scenario_server, path) -> None:
+    status, _, _ = request(scenario_server, "GET", path)
+
+    assert status == 400
+
+
+def test_scenario_get_missing_file_is_404(scenario_server) -> None:
+    status, _, _ = request(scenario_server, "GET", "/sim/scenario?id=missing")
+
+    assert status == 404
