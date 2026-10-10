@@ -42,6 +42,7 @@
   const GOTO_GAIN_PER_SEC = 1.0;
   const GOAL_REACHED_HORIZONTAL_M = 1.0;
   const GOAL_REACHED_VERTICAL_M = 0.5;
+  const RTH_MIN_ALTITUDE_M = 10;   // 지상에서 받은 return_to_home 도 이 높이로 떠서 돌아온다
   const YAW_RATE_DPS = 90;
   const GIMBAL_RATE_DPS = 120;
 
@@ -173,7 +174,9 @@
           return true;
         }
         case 'return_to_home': {
-          motion = { kind: 'return', phase: 'fly', downM: lastPose.downM };
+          // 홈(첫 페어링 지점, NED 0/0) 상공으로 날아가 호버한다 — 착륙하지 않는다
+          const downM = Math.min(lastPose.downM, -RTH_MIN_ALTITUDE_M);
+          motion = { kind: 'goto', northM: 0, eastM: 0, downM, commandId: command.id };
           autopilot.flightMode = 'returning';
           return true;
         }
@@ -247,15 +250,6 @@
       }
 
       if (motion.kind === 'land') return stepDescent(pose);
-
-      if (motion.kind === 'return') {
-        if (motion.phase === 'fly') {
-          const toward = velocityToward(pose, 0, 0, motion.downM);
-          if (toward.horizontalM > GOAL_REACHED_HORIZONTAL_M) return toward;
-          motion.phase = 'descend';
-        }
-        return stepDescent(pose);
-      }
 
       return stopped;
     }
@@ -563,7 +557,7 @@
     BATTERY_FULL_SEC,
     MAX_HORIZONTAL_MPS, MAX_VERTICAL_MPS, MAX_VELOCITY_DURATION_SEC,
     GIMBAL_PITCH_MIN_DEG, GIMBAL_PITCH_MAX_DEG, GIMBAL_YAW_MIN_DEG, GIMBAL_YAW_MAX_DEG, DEFAULT_GIMBAL_PITCH_DEG,
-    GOTO_SPEED_MPS, CLIMB_SPEED_MPS, LAND_SPEED_MPS, GOAL_REACHED_HORIZONTAL_M, GOAL_REACHED_VERTICAL_M,
+    GOTO_SPEED_MPS, CLIMB_SPEED_MPS, LAND_SPEED_MPS, GOAL_REACHED_HORIZONTAL_M, GOAL_REACHED_VERTICAL_M, RTH_MIN_ALTITUDE_M,
     YAW_RATE_DPS, GIMBAL_RATE_DPS, HEART_DURATION_SEC, MAX_RECENT_ITEMS, DETECTION_STALE_SEC, MAX_PENDING_EVENTS,
     wrapYawDeg, nedToGps, parseBatteryStartPct, batteryPctAt,
     createAutopilot, createLink,

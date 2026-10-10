@@ -51,10 +51,10 @@ def build_demo_steps() -> list[DemoStep]:
         DemoStep(SetYaw(yaw_deg=90.0), hold_sec=3.0),
         DemoStep(SetGimbal(pitch_deg=-45.0, yaw_deg=30.0), hold_sec=3.0),
         DemoStep(SetVelocity(north_mps=0.0, east_mps=3.0, down_mps=0.0, duration_sec=2.0), hold_sec=3.0),
+        DemoStep(Land(), hold_sec=8.0),
         DemoStep(FireHeart(track_id=1), hold_sec=2.0),
-        # 홈 = 첫 페어링 위치 — 약 22 m 이동(6 m/s) + 15 m 하강(1 m/s)
-        DemoStep(ReturnToHome(), hold_sec=22.0),
-        DemoStep(Land(), hold_sec=2.0),
+        # 홈 = 첫 페어링 위치. 그 상공으로 날아가 호버한다(착륙 안 함) — 지상이면 10 m 로 떠서 간다
+        DemoStep(ReturnToHome(), hold_sec=10.0),
     ]
 
 
