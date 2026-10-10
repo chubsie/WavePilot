@@ -2,7 +2,7 @@
 
 - 날짜: 2026-10-11
 - 브랜치: feat/phase-07-orin-yolo ← feat/phase-02-sim @ 86bed74 (worktree WavePilot-phase07)
-- 머지: 미머지 — base(feat/phase-02-sim)가 다른 세션에서 진행 중이라 그 체크아웃을 건드리지 않음. 07-02 는 Phase 2 확정 후 이 브랜치에서 이어간다
+- 머지: feat/llm 에 --no-ff 머지 73c631d (Phase 2 머지 d939c4f 이후, phase-07 브랜치에 feat/llm 반영 후 1094 passed 확인)
 - 번호: 005 는 Phase 2 sub-flow 기록용으로 비워 둠
 
 ## 배경
