@@ -1,11 +1,9 @@
 {
-  "forest": {
-    "style": "humid-tropical-jungle",
-    "generated_objects": 769,
-    "hero_tree_vertices": 129389,
-    "features": ["buttress-trees", "palms", "bamboo", "broadleaf-understory", "vines", "wet-mud", "puddles", "ruined-outpost", "humid-fog"],
-    "target_ids": ["T-11", "T-12"],
-    "forbidden_shapes": ["cone-pine"]
+  "mountain": {
+    "style": "border-mountain-recon",
+    "generated_objects": 201,
+    "features": ["deep-valley", "wet-cliffs", "military-road", "bunker", "watch-post", "tunnel", "border-wire", "sparse-pine", "collision-proxies"],
+    "target_ids": ["T-11", "T-12"]
   },
   "urban": {
     "style": "war-damaged-european-city",

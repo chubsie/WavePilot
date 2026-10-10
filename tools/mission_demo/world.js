@@ -1,8 +1,10 @@
+import { resolveMovement } from "./collision.js";
+
 const THREE = window.THREE;
 
 const SCENE_SETTINGS = {
   urban: { sky: 0x768384, fog: 0x65706b, start: [0, 18, 54], heading: 0 },
-  forest: { sky: 0x53655b, fog: 0x465648, start: [-40, 9, 50], heading: -0.67 },
+  mountain: { sky: 0x75818a, fog: 0x5f6a70, start: [-10, 16, 58], heading: -0.2 },
 };
 
 export class DroneWorld {
@@ -25,6 +27,7 @@ export class DroneWorld {
     this.scenario = "urban";
     this.clock = new THREE.Clock();
     this.quality = "cinematic";
+    this.colliders = [];
 
     this.scene.add(new THREE.HemisphereLight(0xdde1c9, 0x263128, 1.2));
     const sun = new THREE.DirectionalLight(0xffefcb, 1.45);
@@ -53,16 +56,25 @@ export class DroneWorld {
 
   async setScenario(name) {
     this.scenario = name;
+    this.colliders = [];
     if (this.environment) this.scene.remove(this.environment);
     const settings = SCENE_SETTINGS[name];
     this.scene.background = new THREE.Color(settings.sky);
-    this.scene.fog = new THREE.Fog(settings.fog, name === "forest" ? 45 : 70, name === "forest" ? 150 : 210);
+    this.scene.fog = new THREE.Fog(settings.fog, name === "mountain" ? 52 : 70, name === "mountain" ? 185 : 210);
     this.reset();
     this.onAssetStatus("BLENDER ASSET · LOADING");
     try {
       this.environment = await this.loadGlb(`assets/${name}.glb`);
+      this.environment.updateMatrixWorld(true);
       this.environment.traverse((object) => {
         if (object.isMesh) { object.castShadow = true; object.receiveShadow = true; }
+        const isProxy = object.name.startsWith("COLLIDER_");
+        const isUrbanWall = name === "urban" && object.name.startsWith("Ruin_");
+        if (isProxy || isUrbanWall) {
+          const bounds = new THREE.Box3().setFromObject(object);
+          this.colliders.push({ min: bounds.min.toArray(), max: bounds.max.toArray() });
+          if (isProxy) object.visible = false;
+        }
       });
       this.scene.add(this.environment);
       this.setQuality(this.quality);
@@ -82,7 +94,7 @@ export class DroneWorld {
   createFallback(name) {
     const group = new THREE.Group();
     const material = (color) => new THREE.MeshStandardMaterial({ color, roughness: 0.85 });
-    const ground = new THREE.Mesh(new THREE.PlaneGeometry(180, 180), material(name === "forest" ? 0x1c3421 : 0x55574e));
+    const ground = new THREE.Mesh(new THREE.PlaneGeometry(180, 180), material(name === "mountain" ? 0x454940 : 0x55574e));
     ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true; group.add(ground);
     if (name === "urban") {
       [[-28,-30,16,24],[-28,28,20,31],[29,-29,17,22],[31,30,23,35],[-12,-37,10,16],[13,38,12,19]].forEach(([x,z,s,h],i) => {
@@ -90,11 +102,10 @@ export class DroneWorld {
         mesh.position.set(x,h/2,z); mesh.castShadow=true; group.add(mesh);
       });
     } else {
-      const trunk = material(0x3d2819), leaf = material(0x173f24);
-      for (let i=0;i<70;i++) {
-        const a=i*2.399, r=12+(i%12)*5.2, x=Math.cos(a)*r, z=Math.sin(a)*r;
-        const stem=new THREE.Mesh(new THREE.CylinderGeometry(.25,.35,5,6),trunk); stem.position.set(x,2.5,z); group.add(stem);
-        const crown=new THREE.Mesh(new THREE.ConeGeometry(2.4,7,7),leaf); crown.position.set(x,7,z); crown.castShadow=true; group.add(crown);
+      const rock = material(0x343936);
+      for (let i=0;i<28;i++) {
+        const a=i*2.399, r=18+(i%8)*6, x=Math.cos(a)*r, z=Math.sin(a)*r;
+        const cliff=new THREE.Mesh(new THREE.DodecahedronGeometry(5+(i%4)*2),rock); cliff.position.set(x,4+(i%3)*3,z); cliff.scale.y=1.8; cliff.castShadow=true; group.add(cliff);
       }
     }
     return group;
@@ -113,7 +124,10 @@ export class DroneWorld {
     const desired = forward.multiplyScalar(input.pitch * 13).add(right.multiplyScalar(input.roll * 10));
     desired.y = input.throttle * 8;
     this.velocity.lerp(desired, 1 - Math.exp(-delta * 2.6));
-    this.camera.position.addScaledVector(this.velocity, delta);
+    const movement = this.velocity.clone().multiplyScalar(delta);
+    const resolved = resolveMovement(this.camera.position.toArray(), movement.toArray(), 0.7, this.colliders);
+    this.camera.position.fromArray(resolved.position);
+    if (resolved.blocked) this.velocity.multiplyScalar(0.2);
     this.heading += input.yaw * delta * 1.45;
     this.camera.position.x = THREE.MathUtils.clamp(this.camera.position.x, -68, 68);
     this.camera.position.z = THREE.MathUtils.clamp(this.camera.position.z, -68, 68);
@@ -122,6 +136,7 @@ export class DroneWorld {
     this.camera.rotation.x = -input.pitch * 0.09;
     this.camera.rotation.z = -input.roll * 0.10;
     this.renderer.render(this.scene, this.camera);
+    return resolved.blocked;
   }
 
   project(position) {

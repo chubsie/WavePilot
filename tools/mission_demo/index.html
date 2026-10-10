@@ -15,7 +15,7 @@
     </a>
     <nav class="scenario-switch" aria-label="시나리오">
       <button id="scenario-urban" class="seg active" aria-pressed="true"><span>01</span> 도심전</button>
-      <button id="scenario-forest" class="seg" aria-pressed="false"><span>02</span> 숲전</button>
+      <button id="scenario-mountain" class="seg" aria-pressed="false"><span>02</span> 산악전</button>
     </nav>
     <div class="system-strip" aria-label="시스템 상태">
       <span><i class="status-dot ok"></i> ORIN <b id="orin-status">DEMO</b></span>
@@ -54,9 +54,16 @@
           <button id="quality-cinematic" data-quality="cinematic" class="active">CINEMATIC</button>
           <button id="quality-performance" data-quality="performance">PERFORMANCE</button>
         </div>
-        <button id="connect-imu" class="utility-button">장갑 연결</button>
+        <div class="glove-controls" aria-label="장갑 연결 및 보정">
+          <button id="connect-imu" class="utility-button">USB</button>
+          <button id="connect-ble" class="utility-button">BLE</button>
+          <button id="flex-flat" class="utility-button">FLAT</button>
+          <button id="flex-bent" class="utility-button">BENT</button>
+          <button id="zero-imu" class="utility-button">ZERO</button>
+        </div>
         <button id="reset-flight" class="icon-button" aria-label="비행 위치 재설정" title="비행 위치 재설정">↻</button>
       </div>
+      <div id="obstacle-warning" class="obstacle-warning" role="status">OBSTACLE / FLIGHT BLOCKED</div>
       <div id="flight-hint" class="flight-hint">WASD 이동 · Q/E 회전 · R/F 고도</div>
     </section>
 

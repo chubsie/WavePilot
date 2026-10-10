@@ -1,4 +1,4 @@
-import { KeyboardInput, SerialImuInput, AutoPilotInput } from "./input.js";
+import { KeyboardInput, GloveInput, AutoPilotInput } from "./input.js";
 import { AnalysisEngine } from "./analysis.js";
 import { DroneWorld } from "./world.js";
 
@@ -10,12 +10,20 @@ let lastFrame = performance.now();
 let lastTracks = [];
 let initialReportRequested = false;
 let quality = localStorage.getItem("wavepilot-quality") || "cinematic";
+let blockedUntil = 0;
 
 const world = new DroneWorld($("viewport"), (status) => $("asset-status").textContent = status);
 const keyboard = new KeyboardInput(() => { if (mode === "auto") setMode("keyboard"); });
-const imu = new SerialImuInput((status) => {
-  $("connect-imu").textContent = status === "connected" ? "장갑 연결됨" : "장갑 연결";
-  if (status !== "connected" && mode === "imu") setMode("keyboard");
+const glove = new GloveInput({
+  onStatus: ({ connected, kind }) => {
+    $("connect-imu").classList.toggle("connected", connected && kind === "usb");
+    $("connect-ble").classList.toggle("connected", connected && kind === "ble");
+    $("connect-imu").textContent = connected && kind === "usb" ? "USB ON" : "USB";
+    $("connect-ble").textContent = connected && kind === "ble" ? "BLE ON" : "BLE";
+    if (!connected && mode === "imu") setMode("keyboard");
+  },
+  onModeToggle: () => setMode(mode === "auto" ? "imu" : "auto"),
+  onAuxAction: (pressed) => { if (pressed) $("flight-hint").textContent = "장갑 보조 버튼 입력 감지"; },
 });
 const autopilot = new AutoPilotInput();
 const analysis = new AnalysisEngine(renderReportState);
@@ -29,10 +37,10 @@ function setMode(next) {
 async function setScenario(next) {
   scenario = next;
   $("scenario-urban").classList.toggle("active", next === "urban");
-  $("scenario-forest").classList.toggle("active", next === "forest");
+  $("scenario-mountain").classList.toggle("active", next === "mountain");
   $("scenario-urban").setAttribute("aria-pressed", String(next === "urban"));
-  $("scenario-forest").setAttribute("aria-pressed", String(next === "forest"));
-  $("scenario-code").textContent = next === "urban" ? "URBAN_RECON" : "FOREST_RECON";
+  $("scenario-mountain").setAttribute("aria-pressed", String(next === "mountain"));
+  $("scenario-code").textContent = next === "urban" ? "URBAN_RECON" : "MOUNTAIN_BORDER";
   $("cinematic-effects").className = `cinematic-effects ${next}`;
   analysis.setScenario(next); autopilot.setScenario(next); initialReportRequested = false;
   $("report-content").innerHTML = '<div class="empty-report"><span>⌁</span><p>시나리오 상태를 수집하고 있습니다.</p></div>';
@@ -103,8 +111,9 @@ function updateTelemetry() {
 function frame(now) {
   const delta = Math.min((now-lastFrame)/1000, .05); lastFrame = now;
   const telemetry = world.telemetry();
-  const input = mode === "auto" ? autopilot.sample(telemetry.position, world.heading) : mode === "imu" ? imu.sample() : keyboard.sample();
-  world.update(input, delta);
+  const input = mode === "auto" ? autopilot.sample(telemetry.position, world.heading) : mode === "imu" ? glove.sample() : keyboard.sample();
+  if (world.update(input, delta)) blockedUntil = now + 600;
+  $("obstacle-warning").classList.toggle("show", now < blockedUntil);
   lastTracks = analysis.tracks((now-startedAt)/1000);
   renderTracks(lastTracks); updateTelemetry();
   const seconds = Math.floor((now-startedAt)/1000);
@@ -114,10 +123,14 @@ function frame(now) {
 }
 
 $("scenario-urban").addEventListener("click", () => setScenario("urban"));
-$("scenario-forest").addEventListener("click", () => setScenario("forest"));
+$("scenario-mountain").addEventListener("click", () => setScenario("mountain"));
 document.querySelectorAll("[data-mode]").forEach((button) => button.addEventListener("click", () => setMode(button.dataset.mode)));
 document.querySelectorAll("[data-quality]").forEach((button) => button.addEventListener("click", () => setQuality(button.dataset.quality)));
-$("connect-imu").addEventListener("click", async () => { try { await imu.connect(); setMode("imu"); } catch (error) { alert(error.message); } });
+$("connect-imu").addEventListener("click", async () => { try { await glove.connect("usb"); setMode("imu"); } catch (error) { alert(error.message); } });
+$("connect-ble").addEventListener("click", async () => { try { await glove.connect("ble"); setMode("imu"); } catch (error) { if (error.name !== "NotFoundError") alert(error.message); } });
+$("flex-flat").addEventListener("click", () => { $("flight-hint").textContent = glove.calibrateFlex("flat") ? "Flex 평평한 상태 저장" : "Flex 샘플을 먼저 수집하세요"; });
+$("flex-bent").addEventListener("click", () => { $("flight-hint").textContent = glove.calibrateFlex("bent") ? "Flex 굽힌 상태 저장" : "Flex 샘플을 먼저 수집하세요"; });
+$("zero-imu").addEventListener("click", () => glove.send("c"));
 $("reset-flight").addEventListener("click", () => world.reset());
 $("request-analysis").addEventListener("click", () => analysis.requestReport(lastTracks, true));
 
