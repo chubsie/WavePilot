@@ -11,6 +11,7 @@ report 페이로드는 llm_module 타입 없이 SKELETON 모양 dict 로 읽는�
 import math
 import sys
 import threading
+import unicodedata
 from collections.abc import Callable
 from datetime import datetime, timezone
 
@@ -33,6 +34,8 @@ POLL_INTERVAL_SEC = 0.2
 REPORT_SENTENCE_INDENT = "  "
 # peer 가 만든 거대한 오류 문자열이 운용자 화면을 덮지 않게 자른다
 WARN_ERROR_MAX_CHARS = 200
+# 제어·서식·줄/문단 구분 문자(ANSI escape 포함)는 \uXXXX 로 escape 해서 보인다
+UNPRINTABLE_CATEGORIES = ("Cc", "Cf", "Zl", "Zp")
 
 # stdin 명령 단어 -> (숫자 인자 개수, 명령 생성자). 화이트리스트는 여기 한곳에만 둔다
 COMMAND_WORDS: dict[str, tuple[int, Callable[..., Command]]] = {
@@ -76,9 +79,18 @@ def format_message_lines(message: Message) -> list[tuple[str, str]]:
 
 
 def _to_single_line(text: str) -> str:
-    # peer 텍스트(보고 문장·reason·flags) 속 줄바꿈으로 가짜 LINK/REPORT 줄을 끼워 넣는
-    # 로그 위조를 막는다 — 1 문장 = 1 줄
-    return text.replace("\r", " ").replace("\n", " ")
+    # peer 텍스트(보고 문장·reason·flags) 속 줄바꿈·제어문자·ANSI escape 로 가짜 LINK/REPORT 줄을
+    # 끼워 넣는 로그 위조를 막는다 — 1 문장 = 1 줄. \v·\f·U+2028 도 splitlines 는 줄로 본다
+    return "".join(_to_printable_char(char) for char in text)
+
+
+def _to_printable_char(char: str) -> str:
+    if char in "\r\n\t":
+        return " "
+    if unicodedata.category(char) in UNPRINTABLE_CATEGORIES:
+        return f"\\u{ord(char):04x}"
+
+    return char
 
 
 def _format_telemetry_lines(payload: dict) -> list[tuple[str, str]]:

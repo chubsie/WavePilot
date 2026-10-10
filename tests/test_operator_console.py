@@ -207,6 +207,16 @@ def test_sentence_text_newlines_cannot_forge_lines() -> None:
     assert all("\n" not in body and "\r" not in body for _, body in lines)
 
 
+@pytest.mark.parametrize("separator", ["\x0b", "\x0c", "\x1c", "\x85", "\u2028", "\u2029", "\x1b[1A"])
+def test_sentence_text_control_chars_cannot_forge_lines(separator: str) -> None:
+    forged_text = f"ok{separator}2026-10-10T12:00:00.000+09:00 LINK disconnected peer=x"
+    report = {"sentences": [{"kind": "observation", "text": forged_text, "track_ids": ["T1"]}], "flags": [], "is_grounded": True}
+
+    lines = format_message_lines(_make_message("report", {**REPORT_PAYLOAD, "report": report}))
+
+    assert all(len(body.splitlines()) == 1 and "\x1b" not in body for _, body in lines)
+
+
 @pytest.mark.parametrize(
     ("message_type", "payload"),
     [("state", {}), ("report", {"decision": 3}), ("telemetry", {"time_sec": "x"}), ("command", {"kind": "fly"})],
