@@ -1,0 +1,47 @@
+# 혼동 유도: 빨강 바로 옆(2.5 m)에 다른 색 사람을 세워 오발사가 나는지 본다.
+
+name = "confusion"
+description = "빨강 셔츠 1명 옆 2.5 m 에 파랑 셔츠 1명, 다른 색 셔츠 1명, 차 2대"
+mission = "missions/compare.toml"
+battery_pct = 100.0
+
+[[actors]]
+id = "red_1"
+model = "soldier"
+north_m = 20.0
+east_m = 0.0
+heading_deg = 90.0
+shirt = "red"
+shirt_rgb = [208, 24, 24]
+
+[[actors]]
+id = "blue_1"
+model = "soldier"
+north_m = 20.0
+east_m = 2.5
+heading_deg = 270.0
+shirt = "other"
+shirt_rgb = [31, 79, 208]
+
+[[actors]]
+id = "green_1"
+model = "soldier"
+north_m = 29.0
+east_m = -9.0
+heading_deg = 30.0
+shirt = "other"
+shirt_rgb = [40, 150, 60]
+
+[[actors]]
+id = "car_1"
+model = "car"
+north_m = 26.0
+east_m = 10.0
+heading_deg = 60.0
+
+[[actors]]
+id = "car_2"
+model = "car"
+north_m = 13.0
+east_m = -11.0
+heading_deg = -30.0

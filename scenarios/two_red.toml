@@ -1,0 +1,50 @@
+# 빨강 2명(하나는 걷는다): 두 명 다 쏘고 같은 사람을 다시 쏘지 않는지 본다.
+
+name = "two_red"
+description = "빨강 셔츠 2명(red_2 는 동서로 6 m 왕복), 다른 색 셔츠 2명, 차 1대"
+mission = "missions/compare.toml"
+battery_pct = 100.0
+
+[[actors]]
+id = "red_1"
+model = "soldier"
+north_m = 14.0
+east_m = -6.0
+heading_deg = 0.0
+shirt = "red"
+shirt_rgb = [208, 24, 24]
+
+[[actors]]
+id = "red_2"
+model = "soldier"
+north_m = 27.0
+east_m = 5.0
+heading_deg = 90.0
+walk_m = 6.0
+shirt = "red"
+shirt_rgb = [208, 24, 24]
+
+[[actors]]
+id = "blue_1"
+model = "soldier"
+north_m = 20.0
+east_m = 9.0
+heading_deg = 180.0
+shirt = "other"
+shirt_rgb = [31, 79, 208]
+
+[[actors]]
+id = "gray_1"
+model = "soldier"
+north_m = 32.0
+east_m = -4.0
+heading_deg = 45.0
+shirt = "other"
+shirt_rgb = [128, 128, 128]
+
+[[actors]]
+id = "car_1"
+model = "car"
+north_m = 22.0
+east_m = -12.0
+heading_deg = -30.0

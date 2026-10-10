@@ -1,0 +1,17 @@
+# 선택기 비교용 공유 임무: scenarios/*.toml 4개가 쓴다.
+# 홈 근처 작은 구역 + 짧은 최대 비행 시간으로 실행 1회를 수 분 안에 끝낸다.
+# 레인 간격 25 m 면 레인 2개(동 -10·+10), 순찰 약 100 m 약 20 s(5 m/s) — 배우 구역(북 10~35, 동 -15~15)을 여유 5 m 로 덮는다.
+
+[target]
+class = "person"
+upper_color = "red"         # "red" | "any"
+action = "heart"            # "heart"
+
+[search_area]
+north_m = [5.0, 40.0]       # [min, max] m, min < max
+east_m = [-20.0, 20.0]      # [min, max] m, 음수 = 서쪽
+
+[safety]
+geofence_margin_m = 15.0    # m, 구역 밖 허용 폭 (>= 0)
+battery_reserve_pct = 15.0  # %, 이 아래면 복귀 (0 <= x < 100)
+max_flight_sec = 180.0      # s, 최대 비행 시간 (> 0)
