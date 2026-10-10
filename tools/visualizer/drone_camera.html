@@ -711,16 +711,15 @@ const HOME = (() => {
   return new THREE.Vector3();
 })();
 
-function goHome() {
-  flight.pos.copy(HOME);
+function goHome(target = HOME) {
+  flight.pos.copy(target);
   flight.vel.set(0, 0, 0);
   flight.onGround = false;
-  flight.alt = Math.max(terrainHeight(HOME.x, HOME.z), 0) + HOVER_AGL;
-  buildTerrain(HOME.x, HOME.z);
-  flight.terrainAt = HOME.clone();
-  camera.position.set(HOME.x, flight.alt + 4, HOME.z + 9);
+  flight.alt = Math.max(terrainHeight(target.x, target.z), 0) + HOVER_AGL;
+  buildTerrain(target.x, target.z);
+  flight.terrainAt = target.clone();
+  camera.position.set(target.x, flight.alt + 4, target.z + 9);
 }
-$('home').onclick = goHome;
 goHome();
 
 // ---------- Rotors: motor speed follows throttle, with a tilt mix like a flight controller ----------
@@ -748,23 +747,42 @@ function updateRotors(dt, m) {
 }
 
 // ---------- Simulator link: telemetry out, commands in (Python side: 02 sim server) ----------
-// Scene axes -> NED with HOME as origin: north = -(z - HOME.z), east = x - HOME.x, down = -(alt - home ground).
+// Home = where the drone was when Python first paired (until then, the spawn point HOME).
+// Telemetry NED and return_to_home are relative to home; GPS stays absolute, anchored at the spawn point.
+// Scene axes -> NED: north = -(z - origin.z), east = x - origin.x, down = -(alt - origin ground).
 const D2R = Math.PI / 180;
 const shown = { roll: 0, pitch: 0, yaw: 0 };   // deg: +pitch = nose up, +roll = right side down, +yaw = clockwise from north
 const nowSec = () => performance.now() / 1000;
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
-const homeGround = Math.max(terrainHeight(HOME.x, HOME.z), 0);
+const spawnGround = Math.max(terrainHeight(HOME.x, HOME.z), 0);
+const home = { x: HOME.x, z: HOME.z, ground: spawnGround, gps: null };
 const batteryStartPct = SimLink.parseBatteryStartPct(location.search);   // ?battery=<0..100>
 const autopilot = SimLink.createAutopilot({ onHeart: (trackId) => SimLink.startHeart(trackId, nowSec()) });
 
+$('home').onclick = () => goHome(new THREE.Vector3(home.x, 0, home.z));
+
 function getPose() {
   return {
-    northM: -(flight.pos.z - HOME.z),
-    eastM: flight.pos.x - HOME.x,
-    downM: -(flight.alt - homeGround),
+    northM: -(flight.pos.z - home.z),
+    eastM: flight.pos.x - home.x,
+    downM: -(flight.alt - home.ground),
     yawDeg: SimLink.wrapYawDeg(shown.yaw),
     onGround: flight.onGround,
   };
+}
+
+function getGps() {
+  return SimLink.nedToGps(-(flight.pos.z - HOME.z), flight.pos.x - HOME.x, -(flight.alt - spawnGround));
+}
+
+function rememberHomeAtPairing() {
+  home.x = flight.pos.x;
+  home.z = flight.pos.z;
+  home.ground = Math.max(terrainHeight(home.x, home.z), 0);
+  home.gps = getGps();
+  if (mode.ai) autopilot.enterAi(getPose());   // re-hold in the new home frame
+
+  log(`Home set at pairing: ${home.gps.latitude_deg.toFixed(6)}, ${home.gps.longitude_deg.toFixed(6)}`);
 }
 
 const MANUAL_MOVING_MPS = 0.5;
@@ -791,7 +809,7 @@ function buildTelemetry() {
     gimbal_yaw_deg: autopilot.gimbal.yawDeg,
     battery_pct: SimLink.batteryPctAt(batteryStartPct, timeSec),
     flight_mode: mode.ai ? autopilot.flightMode : getManualFlightMode(),
-    gps: SimLink.nedToGps(pose.northM, pose.eastM, pose.downM),
+    gps: getGps(),
   };
 }
 
@@ -806,13 +824,14 @@ const link = SimLink.createLink({
     return isApplied;
   },
   takeEvents: () => autopilot.takeEvents(),
+  onPaired: rememberHomeAtPairing,
   log,
 });
 link.start();
 
 const PANEL_REFRESH_MS = 200;
 const simPanel = { link: $('simLink'), telemetry: $('simTelemetry'), commands: $('simCommands'), detections: $('simDetections') };
-setInterval(() => SimLink.renderPanel(simPanel, buildTelemetry(), link.state), PANEL_REFRESH_MS);
+setInterval(() => SimLink.renderPanel(simPanel, buildTelemetry(), link.state, home.gps), PANEL_REFRESH_MS);
 
 // ---------- Render loop ----------
 const AI_VELOCITY_LAG_PER_SEC = 3;   // first-order lag toward the autopilot velocity
@@ -915,7 +934,7 @@ function frame() {
   $('flightInfo').textContent = (opts.fly || mode.ai)
     ? `${mode.ai ? `AI MODE · ${autopilot.flightMode}\n` : ''}Throttle ${Math.round(flight.throttle * 100)}%${flight.auto ? ' (auto hover, calibrate the flex)' : ''}${flight.onGround ? ' · landed' : ''}
 ` +
-      `Speed ${speed.toFixed(1)} m/s · climb ${flight.vel.y >= 0 ? '+' : ''}${flight.vel.y.toFixed(1)} m/s · ${(flight.alt - groundNow).toFixed(0)} m above ground · ${Math.hypot(flight.pos.x - HOME.x, flight.pos.z - HOME.z).toFixed(0)} m from home
+      `Speed ${speed.toFixed(1)} m/s · climb ${flight.vel.y >= 0 ? '+' : ''}${flight.vel.y.toFixed(1)} m/s · ${(flight.alt - groundNow).toFixed(0)} m above ground · ${Math.hypot(flight.pos.x - home.x, flight.pos.z - home.z).toFixed(0)} m from home
 ` +
       `Motors  FL ${pct(motorSpeeds[0])}  FR ${pct(motorSpeeds[1])}  RL ${pct(motorSpeeds[2])}  RR ${pct(motorSpeeds[3])}`
     : 'Tilt = lean the drone, bend = throttle (50% hovers), yaw = turn. Zero pose and calibrate the flex first.';

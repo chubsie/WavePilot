@@ -297,10 +297,11 @@
 
   // ---------- 와이어 프로토콜 클라이언트 ----------
   function createLink(options) {
-    const { canvas, getTelemetry, isAiMode, onCommand, takeEvents, log } = options;
+    const { canvas, getTelemetry, isAiMode, onCommand, takeEvents, onPaired, log } = options;
     const nowSec = () => performance.now() / 1000;
     const state = {
       connected: false,
+      isPaired: false,
       lastOkSec: -Infinity,
       frameFps: 0,
       yoloLatencyMs: null,
@@ -340,6 +341,11 @@
 
       state.lastOkSec = nowSec();
       state.roundTripMs = (state.lastOkSec - sentAtSec) * 1000;
+      // 첫 응답 = 초기 페어링. 홈을 여기서 잡아야 같은 응답의 명령부터 새 홈 기준으로 실행된다
+      if (!state.isPaired) {
+        state.isPaired = true;
+        if (onPaired) onPaired();
+      }
       if (Number.isFinite(status.frame_fps)) state.frameFps = status.frame_fps;
       state.yoloLatencyMs = Number.isFinite(status.yolo_latency_ms) ? status.yolo_latency_ms : null;
       if (body.detections) {
@@ -528,13 +534,16 @@
     ].join('\n');
   }
 
-  function renderPanel(elements, telemetry, linkState) {
+  function renderPanel(elements, telemetry, linkState, homeGps) {
     const yoloText = linkState.yoloLatencyMs === null ? '–' : linkState.yoloLatencyMs.toFixed(0);
     const roundTripText = linkState.roundTripMs === null ? '–' : linkState.roundTripMs.toFixed(0);
     elements.link.textContent = `Python: ${linkState.connected ? 'connected' : 'disconnected'}`
       + ` · frames ${linkState.frameFps.toFixed(1)} fps · YOLO ${yoloText} ms · RTT ${roundTripText} ms`;
 
-    elements.telemetry.textContent = formatTelemetry(telemetry);
+    const homeText = homeGps
+      ? `Home     ${Number(homeGps.latitude_deg).toFixed(6)}, ${Number(homeGps.longitude_deg).toFixed(6)}`
+      : 'Home     (set when Python pairs)';
+    elements.telemetry.textContent = formatTelemetry(telemetry) + '\n' + homeText;
 
     const commandLines = linkState.recentCommands.map((c) => `#${c.id} ${c.kind}${c.accepted ? '' : ' (rejected)'}`);
     if (linkState.discardedCount > 0) commandLines.push(`${linkState.discardedCount} discarded (manual mode)`);
