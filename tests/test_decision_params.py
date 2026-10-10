@@ -68,6 +68,12 @@ def test_defaults_match_table_and_are_frozen():
 
     assert dataclasses.asdict(defaults) == {
         "search_timeout_sec": 120.0,
+        "search_area_north_min_m": 20.0,
+        "search_area_north_max_m": 120.0,
+        "search_area_east_min_m": -50.0,
+        "search_area_east_max_m": 50.0,
+        "search_altitude_m": 15.0,
+        "search_lane_spacing_m": 25.0,
         "approach_stop_distance_m": 5.0,
         "approach_timeout_sec": 30.0,
         "aim_center_tolerance_ratio": 0.05,
@@ -87,6 +93,49 @@ def test_defaults_match_table_and_are_frozen():
 def test_non_positive_or_non_finite_duration_is_rejected(value):
     with pytest.raises(ValueError, match="hold_duration_sec"):
         ParamDefaults(hold_duration_sec=value)
+
+
+def test_search_area_defaults_are_north_of_home():
+    defaults = ParamDefaults()
+
+    assert defaults.search_area_north_min_m == 20.0 > 0
+    assert defaults.search_area_east_min_m == -50.0 < 0 < defaults.search_area_east_max_m == 50.0
+    assert defaults.search_altitude_m == 15.0
+    assert defaults.search_lane_spacing_m == 25.0
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"search_area_north_min_m": 120.0, "search_area_north_max_m": 120.0}, "search_area_north_min_m"),
+        ({"search_area_east_min_m": 10.0, "search_area_east_max_m": -10.0}, "search_area_east_min_m"),
+    ],
+)
+def test_search_area_min_not_below_max_is_rejected(kwargs, message):
+    with pytest.raises(ValueError, match=message):
+        ParamDefaults(**kwargs)
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["search_area_north_min_m", "search_area_north_max_m", "search_area_east_min_m", "search_area_east_max_m"],
+)
+def test_bad_search_area_bound_is_rejected(name):
+    with pytest.raises(ValueError, match=name):
+        ParamDefaults(**{name: math.nan})
+
+
+@pytest.mark.parametrize("name", ["search_altitude_m", "search_lane_spacing_m"])
+@pytest.mark.parametrize("value", [0, -5.0, True])
+def test_non_positive_search_altitude_or_spacing_is_rejected(name, value):
+    with pytest.raises(ValueError, match=name):
+        ParamDefaults(**{name: value})
+
+
+def test_search_params_unchanged_by_area_defaults():
+    params = fill_params("search", _make_state(), _make_event(), ParamDefaults(search_lane_spacing_m=40.0))
+
+    assert params == {"timeout_sec": 120.0}
 
 
 @pytest.mark.parametrize("value", [0, True, 2.0])

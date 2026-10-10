@@ -831,6 +831,7 @@ function getManualFlightMode() {
 function buildTelemetry() {
   const pose = getPose();
   const timeSec = nowSec();
+  const groundBelowM = Math.max(terrainHeight(flight.pos.x, flight.pos.z), 0);
 
   return {
     time_sec: timeSec,
@@ -845,6 +846,7 @@ function buildTelemetry() {
     battery_pct: SimLink.batteryPctAt(batteryStartPct, timeSec),
     flight_mode: isAutopilotFlying() ? autopilot.flightMode : getManualFlightMode(),
     gps: getGps(),
+    height_above_ground_m: SimLink.heightAboveGroundM(flight.alt, groundBelowM),
   };
 }
 
