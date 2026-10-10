@@ -79,7 +79,7 @@ At rest, yaw drift measures about 0.1° per 30 s. While the glove is still, the 
 - [x] IMU bring-up, sensor fusion and serial streaming
 - [x] 3D visualizer with terrain and flight preview
 - [x] Flex sensor throttle, thumb and middle-finger buttons, Manual / AI mode switch
-- [ ] Wireless link over BLE (implemented, not yet tested on hardware)
+- [x] Wireless link over BLE
 - [ ] Real AI mode (currently a placeholder that circles)
 - [ ] Arm / land gesture
 

@@ -22,19 +22,19 @@
     position: absolute; left: 16px; bottom: 16px; color: var(--muted); font-size: 12px;
     background: rgba(15,17,21,.7); padding: 6px 10px; border-radius: 6px;
   }
+  /* Both modes use the same size (1.5x the earlier AI badge); only the colours change. Sizes are in em so the badge shrinks on narrow screens. */
   #modeBadge {
-    position: absolute; top: 16px; right: 16px; display: flex; align-items: center; gap: 10px;
-    padding: 10px 20px; border-radius: 999px; font-weight: 700; font-size: 20px; letter-spacing: .06em;
-    background: rgba(15,17,21,.75); border: 2px solid var(--border); color: var(--text);
+    position: absolute; top: 20px; right: 20px; display: flex; align-items: center; gap: .3em;
+    padding: .41em .82em; border-radius: 999px; font-weight: 700; font-size: min(51px, 8vw); letter-spacing: .1em;
+    background: rgba(15,17,21,.75); border: 3px solid var(--border); color: var(--text);
     backdrop-filter: blur(4px); transition: background .2s, border-color .2s, color .2s;
   }
-  #modeBadge .pip { width: 14px; height: 14px; border-radius: 50%; background: var(--ok); }
+  #modeBadge .pip { width: .4em; height: .4em; border-radius: 50%; background: var(--ok); }
   #modeBadge.ai {
-    padding: 14px 28px; font-size: 34px; letter-spacing: .1em;
     background: var(--yaw); border-color: #fff; color: #1a1305;
     box-shadow: 0 0 0 0 rgba(245,185,66,.7); animation: aiGlow 1.4s ease-out infinite;
   }
-  #modeBadge.ai .pip { width: 20px; height: 20px; background: #1a1305; animation: pulse 1s ease-in-out infinite; }
+  #modeBadge.ai .pip { background: #1a1305; animation: pulse 1s ease-in-out infinite; }
   #aiBanner {
     position: absolute; left: 0; right: 0; top: 0; height: 6px; background: var(--yaw);
     display: none; animation: pulse 1s ease-in-out infinite;
@@ -42,7 +42,7 @@
   #view.ai #aiBanner { display: block; }
   #view.ai { box-shadow: inset 0 0 0 4px var(--yaw); }
   @keyframes pulse { 50% { opacity: .35; } }
-  @keyframes aiGlow { 70%, 100% { box-shadow: 0 0 0 22px rgba(245,185,66,0); } }
+  @keyframes aiGlow { 70%, 100% { box-shadow: 0 0 0 33px rgba(245,185,66,0); } }
   @media (prefers-reduced-motion: reduce) {
     #modeBadge.ai, #modeBadge.ai .pip, #aiBanner { animation: none; }
   }
@@ -307,7 +307,11 @@ async function connectBle() {
   if (!navigator.bluetooth) { log('Web Bluetooth is not available. Use Chrome or Edge.'); return; }
   let device;
   try {
-    device = await navigator.bluetooth.requestDevice({ filters: [{ services: [NUS.service] }] });
+    // Match by name or by service, whichever the OS reports (Windows may split the two across packets)
+    device = await navigator.bluetooth.requestDevice({
+      filters: [{ namePrefix: 'WavePilot' }, { services: [NUS.service] }],
+      optionalServices: [NUS.service],
+    });
     $('status').textContent = 'Connecting to ' + (device.name || 'glove') + '…';
     const server = await device.gatt.connect();
     const svc = await server.getPrimaryService(NUS.service);

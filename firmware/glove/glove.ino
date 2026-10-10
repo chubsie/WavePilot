@@ -243,10 +243,12 @@ static int readFlex(int pin) {
 }
 
 static void startAdv() {
+  // Connectable + scannable. Windows lists a device by the name in the advertising packet itself,
+  // so the name goes there; the 128-bit service UUID (18 bytes) doesn't fit beside it and goes in
+  // the scan response.
   Bluefruit.Advertising.addFlags(BLE_GAP_ADV_FLAGS_LE_ONLY_GENERAL_DISC_MODE);
-  Bluefruit.Advertising.addTxPower();
-  Bluefruit.Advertising.addService(bleuart);        // lets the browser find us by service
-  Bluefruit.ScanResponse.addName();
+  Bluefruit.Advertising.addName();
+  Bluefruit.ScanResponse.addService(bleuart);
   Bluefruit.Advertising.restartOnDisconnect(true);  // reconnect any time
   Bluefruit.Advertising.setInterval(32, 244);       // 20 ms fast / 152.5 ms slow, units of 0.625 ms
   Bluefruit.Advertising.setFastTimeout(30);
