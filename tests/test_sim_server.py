@@ -8,7 +8,12 @@ import pytest
 
 from modules.flight_control.interface import GoTo, Telemetry, ned_to_gps
 from modules.simulation.browser.bridge import SimBridge
-from modules.simulation.browser.server import MAX_FRAME_BYTES, MAX_TELEMETRY_BYTES, start_sim_server
+from modules.simulation.browser.server import (
+    MAX_FRAME_BYTES,
+    MAX_TELEMETRY_BYTES,
+    parse_telemetry_post,
+    start_sim_server,
+)
 
 JPEG_BYTES = b"\xff\xd8fake"
 GOTO_COMMAND = GoTo(north_m=20.0, east_m=0.0, altitude_m=15.0)
@@ -190,7 +195,9 @@ def test_telemetry_post_updates_bridge_and_delivers_commands_once(sim_server) ->
     assert response["commands"] == [{"id": 1, **GOTO_COMMAND.to_dict()}]
     assert response["detections"] is None
     assert set(response["status"]) == {"frame_fps", "yolo_latency_ms"}
+    assert response["mission"] is None
     assert bridge.latest_telemetry() == make_telemetry()
+    assert bridge.operator_link_status()[0] is True
     assert bridge.ai_mode is True
     assert bridge.recent_events() == ({"kind": "goal_reached", "command_id": 1, "time_sec": 1.2},)
 
@@ -211,6 +218,42 @@ def test_telemetry_response_carries_latest_detections(sim_server) -> None:
     assert response["status"]["yolo_latency_ms"] == 12.0
 
 
+def test_telemetry_post_with_operator_link_false_skips_heartbeat(sim_server) -> None:
+    bridge, port = sim_server
+
+    status, _, _ = post_telemetry(port, make_telemetry_post(operator_link=False))
+
+    assert status == 200
+    assert bridge.latest_telemetry() == make_telemetry()
+    assert bridge.is_connected() is True
+    assert bridge.operator_link_status() == (False, None)
+
+
+def test_telemetry_response_carries_mission_status(sim_server) -> None:
+    bridge, port = sim_server
+    mission = {
+        "mode": "RETURN",
+        "reason": "link_lost",
+        "link_connected": False,
+        "link_last_heartbeat_sec": 12.0,
+        "running_mode": "return_home",
+        "t": 15.0,
+    }
+    bridge.set_mission_status(mission)
+
+    _, _, body = post_telemetry(port, make_telemetry_post())
+
+    assert json.loads(body)["mission"] == mission
+
+
+def test_parse_telemetry_post_returns_operator_link() -> None:
+    _, _, _, default_link = parse_telemetry_post(make_telemetry_post())
+    _, _, _, cut_link = parse_telemetry_post(make_telemetry_post(operator_link=False))
+
+    assert default_link is True
+    assert cut_link is False
+
+
 @pytest.mark.parametrize(
     "body",
     [
@@ -221,9 +264,10 @@ def test_telemetry_response_carries_latest_detections(sim_server) -> None:
         make_telemetry_post(events={"kind": "goal_reached"}),
         make_telemetry_post(events=[{"kind": "other", "command_id": 1, "time_sec": 1.0}]),
         make_telemetry_post(events=[{"kind": "goal_reached", "command_id": True, "time_sec": 1.0}]),
+        make_telemetry_post(operator_link="yes"),
     ],
     ids=["not-json", "json-list", "ai-mode-str", "missing-telemetry", "events-not-list", "event-kind-other",
-         "event-id-bool"],
+         "event-id-bool", "operator-link-str"],
 )
 def test_invalid_telemetry_post_does_not_drain_commands(sim_server, body) -> None:
     bridge, port = sim_server
