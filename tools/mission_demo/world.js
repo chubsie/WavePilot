@@ -1,6 +1,7 @@
 import { resolveMovement, sphereIntersectsAabb } from "./collision.js";
 import { createDrone } from "./drone-model.js";
 import { MainFlightCore, D2R, DRAG_H, DRAG_V } from "./flight-core.js";
+import { HeartBeam, updateStatusLeds } from "./hearts.js";
 
 const THREE = window.THREE;
 
@@ -28,6 +29,7 @@ export class DroneWorld {
     this.leds = model.leds;
     this.flashHeld = false;
     this.scene.add(this.drone);
+    this.heartBeam = new HeartBeam(this.scene);
     this.environment = null;
     this.velocity = new THREE.Vector3();
     this.heading = Math.PI;
@@ -221,8 +223,8 @@ export class DroneWorld {
       for (const prop of rotor.userData.blades) prop.material.opacity = 1 - .75 * speed;
       rotor.userData.disc.material.opacity = .04 + .26 * speed;
     });
-    const flash=this.flashHeld && Math.floor(performance.now()/120)%2===0;
-    this.leds?.forEach(led=>led.material.color.setHex(flash?led.userData.on:0x2a2d35));
+    updateStatusLeds(this.leds || []);
+    this.heartBeam?.update(delta, this.drone, this.velocity, this.flashHeld);
     const offset=new THREE.Vector3(Math.sin(this.heading)*6,2.5,Math.cos(this.heading)*6);
     const desired=this.camera.position.clone().add(offset);
     // Keep the chase camera on the drone side of nearby building walls.

@@ -32,7 +32,7 @@ button:active { transform: scale(.96); }
 .system-strip span { white-space:nowrap; }.system-strip b{ color:var(--text); font-weight:500; }.system-strip time{ color:var(--lime); font-size:12px; font-variant-numeric:tabular-nums; }
 .status-dot { display:inline-block; width:5px; height:5px; margin-right:6px; border-radius:50%; }.status-dot.ok{background:var(--lime);box-shadow:0 0 8px var(--lime)}.status-dot.warm{background:var(--amber);box-shadow:0 0 8px #e7b94d88}
 
-.command-grid { height:calc(100vh - 96px); display:grid; grid-template-columns:minmax(0, 55fr) minmax(410px,45fr); }
+.command-grid { height:calc(100vh - 96px); display:grid; grid-template-columns:minmax(0,77.5fr) minmax(280px,22.5fr); }
 .camera-panel { position:relative; min-width:0; overflow:hidden; border-right:1px solid var(--line); background:#111; }
 .viewport,.viewport canvas { width:100%; height:100%; display:block; }
 .scanlines { pointer-events:none; position:absolute; inset:0; opacity:.16; background:repeating-linear-gradient(0deg,transparent 0 3px,#000 4px); mix-blend-mode:multiply; }
@@ -81,17 +81,38 @@ button:active { transform: scale(.96); }
 #fpv-view .target-label{font-size:7px;top:-17px;padding:2px 3px}
 #fpv-view .target-distance{font-size:7px}
 @media(max-width:600px){.fpv-inset{top:82px;left:10px;width:180px}.fpv-title{font-size:8px}}
-.glove-settings{position:absolute;right:18px;top:88px;z-index:7;font-size:11px;max-width:300px;background:#0c140ef2;border:1px solid var(--line);padding:10px}
+.sensor-panel{position:absolute;right:18px;top:88px;z-index:7;width:280px;max-height:calc(100% - 245px);overflow:auto;padding:14px;background:#0c140eef;border:1px solid var(--line);font-size:11px}
+.sensor-panel header{display:flex;justify-content:space-between;color:var(--lime);font-size:10px;letter-spacing:.08em;margin-bottom:12px}
+.sensor-panel header span{color:var(--text);font-variant-numeric:tabular-nums}
+.sensor-body{display:grid;grid-template-columns:1fr 70px;gap:12px}
+.sensor-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px 8px}
+.sensor-grid small{display:block;font-size:9px;color:var(--muted);margin-bottom:4px}
+.sensor-grid output{font-size:16px;white-space:nowrap;font-variant-numeric:tabular-nums}
+.flex-scale{display:flex;flex-direction:column;align-items:center;gap:6px;font-size:8px;color:var(--muted)}
+.flex-scale b{color:var(--text)}
+.flex-scale .bend-meter{position:relative;width:22px;height:126px;background:#1e2b20;border:1px solid #526244}
+.flex-scale .bend-meter i{position:absolute;bottom:0;width:100%;height:0;background:var(--lime);transition:height .1s linear}
+.hover-mark{position:absolute;top:50%;left:-8px;width:38px;border-top:1px solid #ffffff99;text-align:right;font-size:7px;color:#fff;text-shadow:0 1px #000}
+#flex-calibration{font-size:9px;line-height:1.6;color:var(--muted);border-bottom:1px solid var(--line);padding-bottom:9px}
+#flight-details{display:block;white-space:pre-line;font-size:9px;line-height:1.7;margin-bottom:8px;font-variant-numeric:tabular-nums}
+.glove-settings{position:static;font-size:11px;max-width:100%;border-top:1px solid var(--line);padding-top:10px}
 .glove-settings summary{cursor:pointer;color:var(--lime)}
 .glove-settings label{display:inline-flex;gap:5px;margin:7px 8px 7px 0}
 .glove-settings output{display:block;line-height:1.8;margin:8px 0;font-variant-numeric:tabular-nums}
 .glove-settings pre{max-height:90px;overflow:auto;white-space:pre-wrap;font-size:10px}
-.glove-settings[open]{max-height:calc(100% - 108px);overflow:auto;width:300px}
+.glove-settings[open]{width:100%}
 .glove-settings output{white-space:pre-line}
-#sensor-chart{display:block;width:100%;height:90px;background:#080d0a}
+#sensor-chart{display:block;width:100%;height:55px;background:#080d0a}
 .chart-legend{display:flex;gap:8px;font-size:8px}.chart-legend span:nth-child(1){color:var(--red)}.chart-legend span:nth-child(2){color:var(--lime)}.chart-legend span:nth-child(3){color:var(--cyan)}
 .bend-meter{height:5px;background:var(--line)}.bend-meter i{display:block;height:100%;width:0;background:var(--lime)}
 button:disabled{opacity:.4;cursor:default}
+.analysis-panel .panel-section{padding:18px 14px}
+.analysis-panel .section-heading{gap:8px;align-items:center}
+.analysis-panel .section-heading h1,.analysis-panel .section-heading h2{font-size:18px}
+.analysis-panel .report-line{grid-template-columns:44px 1fr;font-size:11px}
+.analysis-panel .grounded{font-size:6px;padding:4px}
+@media(max-width:1100px){.sensor-panel{width:250px}.fpv-inset{width:230px}.system-strip{gap:8px;padding:0 10px}}
+@media(max-width:600px){.sensor-panel{top:auto;bottom:165px;right:10px;width:210px;max-height:190px}.sensor-grid output{font-size:13px}.fpv-inset{width:180px}}
 .mode-switch button{padding:0 10px}
 @keyframes reveal{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition-duration:0s!important}}

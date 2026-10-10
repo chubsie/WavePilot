@@ -48,6 +48,8 @@ export class GloveInput {
     this.packetCount = 0;
     this.axes = {invRoll:false,invPitch:false,invYaw:false,swapRP:false,fly:false};
     try { Object.assign(this.axes,JSON.parse(localStorage.getItem('gloveVizOpts.v2') || '{}')); } catch {}
+    // The mission UI always enables flight; stale-input handling still stops motion.
+    this.axes.fly = true;
     this.lastSeq = null;
     this.buttons = 0;
     this.flex0 = { raw: null, recent: [], flat: null, bent: null, bend: 0 };

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#080b09">
   <title>WavePilot — Field Command</title>
-  <link rel="stylesheet" href="styles.css?v=main-parity-3">
+  <link rel="stylesheet" href="styles.css?v=telemetry-4">
 </head>
 <body>
   <header class="command-bar">
@@ -31,24 +31,39 @@
           <div class="reticle" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
         </div>
       </section>
-      <details class="glove-settings">
-        <summary>장갑 설정 · 센서</summary>
-        <output id="sensor-values">센서 데이터 대기</output>
-        <div class="bend-meter" aria-label="Flex 굽힘"><i id="bend-fill"></i></div>
+      <section class="sensor-panel" aria-label="실시간 장갑 센서">
+        <header>GLOVE TELEMETRY <span id="sensor-hz">0 Hz</span></header>
+        <div class="sensor-body">
+          <div id="sensor-values" class="sensor-grid">
+            <div><small>ROLL</small><output id="sensor-roll">—</output></div>
+            <div><small>PITCH</small><output id="sensor-pitch">—</output></div>
+            <div><small>YAW</small><output id="sensor-yaw">—</output></div>
+            <div><small>회전 속도</small><output id="sensor-rate">—</output></div>
+            <div><small>FLEX ADC</small><output id="sensor-adc">—</output></div>
+            <div><small>굽힘</small><output id="sensor-bend">—</output></div>
+          </div>
+          <div class="flex-scale">
+            <span>BENT · <b id="bent-value">—</b></span>
+            <div class="bend-meter" id="flex-gauge" role="meter" aria-label="손가락 굽힘" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="bend-fill"></i><span class="hover-mark">50%</span></div>
+            <span>FLAT · <b id="flat-value">—</b></span>
+          </div>
+        </div>
         <p id="flex-calibration">FLAT/BENT 보정 필요</p>
+        <output id="flight-details"></output>
+        <canvas id="sensor-chart" aria-label="최근 500개 Roll, Pitch, Yaw rate 센서 샘플"></canvas>
+        <p class="chart-legend"><span>Roll</span><span>Pitch</span><span>Yaw rate</span></p>
+        <details class="glove-settings">
+        <summary>축 설정 · 기기 보정</summary>
         <label><input id="invRoll" type="checkbox">Roll 반전</label>
         <label><input id="invPitch" type="checkbox">Pitch 반전</label>
         <label><input id="invYaw" type="checkbox">Yaw 반전</label>
         <label><input id="swapRP" type="checkbox">Roll/Pitch 교환</label>
-        <label><input id="glove-fly" type="checkbox">장갑 비행 활성</label>
         <button id="gyro-imu" class="utility-button" disabled>자이로 보정</button>
         <button id="info-imu" class="utility-button" disabled>IMU 정보</button>
-        <p>M: 수동/AI 원형 비행 · L 누름: LED 점멸</p>
-        <output id="flight-details"></output>
-        <canvas id="sensor-chart" aria-label="최근 500개 Roll, Pitch, Yaw rate 센서 샘플"></canvas>
-        <p class="chart-legend"><span>Roll ±90°</span><span>Pitch ±90°</span><span>Yaw ±270°/s</span></p>
+        <p>M: 수동/AI · L 또는 중지 버튼: 하트 빔</p>
         <pre id="glove-log" aria-live="polite"></pre>
       </details>
+      </section>
       <div class="scanlines" aria-hidden="true"></div>
       <div id="cinematic-effects" class="cinematic-effects urban" aria-hidden="true"></div>
       <div class="camera-topline">

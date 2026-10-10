@@ -12,6 +12,7 @@ Object.defineProperty(globalThis, 'localStorage', { configurable:true, value: {
   getItem:key=>storage.get(key) ?? null, setItem:(key,value)=>storage.set(key,value),
 } });
 const { MainFlightCore } = await import('../tools/mission_demo/flight-core.js');
+const { HeartBeam, updateStatusLeds, HEART_RATE, HEART_SPEED, HEART_LIFE } = await import('../tools/mission_demo/hearts.js');
 const source = fs.readFileSync(new URL('../tools/visualizer/index.html', import.meta.url), 'utf8');
 function section(start, end, offset = 0) {
   const first = source.indexOf(start, offset), last = source.indexOf(end, first);
@@ -100,4 +101,59 @@ test('original flex calibration takes precedence and the former mission calibrat
   storage.set('gloveVizOpts.v2',JSON.stringify({fly:true,invYaw:true}));
   const original=new GloveInput();assert.equal(original.flex0.flat,1100);assert.equal(original.axes.fly,true);
   assert.equal(original.flex0.bend,0);storage.clear();
+});
+
+test('flight starts enabled even when an older saved preference disabled it', () => {
+  storage.set('gloveVizOpts.v2',JSON.stringify({fly:false,invYaw:true}));
+  const glove=new GloveInput();
+  assert.equal(glove.axes.fly,true);
+  assert.equal(glove.axes.invYaw,true);
+  storage.clear();
+});
+
+test('heart beam matches latest main emission, nose direction, velocity inheritance, fade and pool reuse', () => {
+  function seeded() { let state=7;return ()=>{state=(state*1664525+1013904223)>>>0;return state/4294967296;}; }
+  const drawing={translate(){},beginPath(){},moveTo(){},bezierCurveTo(){},closePath(){},fill(){},stroke(){},
+    createRadialGradient(){return {addColorStop(){}};}};
+  const originalMath=Object.create(Math);originalMath.random=seeded();
+  const drone=new THREE.Object3D(),velocity=new THREE.Vector3(2,-1,4);
+  drone.position.set(4,12,-3);drone.rotation.set(.25,.7,-.18,'YXZ');
+  const context=vm.createContext({THREE,Math:originalMath,scene:new THREE.Scene(),drone,
+    flight:{vel:velocity},buttons:{middle:false,key:false},document:{createElement:()=>({getContext:()=>drawing})}});
+  vm.runInContext(section('const HEART_RATE = 30;', '// ---------- Rotors:')
+    +'globalThis.originalHearts={hearts,updateHearts,HEART_RATE,HEART_SPEED,HEART_LIFE};',context);
+  const original=context.originalHearts;
+  assert.deepEqual([HEART_RATE,HEART_SPEED,HEART_LIFE],[original.HEART_RATE,original.HEART_SPEED,original.HEART_LIFE]);
+  const beam=new HeartBeam(new THREE.Scene(),{texture:new THREE.Texture(),random:seeded()});
+  assert.equal(beam.hearts.length,90);
+  for(let frame=0;frame<420;frame++) {
+    const held=frame<100 || (frame>=150 && frame<260), dt=frame%5===0 ? .033 : 1/60;
+    context.buttons.middle=held;context.buttons.key=false;
+    beam.update(dt,drone,velocity,held);original.updateHearts(dt);
+    for(let i=0;i<90;i++) {
+      const actual=beam.hearts[i], expected=original.hearts[i];
+      near(actual.age,expected.age,'heart age');near(actual.spin,expected.spin,'heart spin');
+      assert.equal(actual.sprite.visible,expected.sprite.visible);
+      for(let axis=0;axis<3;axis++) {
+        near(actual.sprite.position.getComponent(axis),expected.sprite.position.getComponent(axis),'heart position');
+        near(actual.vel.getComponent(axis),expected.vel.getComponent(axis),'heart velocity');
+      }
+      near(actual.sprite.scale.x,expected.sprite.scale.x,'heart scale');
+      near(actual.sprite.material.opacity,expected.sprite.material.opacity,'heart opacity');
+      near(actual.sprite.material.rotation,expected.sprite.material.rotation,'heart rotation');
+    }
+  }
+  assert.ok(beam.hearts.every(heart=>!heart.sprite.visible));
+});
+
+test('LEDs blink on 250ms phases exactly as latest main without a held button', () => {
+  const ref=originalMain();
+  const led=new THREE.Mesh(new THREE.SphereGeometry(.1),new THREE.MeshBasicMaterial());led.userData.on=0xff3b3b;
+  const originalLed=led.clone();originalLed.material=led.material.clone();
+  ref.context.leds.push(originalLed);
+  for(const now of [0,249,250,499,500,749,750,1000]) {
+    ref.context.performance.now=()=>now;ref.step(1/60);
+    updateStatusLeds([led],now);
+    assert.equal(led.material.color.getHex(),originalLed.material.color.getHex());
+  }
 });

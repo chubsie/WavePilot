@@ -108,17 +108,19 @@ function updateTelemetry() {
   $("coord-n").textContent = (-telemetry.position.z).toFixed(1).padStart(5,"0");
   $("coord-e").textContent = telemetry.position.x.toFixed(1).padStart(5,"0");
   const m = glove.mapped();
-  $('sensor-values').textContent = glove.last
-    ? `Roll ${m.rollDegrees.toFixed(1)}° · Pitch ${m.pitchDegrees.toFixed(1)}°\nYaw ${m.yawDegrees.toFixed(0)}° · ${m.yawRate.toFixed(0)}°/s · ${glove.hz} Hz\nFlex ADC ${glove.flex0.raw} · ${glove.flexReady() ? Math.round(glove.flexBend()*100)+'%' : '–'}`
-    : '센서 데이터 대기';
-  $('flex-calibration').textContent = glove.flexReady() ? `Flat ${glove.flex0.flat} · Bent ${glove.flex0.bent}` : '손가락을 펴고 FLAT, 굽히고 BENT로 보정하세요';
-  $('bend-fill').style.width = `${glove.flexReady() ? glove.flexBend()*100 : 0}%`;
+  const bend=glove.flexReady()?Math.round(glove.flexBend()*100):0;
+  for(const [id,value] of [['roll',m.rollDegrees.toFixed(1)+'°'],['pitch',m.pitchDegrees.toFixed(1)+'°'],['yaw',m.yawDegrees.toFixed(0)+'°'],['rate',m.yawRate.toFixed(0)+'°/s'],['adc',glove.flex0.raw],['bend',glove.flexReady()?bend+'%':'미보정']]) $('sensor-'+id).textContent=glove.last?value:'—';
+  $('sensor-hz').textContent=`${glove.hz} Hz`;
+  $('flat-value').textContent=glove.flex0.flat ?? '—';
+  $('bent-value').textContent=glove.flex0.bent ?? '—';
+  $('flex-calibration').textContent = glove.flexReady() ? '편 상태 0% → 굽힌 상태 100% · 50%에서 호버' : '손가락을 펴고 FLAT, 굽히고 BENT로 보정하세요';
+  $('bend-fill').style.height = `${bend}%`;
+  $('flex-gauge').setAttribute('aria-valuenow',String(bend));
   $('flight-details').textContent = `추력 ${Math.round(telemetry.throttle*100)}%${telemetry.autoHover ? ' · 자동 호버' : ''}${telemetry.onGround ? ' · 착륙' : ''}\n상승 ${telemetry.climb.toFixed(1)} m/s · ${Math.hypot(telemetry.position.x,telemetry.position.z-54).toFixed(0)} m from home\n모터 FL/FR/RL/RR ${telemetry.motors.map(value=>Math.round(value*100)+'%').join(' / ')}`;
   return telemetry;
 }
 
 function drawSensorChart() {
-  if (!document.querySelector('.glove-settings').open) return;
   const canvas = $('sensor-chart'), ctx = canvas.getContext('2d');
   const width = canvas.clientWidth, height = canvas.clientHeight, dpr = window.devicePixelRatio || 1;
   if (canvas.width !== width*dpr || canvas.height !== height*dpr) { canvas.width=width*dpr; canvas.height=height*dpr; }
@@ -183,8 +185,8 @@ $("flex-flat").addEventListener("click", () => { $("flight-hint").textContent = 
 $("flex-bent").addEventListener("click", () => { $("flight-hint").textContent = glove.calibrateFlex("bent") ? "Flex 굽힌 상태 저장" : "Flex 샘플을 먼저 수집하세요"; });
 $("zero-imu").addEventListener("click", () => glove.send("c"));
 for(const [id,command] of [['gyro-imu','g'],['info-imu','i']]) $(id).addEventListener('click',()=>glove.send(command).catch(error=>{$('glove-log').textContent=error.message;}));
-for(const id of ['invRoll','invPitch','invYaw','swapRP','fly']) {
-  const element = $(id === 'fly' ? 'glove-fly' : id);
+for(const id of ['invRoll','invPitch','invYaw','swapRP']) {
+  const element = $(id);
   element.checked=Boolean(glove.axes[id]);
   element.addEventListener('change',()=>{glove.axes[id]=element.checked;try{localStorage.setItem('gloveVizOpts.v2',JSON.stringify(glove.axes));}catch{}});
 }

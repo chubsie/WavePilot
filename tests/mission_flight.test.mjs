@@ -99,6 +99,7 @@ test('stale IMU and lost AUTO observations stop all translational movement', () 
 
 test('sequence-integrated yaw drives world heading and parked mode coasts while holding altitude', () => {
   const world = flightWorld(), glove = new GloveInput();
+  glove.axes.fly = false;
   glove.parse('G,10,50,-45,90,1500,0,0');
   glove.parse('G,20,50,-45,90,1500,0,0');
   world.velocity.set(3,4,5);
