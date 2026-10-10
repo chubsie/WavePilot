@@ -1,0 +1,923 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Drone Camera (YOLO test)</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --border: #262b36; --text: #e6e8ee; --muted: #8a90a0;
+    --accent: #4f8cff; --roll: #ff6b6b; --pitch: #4fd1a5; --yaw: #f5b942; --ok: #4fd1a5; --bad: #ff6b6b;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: grid; grid-template-columns: 1fr 340px; overflow: hidden;
+  }
+  #view { position: relative; min-width: 0; min-height: 0; }
+  #view canvas { display: block; width: 100%; height: 100%; }
+  #hint {
+    position: absolute; left: 16px; bottom: 16px; color: var(--muted); font-size: 12px;
+    background: rgba(15,17,21,.7); padding: 6px 10px; border-radius: 6px;
+  }
+  /* Both modes use the same size (1.5x the earlier AI badge); only the colours change. Sizes are in em so the badge shrinks on narrow screens. */
+  #modeBadge {
+    position: absolute; top: 20px; right: 20px; display: flex; align-items: center; gap: .3em;
+    padding: .41em .82em; border-radius: 999px; font-weight: 700; font-size: min(51px, 8vw); letter-spacing: .1em;
+    background: rgba(15,17,21,.75); border: 3px solid var(--border); color: var(--text);
+    backdrop-filter: blur(4px); transition: background .2s, border-color .2s, color .2s;
+  }
+  #modeBadge .pip { width: .4em; height: .4em; border-radius: 50%; background: var(--ok); }
+  #modeBadge.ai {
+    background: var(--yaw); border-color: #fff; color: #1a1305;
+    box-shadow: 0 0 0 0 rgba(245,185,66,.7); animation: aiGlow 1.4s ease-out infinite;
+  }
+  #modeBadge.ai .pip { background: #1a1305; animation: pulse 1s ease-in-out infinite; }
+  #aiBanner {
+    position: absolute; left: 0; right: 0; top: 0; height: 6px; background: var(--yaw);
+    display: none; animation: pulse 1s ease-in-out infinite;
+  }
+  #view.ai #aiBanner { display: block; }
+  #view.ai { box-shadow: inset 0 0 0 4px var(--yaw); }
+  @keyframes pulse { 50% { opacity: .35; } }
+  @keyframes aiGlow { 70%, 100% { box-shadow: 0 0 0 33px rgba(245,185,66,0); } }
+  @media (prefers-reduced-motion: reduce) {
+    #modeBadge.ai, #modeBadge.ai .pip, #aiBanner { animation: none; }
+  }
+  aside {
+    background: var(--panel); border-left: 1px solid var(--border);
+    padding: 16px; display: flex; flex-direction: column; gap: 14px; overflow-y: auto;
+  }
+  h1 { font-size: 16px; margin: 0; display: flex; align-items: center; gap: 8px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--bad); }
+  .dot.on { background: var(--ok); }
+  #status { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+  button {
+    background: #222734; color: var(--text); border: 1px solid var(--border);
+    padding: 7px 12px; border-radius: 6px; font: inherit; cursor: pointer;
+  }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .45; cursor: default; }
+  .readouts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .card { background: #1d212b; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+  .card .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .card .value { font-size: 22px; font-variant-numeric: tabular-nums; }
+  .roll .value { color: var(--roll); } .pitch .value { color: var(--pitch); } .yaw .value { color: var(--yaw); }
+  fieldset { border: 1px solid var(--border); border-radius: 8px; margin: 0; padding: 8px 10px; }
+  legend { color: var(--muted); font-size: 12px; padding: 0 4px; }
+  label.chk { display: inline-flex; align-items: center; gap: 6px; margin: 2px 12px 2px 0; cursor: pointer; }
+  #chart { width: 100%; height: 150px; background: #1d212b; border: 1px solid var(--border); border-radius: 8px; }
+  .legend { display: flex; gap: 12px; font-size: 12px; color: var(--muted); }
+  .legend span::before { content: ""; display: inline-block; width: 10px; height: 3px; margin-right: 5px; vertical-align: middle; background: currentColor; }
+  #log {
+    margin: 0; min-height: 80px; max-height: 160px; overflow-y: auto; font: 12px/1.35 ui-monospace, Consolas, monospace;
+    background: #1d212b; border: 1px solid var(--border); border-radius: 8px; padding: 8px; color: var(--muted); white-space: pre-wrap;
+  }
+  /* Drone gimbal camera inset: this canvas is what gets recorded for YOLO */
+  #view #camView {
+    position: absolute; right: 16px; bottom: 16px; width: min(40%, 480px); height: auto; aspect-ratio: 16 / 9;
+    border: 2px solid var(--border); border-radius: 6px;
+  }
+  #view.recording #camView { border-color: var(--bad); }
+  @media (max-width: 760px) {
+    body { grid-template-columns: 1fr; grid-template-rows: 55vh auto; overflow: auto; }
+    aside { border-left: 0; border-top: 1px solid var(--border); }
+  }
+</style>
+</head>
+<body>
+  <div id="view"><div id="aiBanner"></div><div id="modeBadge" role="status" aria-live="polite"><span class="pip"></span><span id="modeBadgeText">MANUAL</span></div><div id="hint">Red arms = front of the drone · camera follows from behind · inset = drone camera (recorded for YOLO)</div></div>
+  <aside>
+    <div>
+      <h1><span id="dot" class="dot"></span>Glove Visualizer</h1>
+      <div id="status">Not connected. For USB, close the Arduino Serial Monitor first.</div>
+    </div>
+    <div class="buttons">
+      <button id="connect" class="primary">Connect USB</button>
+      <button id="connectBle" class="primary">Connect Bluetooth</button>
+      <button id="zero" disabled title="Sends 'c': current hand pose becomes level">Zero pose</button>
+      <button id="gyro" disabled title="Sends 'g': re-measures gyro bias, keep the glove still ~1 s">Calibrate gyro</button>
+      <button id="info" disabled title="Sends 'i': prints IMU info">IMU info</button>
+    </div>
+    <div class="readouts">
+      <div class="card roll"><div class="label">Roll</div><div class="value" id="vRoll">0.0°</div></div>
+      <div class="card pitch"><div class="label">Pitch</div><div class="value" id="vPitch">0.0°</div></div>
+      <div class="card yaw"><div class="label">Yaw (integrated)</div><div class="value" id="vYaw">0.0°</div></div>
+      <div class="card"><div class="label">Yaw rate · Stream</div><div class="value" id="vRate">0 °/s</div></div>
+      <div class="card" style="grid-column: span 2">
+        <div class="label">Finger bend · raw <span id="vFlexRaw">–</span></div>
+        <div class="value" id="vBend">–</div>
+        <div style="height:8px;background:#11141a;border-radius:4px;margin-top:4px;overflow:hidden"><div id="bendBar" style="height:100%;width:0;background:var(--accent)"></div></div>
+        <div class="buttons" style="margin-top:8px">
+          <button id="flexFlat" disabled title="Hold the finger straight, then click">Set flat</button>
+          <button id="flexBent" disabled title="Bend the finger fully, then click">Set bent</button>
+        </div>
+        <div id="flexCal" style="color:var(--muted);font-size:12px;margin-top:4px"></div>
+      </div>
+    </div>
+    <fieldset>
+      <legend>Axis mapping (fix signs here if the drone moves the wrong way)</legend>
+      <label class="chk"><input type="checkbox" id="invRoll">Invert roll</label>
+      <label class="chk"><input type="checkbox" id="invPitch">Invert pitch</label>
+      <label class="chk"><input type="checkbox" id="invYaw">Invert yaw</label>
+      <label class="chk"><input type="checkbox" id="swapRP">Swap roll/pitch</label>
+    </fieldset>
+    <fieldset>
+      <legend>Flight preview</legend>
+      <label class="chk"><input type="checkbox" id="fly">Fly (tilt + finger throttle)</label>
+      <button id="mode" title="Thumb button (or M key)">Mode: Manual</button>
+      <button id="home" style="padding:4px 10px">Return home</button>
+      <div id="flightInfo" style="color:var(--muted);font-size:12px;margin-top:6px;white-space:pre-line">Tilt = lean the drone, bend = throttle (50% hovers), yaw = turn. Thumb button (or M) switches Manual / AI. Middle finger button (or hold L) flashes the drone LEDs.</div>
+    </fieldset>
+    <fieldset>
+      <legend>Drone camera → YOLO</legend>
+      <button id="record" class="primary" title="R key">Record</button>
+      <div id="recInfo" style="color:var(--muted);font-size:12px;margin-top:6px;white-space:pre-line">Records the inset camera at 10 fps to serve_camera.py.</div>
+    </fieldset>
+    <div>
+      <canvas id="chart"></canvas>
+      <div class="legend">
+        <span style="color:var(--roll)">roll ±90°</span>
+        <span style="color:var(--pitch)">pitch ±90°</span>
+        <span style="color:var(--yaw)">yaw rate ±270°/s</span>
+      </div>
+    </div>
+    <pre id="log"></pre>
+  </aside>
+
+<script src="three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/DRACOLoader.js"></script>
+<script>
+// ---------- Stream format from firmware/glove/glove.ino ----------
+// G,<seq>,<roll_deg>,<pitch_deg>,<yaw_rate_dps>,<flex0>,<flex1>  at 50 Hz
+const SAMPLE_DT = 0.02;       // s per sample (seq step)
+const YAW_DEADBAND = 1.0;     // dps; ignore gyro noise so integrated yaw does not creep
+const HISTORY = 500;          // chart samples (10 s)
+
+const $ = (id) => document.getElementById(id);
+const state = { roll: 0, pitch: 0, yaw: 0, yawRate: 0, lastSeq: null, samples: 0, hz: 0 };
+const history = [];
+
+// ---------- Axis mapping toggles (remembered per browser) ----------
+const opts = { invRoll: false, invPitch: false, invYaw: false, swapRP: false, fly: false };
+// v2: firmware now outputs the drone-frame sign convention, so old saved inversions are dropped.
+const OPTS_KEY = 'gloveVizOpts.v2';
+try { Object.assign(opts, JSON.parse(localStorage.getItem(OPTS_KEY) || '{}')); } catch {}
+for (const k of Object.keys(opts)) {
+  $(k).checked = opts[k];
+  $(k).onchange = () => {
+    opts[k] = $(k).checked;
+    try { localStorage.setItem(OPTS_KEY, JSON.stringify(opts)); } catch {}
+  };
+}
+
+function mapped() {
+  let r = state.roll, p = state.pitch;
+  if (opts.swapRP) [r, p] = [p, r];
+  return {
+    roll: opts.invRoll ? -r : r,
+    pitch: opts.invPitch ? -p : p,
+    yaw: opts.invYaw ? -state.yaw : state.yaw,
+    yawRate: opts.invYaw ? -state.yawRate : state.yawRate,
+  };
+}
+
+// ---------- Flex sensor: raw ADC -> bend 0..1 using a saved flat/bent calibration ----------
+const FLEX_KEY = 'gloveVizFlex.v1';
+const flex = { raw: null, recent: [], flat: null, bent: null, bend: 0 };
+try { Object.assign(flex, JSON.parse(localStorage.getItem(FLEX_KEY) || '{}')); } catch {}
+const flexReady = () => flex.flat !== null && flex.bent !== null && Math.abs(flex.bent - flex.flat) >= 30;
+
+function flexMean() {   // average of the last ~0.5 s (25 samples)
+  if (flex.recent.length < 10) return null;
+  return flex.recent.reduce((a, b) => a + b, 0) / flex.recent.length;
+}
+function saveFlex() {
+  try { localStorage.setItem(FLEX_KEY, JSON.stringify({ flat: flex.flat, bent: flex.bent })); } catch {}
+}
+function calibrateFlex(which) {
+  const v = flexMean();
+  if (v === null) { log('Flex: no data yet. Is the sensor wired and the glove streaming?'); return; }
+  flex[which] = Math.round(v);
+  saveFlex();
+  if (flexReady()) log(`Flex calibrated: flat=${flex.flat}, bent=${flex.bent}`);
+  else if (flex.flat !== null && flex.bent !== null) log('Flex: flat and bent are too close together. Bend the finger further.');
+}
+$('flexFlat').onclick = () => calibrateFlex('flat');
+$('flexBent').onclick = () => calibrateFlex('bent');
+
+// ---------- Buttons and flight mode ----------
+// Firmware sends a bitmask: bit0 = middle finger (flash LEDs while held), bit1 = thumb (toggle mode).
+const buttons = { mask: 0, middle: false, key: false };
+const mode = { ai: false, aiYaw: 0, aiAgl: 9 };   // aiAgl: height above ground to hold while in AI mode
+function setMode(ai) {
+  mode.ai = ai;
+  if (ai) {
+    mode.aiYaw = shown.yaw;                                   // keep the current heading
+    mode.aiAgl = Math.max(2, flight.alt - Math.max(terrainHeight(flight.pos.x, flight.pos.z), 0));   // keep the current height
+  }
+  $('mode').textContent = ai ? 'Mode: AI (circling)' : 'Mode: Manual';
+  $('modeBadge').classList.toggle('ai', ai);
+  $('view').classList.toggle('ai', ai);
+  $('modeBadgeText').textContent = ai ? 'AI MODE' : 'MANUAL';
+  log(ai ? 'AI mode: hovering in a circle (placeholder)' : 'Manual mode');
+}
+$('mode').onclick = () => setMode(!mode.ai);
+addEventListener('keydown', (e) => {
+  if (e.repeat) return;
+  if (e.key === 'm' || e.key === 'M') setMode(!mode.ai);
+  if (e.key === 'l' || e.key === 'L') buttons.key = true;
+});
+addEventListener('keyup', (e) => { if (e.key === 'l' || e.key === 'L') buttons.key = false; });
+function onButtons(mask) {
+  const pressed = mask & ~buttons.mask;
+  if (pressed & 2) setMode(!mode.ai);          // thumb: toggle on press
+  buttons.middle = !!(mask & 1);               // middle finger: LEDs flash while held
+  buttons.mask = mask;
+}
+
+// ---------- Log ----------
+function log(msg) {
+  const el = $('log');
+  el.textContent += msg + '\n';
+  const lines = el.textContent.split('\n');
+  if (lines.length > 80) el.textContent = lines.slice(-80).join('\n');
+  el.scrollTop = el.scrollHeight;
+}
+
+// ---------- Link to the glove: USB serial (Web Serial) or Bluetooth LE (Web Bluetooth) ----------
+// Both carry the same text lines. Over BLE the glove acts as a Nordic UART Service device.
+const NUS = {
+  service: '6e400001-b5a3-f393-e0a9-e50e24dcca9e',
+  rx: '6e400002-b5a3-f393-e0a9-e50e24dcca9e',   // PC -> glove (commands)
+  tx: '6e400003-b5a3-f393-e0a9-e50e24dcca9e',   // glove -> PC (notifications)
+};
+let link = null;   // { kind: 'usb' | 'ble', send(text), close() }
+let rxBuf = '';
+
+function setConnected(on, kind) {
+  $('dot').classList.toggle('on', on);
+  $('connect').textContent = on ? 'Disconnect' : 'Connect USB';
+  $('connectBle').textContent = on && kind === 'ble' ? 'Disconnect' : 'Connect Bluetooth';
+  $('connectBle').disabled = on && kind === 'usb';
+  $('connect').disabled = on && kind === 'ble';
+  for (const id of ['zero', 'gyro', 'flexFlat', 'flexBent', 'info']) $(id).disabled = !on;
+  $('status').textContent = on
+    ? `Connected over ${kind === 'ble' ? 'Bluetooth' : 'USB'}, waiting for data…`
+    : 'Not connected. For USB, close the Arduino Serial Monitor first.';
+}
+
+function feed(text) {   // split incoming text into lines (BLE notifications can cut a line in two)
+  rxBuf += text;
+  let i;
+  while ((i = rxBuf.indexOf('\n')) >= 0) {
+    handleLine(rxBuf.slice(0, i).trim());
+    rxBuf = rxBuf.slice(i + 1);
+  }
+}
+
+async function connectUsb() {
+  if (!('serial' in navigator)) { log('Web Serial is not available. Use Chrome or Edge.'); return; }
+  let port, writer, reader, pipeDone;
+  try {
+    port = await navigator.serial.requestPort();
+    await port.open({ baudRate: 115200 });
+  } catch (e) {
+    log('Could not open port: ' + e.message + '\n(Is the Arduino Serial Monitor still open?)');
+    return;
+  }
+  writer = port.writable.getWriter();
+  const decoder = new TextDecoderStream();
+  pipeDone = port.readable.pipeTo(decoder.writable).catch(() => {});
+  reader = decoder.readable.getReader();
+  const me = link = {
+    kind: 'usb', port,
+    send: (t) => writer.write(new TextEncoder().encode(t)),
+    async close() {
+      try { await reader.cancel(); } catch {}
+      try { await pipeDone; } catch {}
+      try { writer.releaseLock(); } catch {}
+      try { await port.close(); } catch {}
+    },
+  };
+  state.lastSeq = null; rxBuf = '';
+  setConnected(true, 'usb');
+  (async () => {
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        feed(value);
+      }
+    } catch (e) { log('Read stopped: ' + e.message); }
+    if (link === me) disconnect();
+  })();
+}
+
+async function connectBle() {
+  if (!navigator.bluetooth) { log('Web Bluetooth is not available. Use Chrome or Edge.'); return; }
+  let device;
+  try {
+    // Match by name or by service, whichever the OS reports (Windows may split the two across packets)
+    device = await navigator.bluetooth.requestDevice({
+      filters: [{ namePrefix: 'WavePilot' }, { services: [NUS.service] }],
+      optionalServices: [NUS.service],
+    });
+    $('status').textContent = 'Connecting to ' + (device.name || 'glove') + '…';
+    const server = await device.gatt.connect();
+    const svc = await server.getPrimaryService(NUS.service);
+    const tx = await svc.getCharacteristic(NUS.tx);
+    const rx = await svc.getCharacteristic(NUS.rx);
+    const decoder = new TextDecoder();
+    tx.addEventListener('characteristicvaluechanged', (e) => feed(decoder.decode(e.target.value, { stream: true })));
+    await tx.startNotifications();
+    const me = link = {
+      kind: 'ble',
+      send: (t) => {
+        const data = new TextEncoder().encode(t);
+        return rx.writeValueWithoutResponse ? rx.writeValueWithoutResponse(data) : rx.writeValue(data);
+      },
+      async close() { try { device.gatt.disconnect(); } catch {} },
+    };
+    device.addEventListener('gattserverdisconnected', () => {
+      if (link === me) { log('Bluetooth connection lost.'); link = null; setConnected(false); }
+    });
+    state.lastSeq = null; rxBuf = '';
+    setConnected(true, 'ble');
+    log('Connected to ' + (device.name || 'glove') + ' over Bluetooth.');
+  } catch (e) {
+    try { device?.gatt.disconnect(); } catch {}
+    link = null; setConnected(false);
+    if (e.name !== 'NotFoundError') log('Bluetooth connect failed: ' + e.message);   // NotFoundError = user closed the picker
+  }
+}
+
+async function disconnect() {
+  const l = link;
+  link = null;
+  try { await l?.close(); } catch {}
+  setConnected(false);
+}
+
+async function send(ch) {
+  try { await link?.send(ch); } catch (e) { log('Send failed: ' + e.message); }
+}
+
+function handleLine(line) {
+  if (!line) return;
+  if (!line.startsWith('G,')) { log(line); return; }
+  const p = line.split(',');
+  if (p.length < 5) return;
+  const seq = Number(p[1]);
+  // Seq gaps give the real elapsed time; a reset board (seq goes backwards) contributes 0.
+  const steps = state.lastSeq === null ? 0 : Math.min(Math.max(seq - state.lastSeq, 0), 50);
+  state.lastSeq = seq;
+  state.roll = Number(p[2]);
+  state.pitch = Number(p[3]);
+  state.yawRate = Number(p[4]);
+  if (p.length >= 8 && Number.isFinite(Number(p[7]))) onButtons(Number(p[7]) | 0);
+  if (p.length >= 6 && Number.isFinite(Number(p[5]))) {
+    flex.raw = Number(p[5]);
+    flex.recent.push(flex.raw);
+    if (flex.recent.length > 25) flex.recent.shift();
+  }
+  if (Math.abs(state.yawRate) > YAW_DEADBAND) state.yaw += state.yawRate * steps * SAMPLE_DT;
+  state.samples++;
+  const m = mapped();
+  history.push([m.roll, m.pitch, m.yawRate]);
+  if (history.length > HISTORY) history.shift();
+}
+
+$('connect').onclick = () => (link ? disconnect() : connectUsb());
+$('connectBle').onclick = () => (link ? disconnect() : connectBle());
+$('zero').onclick = () => { send('c'); state.yaw = 0; };
+$('gyro').onclick = () => { send('g'); log('Calibrating gyro, keep the glove still…'); };
+$('info').onclick = () => send('i');
+if ('serial' in navigator) {
+  navigator.serial.addEventListener('disconnect', (e) => { if (link?.port === e.target) { log('Device unplugged.'); disconnect(); } });
+} else {
+  log('Web Serial is not available in this browser. Open this page in Chrome or Edge.');
+}
+if (!navigator.bluetooth) $('connectBle').title = 'Web Bluetooth is not available in this browser. Use Chrome or Edge.';
+
+setInterval(() => {
+  state.hz = state.samples;
+  state.samples = 0;
+  if (link) $('status').textContent = state.hz
+    ? `Streaming at ${state.hz} Hz over ${link.kind === 'ble' ? 'Bluetooth' : 'USB'}`
+    : 'Connected, no data (check the board is running glove.ino)';
+}, 1000);
+
+// ---------- 3D scene: a quadcopter that follows the glove ----------
+const view = $('view');
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+view.prepend(renderer.domElement);
+
+const SKY = 0x9db8d9;
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(SKY);
+scene.fog = new THREE.Fog(SKY, 70, 190);
+const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 600);
+
+scene.add(new THREE.HemisphereLight(0xeaf2ff, 0x4a3f30, 0.6));
+const sun = new THREE.DirectionalLight(0xfff3dd, 0.8);
+sun.position.set(60, 100, 40);
+scene.add(sun);
+
+// ---------- Procedural terrain (infinite: the mesh re-centres under the drone) ----------
+// 1 unit = 1 m. Heights come from fractal value noise, so the same world spot always
+// has the same height no matter where the mesh is centred.
+function hash(x, z) {
+  let h = (Math.imul(x, 374761393) + Math.imul(z, 668265263)) | 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+function valueNoise(x, z) {
+  const xi = Math.floor(x), zi = Math.floor(z);
+  const xf = x - xi, zf = z - zi;
+  const u = xf * xf * (3 - 2 * xf), v = zf * zf * (3 - 2 * zf);
+  const a = hash(xi, zi), b = hash(xi + 1, zi), c = hash(xi, zi + 1), d = hash(xi + 1, zi + 1);
+  return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
+}
+function terrainHeight(x, z) {
+  let n = 0, amp = 0.5, f = 0.011;
+  for (let o = 0; o < 5; o++) { n += amp * valueNoise(x * f + 100, z * f + 100); amp *= 0.5; f *= 2; }
+  n /= 0.96875;                                   // normalise 5 octaves to 0..1
+  return Math.pow(n, 1.7) * 75 - 12;              // < 0 is under water
+}
+const TERRAIN_COLORS = [                          // [max height, color]
+  [-4, new THREE.Color(0x1d5580)], [0, new THREE.Color(0x2f72a3)],     // deep / shallow water
+  [1.5, new THREE.Color(0xc2ad74)], [10, new THREE.Color(0x4f8236)],   // sand / grass
+  [20, new THREE.Color(0x3a6229)], [30, new THREE.Color(0x6b6257)],    // forest / rock
+  [Infinity, new THREE.Color(0xe8ecf0)],                               // snow
+];
+function terrainColor(h) {
+  for (const [max, c] of TERRAIN_COLORS) if (h < max) return c;
+}
+
+const T_SIZE = 400, T_SEG = 160, T_CELL = T_SIZE / T_SEG;
+const terrainGeo = new THREE.PlaneGeometry(T_SIZE, T_SIZE, T_SEG, T_SEG);
+terrainGeo.rotateX(-Math.PI / 2);
+const tPos = terrainGeo.attributes.position;
+const tBase = Float32Array.from(tPos.array);       // local x/z of every vertex
+terrainGeo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(tPos.count * 3), 3));
+const terrain = new THREE.Mesh(terrainGeo, new THREE.MeshStandardMaterial({
+  vertexColors: true, flatShading: true, roughness: 0.95, metalness: 0,
+}));
+scene.add(terrain);
+
+function buildTerrain(cx, cz) {
+  // Snap to the grid so vertices always land on the same world points (no "swimming").
+  cx = Math.round(cx / T_CELL) * T_CELL;
+  cz = Math.round(cz / T_CELL) * T_CELL;
+  const col = terrainGeo.attributes.color;
+  for (let i = 0; i < tPos.count; i++) {
+    const h = terrainHeight(cx + tBase[i * 3], cz + tBase[i * 3 + 2]);
+    tPos.setY(i, Math.max(h, 0));
+    const c = terrainColor(h);
+    col.setXYZ(i, c.r, c.g, c.b);
+  }
+  tPos.needsUpdate = true;
+  col.needsUpdate = true;
+  terrainGeo.computeBoundingSphere();
+  terrain.position.set(cx, 0, cz);
+}
+
+// Blob shadow under the drone: cheap depth cue for height above ground
+const shadow = new THREE.Mesh(new THREE.CircleGeometry(1.5, 32),
+  new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.3, depthWrite: false }));
+shadow.rotation.x = -Math.PI / 2;
+scene.add(shadow);
+
+const drone = new THREE.Group();
+scene.add(drone);
+const mat = (color, extra = {}) => new THREE.MeshStandardMaterial({ color, roughness: 0.6, metalness: 0.2, ...extra });
+
+drone.add(new THREE.Mesh(new THREE.BoxGeometry(0.75, 0.22, 0.95), mat(0x3a4150)));
+const canopy = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.12, 0.5), mat(0x4f8cff));
+canopy.position.set(0, 0.17, -0.1);
+drone.add(canopy);
+
+// Front is -Z. Front arms red, rear arms grey, so heading is obvious.
+const rotors = [];
+const leds = [];
+const R = 0.95;
+[[-R, -R, 0xff6b6b, 1], [R, -R, 0xff6b6b, -1], [-R, R, 0x8a90a0, -1], [R, R, 0x8a90a0, 1]].forEach(([x, z, color, dir]) => {
+  const len = Math.hypot(x, z);
+  const arm = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.07, len), mat(color));
+  arm.position.set(x / 2, 0, z / 2);
+  arm.rotation.y = Math.atan2(x, z);
+  drone.add(arm);
+
+  const motor = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 0.16, 20), mat(0x22262f));
+  motor.position.set(x, 0.06, z);
+  drone.add(motor);
+
+  const disc = new THREE.Mesh(new THREE.CylinderGeometry(0.46, 0.46, 0.01, 40),
+    mat(0xffffff, { transparent: true, opacity: 0.08 }));
+  disc.position.set(x, 0.15, z);
+  drone.add(disc);
+
+  const blade = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.012, 0.07), mat(0xd7dbe5, { transparent: true }));
+  blade.position.set(x, 0.155, z);
+  blade.userData.dir = dir;
+  blade.userData.disc = disc;
+  blade.userData.speed = 0;   // 0..1 motor speed, eased toward its target
+  drone.add(blade);
+  rotors.push(blade);
+
+  // Status LED on the outside of each motor: red at the front, green at the rear
+  const led = new THREE.Mesh(new THREE.SphereGeometry(0.09, 12, 8), new THREE.MeshBasicMaterial({ color: 0x2a2d35 }));
+  led.position.set(x * 1.12, -0.04, z * 1.12);
+  led.userData.on = z < 0 ? 0xff3b3b : 0x3bff6a;
+  drone.add(led);
+  leds.push(led);
+});
+
+// ---------- Drone camera (YOLO test): gimbal camera, people and cars, frame recording ----------
+// Frames are POSTed to serve_camera.py, saved as jpg, then scripts/check_yolo_camera.sh runs yolo11n on them.
+const CAM_WIDTH = 1280, CAM_HEIGHT = 720;   // same as WavePilot DEFAULT_CAMERA
+const CAM_VFOV_DEG = 45;
+const CAM_TILT_DEG = 20;                     // gimbal looks this far down and stays level (stabilised)
+const CAM_DROP = 0.25;                       // m below the body
+const RECORD_FPS = 10;                       // = run_yolo.py --fps default
+const JPEG_QUALITY = 0.9;
+const AUTO_RECORD_DELAY_MS = 3000;           // ?record=<sec>: wait for models to appear first
+const MODEL_BASE = 'https://raw.githubusercontent.com/mrdoob/three.js/r128/examples/models/gltf/';
+const DRACO_DECODER_PATH = 'https://www.gstatic.com/draco/versioned/decoders/1.4.1/';
+
+const camRenderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+camRenderer.setPixelRatio(1);
+camRenderer.setSize(CAM_WIDTH, CAM_HEIGHT, false);
+camRenderer.domElement.id = 'camView';
+view.appendChild(camRenderer.domElement);
+const droneCam = new THREE.PerspectiveCamera(CAM_VFOV_DEG, CAM_WIDTH / CAM_HEIGHT, 0.1, 600);
+
+function updateDroneCam() {
+  droneCam.position.copy(drone.position);
+  droneCam.position.y -= CAM_DROP;
+  droneCam.rotation.set(-CAM_TILT_DEG * D2R, -shown.yaw * D2R, 0, 'YXZ');
+}
+
+// People and cars ahead of home (-Z), where the drone looks at start. dx/dz in m from home.
+// HOME (below) is chosen so that every spot here is dry and roughly level.
+const WALK_SPEED = 1.2;                      // m/s
+const ACTOR_SPECS = [
+  { model: 'Soldier.glb', dx: -3, dz: -16, headingDeg: 90, walkM: 6 },
+  { model: 'Soldier.glb', dx: 4, dz: -19, headingDeg: 20 },
+  { model: 'ferrari.glb', dx: 9, dz: -25, headingDeg: 60 },
+  { model: 'ferrari.glb', dx: -9, dz: -28, headingDeg: -30 },
+];
+const actors = [];   // { spec, root, mixer, base, along, dir }
+
+const dracoLoader = new THREE.DRACOLoader();
+dracoLoader.setDecoderPath(DRACO_DECODER_PATH);
+const gltfLoader = new THREE.GLTFLoader();
+gltfLoader.setDRACOLoader(dracoLoader);
+
+for (const spec of ACTOR_SPECS) {
+  gltfLoader.load(MODEL_BASE + spec.model, (gltf) => {
+    const base = new THREE.Vector2(HOME.x + spec.dx, HOME.z + spec.dz);
+    const actor = { spec, root: gltf.scene, mixer: null, base, along: 0, dir: 1 };
+    if (gltf.animations.length) {
+      // Without a clip the skinned soldier stands in a T-pose, which YOLO does not see as a person
+      actor.mixer = new THREE.AnimationMixer(gltf.scene);
+      const clip = gltf.animations.find((c) => c.name === (spec.walkM ? 'Walk' : 'Idle'));
+      if (clip) actor.mixer.clipAction(clip).play();
+    }
+    scene.add(gltf.scene);
+    actors.push(actor);
+    placeActor(actor);
+  }, undefined, (e) => log(`Model load failed: ${spec.model} (${e.message || e})`));
+}
+
+function placeActor(actor) {
+  const { spec } = actor;
+  const heading = spec.headingDeg * D2R_ACTOR;
+  // Walkers pace back and forth along their heading
+  const x = actor.base.x + Math.sin(heading) * actor.along;
+  const z = actor.base.y + Math.cos(heading) * actor.along;
+  actor.root.position.set(x, Math.max(terrainHeight(x, z), 0), z);
+  actor.root.rotation.y = heading + (actor.dir < 0 ? Math.PI : 0);
+}
+
+function updateActors(dt) {
+  for (const actor of actors) {
+    actor.mixer?.update(dt);
+    if (!actor.spec.walkM) continue;
+    actor.along += actor.dir * WALK_SPEED * dt;
+    if (Math.abs(actor.along) > actor.spec.walkM / 2) actor.dir *= -1;
+    placeActor(actor);
+  }
+}
+const D2R_ACTOR = Math.PI / 180;
+
+// Recording: one jpg per 1/RECORD_FPS s, POSTed in order; "done" tells the server to print the YOLO command
+const rec = { on: false, session: null, index: 0, sinceLast: 0, pending: 0, failed: 0 };
+const canRecord = location.protocol.startsWith('http');
+if (!canRecord) {
+  $('record').disabled = true;
+  $('recInfo').textContent = 'Recording needs the local server:\npython tools/visualizer/serve_camera.py\nthen open http://127.0.0.1:8765/drone_camera.html';
+}
+
+function startRecording() {
+  if (!canRecord || rec.on) return;
+  rec.session = new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
+  Object.assign(rec, { on: true, index: 0, sinceLast: 0, failed: 0 });
+  $('record').textContent = 'Stop';
+  view.classList.add('recording');
+  log(`Recording drone camera -> recordings/${rec.session}`);
+}
+
+async function stopRecording() {
+  if (!rec.on) return;
+  rec.on = false;
+  $('record').textContent = 'Record';
+  view.classList.remove('recording');
+  while (rec.pending > 0) await new Promise((resolve) => setTimeout(resolve, 50));
+  try {
+    await fetch(`/frames/done?session=${rec.session}`, { method: 'POST' });
+  } catch (e) { log('Could not reach serve_camera.py: ' + e.message); }
+  log(`Saved ${rec.index - rec.failed} frames to recordings/${rec.session}. YOLO log: see the serve_camera.py terminal.`);
+}
+
+function captureFrame(dt) {
+  if (!rec.on) return;
+  rec.sinceLast += dt;
+  if (rec.sinceLast < 1 / RECORD_FPS) return;
+  rec.sinceLast = Math.min(rec.sinceLast - 1 / RECORD_FPS, 1 / RECORD_FPS);   // no bursts after a slow frame
+
+  const index = rec.index++;
+  const session = rec.session;
+  rec.pending++;
+  camRenderer.domElement.toBlob(async (blob) => {
+    try {
+      const res = await fetch(`/frames?session=${session}&index=${index}`, { method: 'POST', body: blob });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+    } catch (e) {
+      if (rec.failed++ === 0) log('Frame upload failed: ' + e.message);
+    } finally {
+      rec.pending--;
+    }
+  }, 'image/jpeg', JPEG_QUALITY);
+  $('recInfo').textContent = `REC ${rec.session} · ${rec.index} frames`;
+}
+
+$('record').onclick = () => (rec.on ? stopRecording() : startRecording());
+addEventListener('keydown', (e) => { if (!e.repeat && (e.key === 'r' || e.key === 'R')) $('record').click(); });
+
+// ?record=<sec> starts a timed recording on load (used for scripted runs)
+const autoRecordSec = Number(new URLSearchParams(location.search).get('record'));
+if (autoRecordSec > 0) {
+  setTimeout(() => {
+    startRecording();
+    setTimeout(stopRecording, autoRecordSec * 1000);
+  }, AUTO_RECORD_DELAY_MS);
+}
+
+function resize() {
+  const w = view.clientWidth, h = view.clientHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / Math.max(h, 1);
+  camera.updateProjectionMatrix();
+}
+new ResizeObserver(resize).observe(view);
+resize();
+
+// ---------- Strip chart ----------
+const chart = $('chart');
+const ctx = chart.getContext('2d');
+const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const series = [[0, 90, css('--roll')], [1, 90, css('--pitch')], [2, 270, css('--yaw')]];
+
+function drawChart() {
+  const dpr = window.devicePixelRatio || 1;
+  const w = chart.clientWidth, h = chart.clientHeight;
+  if (chart.width !== w * dpr || chart.height !== h * dpr) { chart.width = w * dpr; chart.height = h * dpr; }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  ctx.strokeStyle = '#2c3240';
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0, h / 2); ctx.lineTo(w, h / 2); ctx.stroke();
+  for (const [idx, range, color] of series) {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    history.forEach((s, i) => {
+      const x = (i / (HISTORY - 1)) * w;
+      const y = h / 2 - Math.max(-1, Math.min(1, s[idx] / range)) * (h / 2 - 4);
+      i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+    });
+    ctx.stroke();
+  }
+}
+
+// ---------- Flight preview: simple physics, like a real quadcopter ----------
+// Thrust acts along the drone's "up" axis. Throttle sets its size (50% = exactly cancels gravity
+// when level), tilt splits it into lift and sideways push. Tilting at low throttle sinks;
+// tilting at high throttle accelerates hard. Drag sets a terminal speed.
+const G = 9.81;
+const HOVER_AGL = 9;          // m above ground at start / for the automatic hover used until the flex is calibrated
+const TILT_DEADBAND = 3;      // deg of tilt ignored, so a resting hand does not drift
+const MAX_THRUST = 2 * G;     // m/s^2 at 100% throttle
+const DRAG_H = 0.7, DRAG_V = 1.2, DRAG_GROUND = 4;   // 1/s
+const HOVER_BAND = 0.04;      // bend 46..54% counts as exactly 50% throttle
+const flight = { pos: new THREE.Vector3(0, 0, 0), vel: new THREE.Vector3(), alt: HOVER_AGL, terrainAt: null, throttle: 0.5, auto: true, onGround: false };
+const tiltEuler = new THREE.Euler(), tiltUp = new THREE.Vector3();
+
+const AI_RADIUS = 20, AI_SPEED = 6;   // m, m/s
+const pct = (v) => Math.round(v * 100) + '%';
+const deadband = (deg) => Math.abs(deg) < TILT_DEADBAND ? 0 : deg - Math.sign(deg) * TILT_DEADBAND;
+
+// Home = nearest low, dry spot with an open view ahead (-Z), searched outward from the origin.
+// This page also needs the actor stage ahead of home to be dry land within STAGE_MAX_STEP m of home's height.
+const STAGE_MIN_H = 1.5, STAGE_MAX_STEP = 2.5;
+function isStageDry(x, z, h) {
+  return ACTOR_SPECS.every(({ dx, dz, walkM = 0 }) => [-walkM / 2, 0, walkM / 2].every((w) => {
+    const sh = terrainHeight(x + dx + w, z + dz);
+    return sh >= STAGE_MIN_H && Math.abs(sh - h) <= STAGE_MAX_STEP;
+  }));
+}
+const HOME = (() => {
+  for (let r = 0; r < 3000; r += 10) {
+    for (let a = 0; a < 2 * Math.PI; a += 0.4) {
+      const x = r * Math.cos(a), z = r * Math.sin(a), h = terrainHeight(x, z);
+      if (h < 2 || h > 6) continue;
+      let open = true;
+      for (let d = 20; d <= 100 && open; d += 20) open = terrainHeight(x, z - d) < h + 10;
+      if (open && isStageDry(x, z, h)) return new THREE.Vector3(x, 0, z);
+    }
+  }
+  return new THREE.Vector3();
+})();
+
+function goHome() {
+  flight.pos.copy(HOME);
+  flight.vel.set(0, 0, 0);
+  flight.onGround = false;
+  flight.alt = Math.max(terrainHeight(HOME.x, HOME.z), 0) + HOVER_AGL;
+  buildTerrain(HOME.x, HOME.z);
+  flight.terrainAt = HOME.clone();
+  camera.position.set(HOME.x, flight.alt + 4, HOME.z + 9);
+}
+$('home').onclick = goHome;
+goHome();
+
+// ---------- Rotors: motor speed follows throttle, with a tilt mix like a flight controller ----------
+const MAX_OMEGA = 60;         // rad/s of blade spin at full motor speed (visual, not real rpm)
+const MIX_GAIN = 0.15;        // motor speed change at full lean (30 deg)
+const motorSpeeds = [0, 0, 0, 0];   // FL, FR, RL, RR for the readout
+function updateRotors(dt, m) {
+  // Lean command: nose down speeds up the rear motors, right side down speeds up the left motors
+  const pitchCmd = Math.max(-1, Math.min(1, deadband(m.pitch) / 30));
+  const rollCmd = Math.max(-1, Math.min(1, deadband(m.roll) / 30));
+  const flash = (buttons.middle || buttons.key) && Math.floor(performance.now() / 120) % 2 === 0;
+  for (const led of leds) led.material.color.setHex(flash ? led.userData.on : 0x2a2d35);
+  rotors.forEach((b, i) => {
+    const front = b.position.z < 0, left = b.position.x < 0;
+    let target = flight.throttle;
+    if (opts.fly || mode.ai) target += MIX_GAIN * (front ? pitchCmd : -pitchCmd) + MIX_GAIN * (left ? rollCmd : -rollCmd);
+    target = Math.max(0, Math.min(1, target));
+    const u = b.userData;
+    u.speed += (target - u.speed) * Math.min(1, dt * 6);        // motors take a moment to spin up/down
+    b.rotation.y += u.dir * u.speed * MAX_OMEGA * dt;
+    b.material.opacity = 1 - 0.75 * u.speed;                     // blades blur out at speed
+    u.disc.material.opacity = 0.04 + 0.26 * u.speed;
+    motorSpeeds[(front ? 0 : 2) + (left ? 0 : 1)] = u.speed;
+  });
+}
+
+// ---------- Render loop ----------
+const D2R = Math.PI / 180;
+const shown = { roll: 0, pitch: 0, yaw: 0 };
+const clock = new THREE.Clock();
+const fwd = new THREE.Vector3(), right = new THREE.Vector3(), target = new THREE.Vector3();
+function frame() {
+  requestAnimationFrame(frame);
+  const dt = Math.min(clock.getDelta(), 0.05);
+  const m = mapped();
+  // Light smoothing so 50 Hz data looks fluid at 60+ fps
+  shown.roll += (m.roll - shown.roll) * 0.35;
+  shown.pitch += (m.pitch - shown.pitch) * 0.35;
+  shown.yaw += (m.yaw - shown.yaw) * 0.35;
+  if (mode.ai) {
+    // Placeholder autopilot: fly a level circle to the right at a fixed radius, banking into the turn
+    mode.aiYaw += (AI_SPEED / AI_RADIUS) / D2R * dt;
+    shown.yaw = mode.aiYaw;
+    shown.roll = Math.atan(AI_SPEED * AI_SPEED / (AI_RADIUS * G)) / D2R;
+    shown.pitch = -5;
+  }
+  // +pitch = nose up, +roll = right side down, +yaw = nose right
+  drone.rotation.set(shown.pitch * D2R, -shown.yaw * D2R, -shown.roll * D2R, 'YXZ');
+  updateRotors(dt, m);
+
+  // Heading vectors (front of the drone is -Z at yaw 0)
+  const psi = shown.yaw * D2R;
+  fwd.set(Math.sin(psi), 0, -Math.cos(psi));
+  right.set(Math.cos(psi), 0, Math.sin(psi));
+
+  const ground = Math.max(terrainHeight(flight.pos.x, flight.pos.z), 0);
+  let thrustAccel = 0;
+  if (mode.ai) {
+    // Constant-speed circle; hold altitude above the terrain
+    flight.vel.set(fwd.x * AI_SPEED, flight.vel.y, fwd.z * AI_SPEED);
+    const target = ground + mode.aiAgl;
+    flight.vel.y = (target - flight.alt) * 1.5;
+    flight.auto = true;
+    flight.throttle = 0.5;
+  } else if (opts.fly) {
+    // Thrust direction from the (dead-banded) tilt: nose down = forward, right side down = right
+    tiltEuler.set(deadband(shown.pitch) * D2R, -shown.yaw * D2R, -deadband(shown.roll) * D2R, 'YXZ');
+    tiltUp.set(0, 1, 0).applyEuler(tiltEuler);
+
+    // Throttle: the finger once calibrated, otherwise an automatic hover so the preview stays flyable
+    flight.auto = !(flexReady() && flex.raw !== null);
+    if (flight.auto) {
+      const agl = flight.alt - ground;
+      flight.throttle = Math.min(1, Math.max(0, 0.5 / Math.max(tiltUp.y, 0.5) + 0.04 * (HOVER_AGL - agl) - 0.1 * flight.vel.y));
+    } else {
+      flight.throttle = Math.abs(flex.bend - 0.5) < HOVER_BAND ? 0.5 : flex.bend;
+    }
+    thrustAccel = flight.throttle * MAX_THRUST;
+
+    flight.vel.x += (tiltUp.x * thrustAccel - DRAG_H * flight.vel.x) * dt;
+    flight.vel.y += (tiltUp.y * thrustAccel - G - DRAG_V * flight.vel.y) * dt;
+    flight.vel.z += (tiltUp.z * thrustAccel - DRAG_H * flight.vel.z) * dt;
+  } else {
+    flight.vel.multiplyScalar(Math.max(0, 1 - 3 * dt));   // parked: coast to a stop and hold
+    flight.throttle = 0.5;
+  }
+  flight.pos.x += flight.vel.x * dt;
+  flight.pos.z += flight.vel.z * dt;
+  if (opts.fly || mode.ai) flight.alt += flight.vel.y * dt;
+
+  // Ground contact: sit on the terrain, no sinking, friction when landed
+  const groundNow = Math.max(terrainHeight(flight.pos.x, flight.pos.z), 0);
+  flight.onGround = flight.alt <= groundNow + 0.3;
+  if (flight.onGround) {
+    flight.alt = groundNow + 0.3;
+    if (flight.vel.y < 0) flight.vel.y = 0;
+    const f = Math.max(0, 1 - DRAG_GROUND * dt);
+    flight.vel.x *= f; flight.vel.z *= f;
+  }
+  flight.alt = Math.min(flight.alt, groundNow + 250);
+  drone.position.set(flight.pos.x, flight.alt, flight.pos.z);
+  shadow.position.set(flight.pos.x, groundNow + 0.15, flight.pos.z);
+  shadow.material.opacity = 0.35 * Math.max(0, 1 - (flight.alt - groundNow) / 30);
+
+  // Keep the terrain mesh centred under the drone
+  if (Math.hypot(flight.pos.x - flight.terrainAt.x, flight.pos.z - flight.terrainAt.z) > 25) {
+    buildTerrain(flight.pos.x, flight.pos.z);
+    flight.terrainAt.copy(flight.pos);
+  }
+
+  // Chase camera: behind and above, looking a little ahead of the drone
+  target.copy(drone.position).addScaledVector(fwd, -9);
+  target.y += 4;
+  camera.position.lerp(target, Math.min(1, dt * 5));
+  camera.position.y = Math.max(camera.position.y, Math.max(terrainHeight(camera.position.x, camera.position.z), 0) + 1.5);
+  target.copy(drone.position).addScaledVector(fwd, 3);
+  camera.lookAt(target);
+
+  const speed = Math.hypot(flight.vel.x, flight.vel.z);
+  $('flightInfo').textContent = (opts.fly || mode.ai)
+    ? `${mode.ai ? 'AI MODE · circling ' + AI_RADIUS + ' m radius\n' : ''}Throttle ${Math.round(flight.throttle * 100)}%${flight.auto ? ' (auto hover, calibrate the flex)' : ''}${flight.onGround ? ' · landed' : ''}
+` +
+      `Speed ${speed.toFixed(1)} m/s · climb ${flight.vel.y >= 0 ? '+' : ''}${flight.vel.y.toFixed(1)} m/s · ${(flight.alt - groundNow).toFixed(0)} m above ground · ${Math.hypot(flight.pos.x - HOME.x, flight.pos.z - HOME.z).toFixed(0)} m from home
+` +
+      `Motors  FL ${pct(motorSpeeds[0])}  FR ${pct(motorSpeeds[1])}  RL ${pct(motorSpeeds[2])}  RR ${pct(motorSpeeds[3])}`
+    : 'Tilt = lean the drone, bend = throttle (50% hovers), yaw = turn. Zero pose and calibrate the flex first.';
+
+  $('vRoll').textContent = m.roll.toFixed(1) + '°';
+  $('vPitch').textContent = m.pitch.toFixed(1) + '°';
+  $('vYaw').textContent = m.yaw.toFixed(0) + '°';
+  $('vRate').textContent = `${m.yawRate.toFixed(0)} °/s · ${state.hz} Hz`;
+
+  if (flex.raw !== null && flexReady()) {
+    const target = Math.min(1, Math.max(0, (flex.raw - flex.flat) / (flex.bent - flex.flat)));
+    flex.bend += (target - flex.bend) * 0.3;
+  }
+  $('vFlexRaw').textContent = flex.raw === null ? '–' : flex.raw;
+  $('vBend').textContent = flexReady() && flex.raw !== null ? Math.round(flex.bend * 100) + '%' : '–';
+  $('bendBar').style.width = (flexReady() ? flex.bend * 100 : 0) + '%';
+  $('flexCal').textContent = flexReady()
+    ? `Calibrated: flat ${flex.flat}, bent ${flex.bent}`
+    : 'Not calibrated: hold the finger straight and click Set flat, then bend fully and click Set bent.';
+
+  drawChart();
+  updateActors(dt);
+  renderer.render(scene, camera);
+  updateDroneCam();
+  camRenderer.render(scene, droneCam);
+  captureFrame(dt);
+}
+frame();
+</script>
+</body>
+</html>
