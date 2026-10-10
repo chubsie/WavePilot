@@ -12,16 +12,18 @@ WAVEPILOT_ROOT = Path(__file__).resolve().parents[1]
 
 CHECKED_PACKAGES = (
     "interfaces", "mocks", "comm", "perception", "drone", "operator_console", "llm_module",
+    "yolo_detection",
 )
 
 # 패키지(최상위 이름) -> import 하면 안 되는 최상위 모듈
 FORBIDDEN_BY_PACKAGE = {
-    "interfaces": {"mocks", "comm", "perception", "drone", "operator_console", "llm_module"},
+    "interfaces": {"mocks", "comm", "perception", "drone", "operator_console", "llm_module", "yolo_detection"},
     "mocks": {"comm", "perception", "llm_module", "drone", "operator_console"},
-    "perception": {"mocks", "comm", "llm_module", "drone", "operator_console"},
+    "perception": {"mocks", "comm", "llm_module", "drone", "operator_console", "yolo_detection"},
     "comm": {"mocks", "perception", "llm_module", "drone", "operator_console"},
-    "llm_module": {"mocks", "comm", "perception", "drone", "operator_console"},
+    "llm_module": {"mocks", "comm", "perception", "drone", "operator_console", "yolo_detection"},
     "operator_console": {"mocks", "perception", "llm_module", "drone"},
+    "yolo_detection": {"mocks", "comm", "perception", "llm_module", "drone", "operator_console"},
 }
 
 # 파일 단위 규칙: 파이프라인은 구현체(mock·전송·인식 구현)를 몰라야 교체 지점이 유지된다
