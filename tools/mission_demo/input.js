@@ -62,12 +62,12 @@ export class GloveInput {
       if (!saved && legacy) this.saveFlex();
     } catch {}
     if (typeof navigator !== 'undefined') navigator.serial?.addEventListener?.('disconnect', event => {
-      if (this.link?.port === event.target) { this.onLog('USB 장갑 연결이 끊어졌습니다.'); this.disconnect(); }
+      if (this.link?.port === event.target) { this.onLog('USB glove disconnected.'); this.disconnect(); }
     });
   }
 
   async connect(kind = "usb") {
-    if (this.link) throw new Error('현재 장갑 연결을 해제한 후 다른 연결 방식을 선택하세요.');
+    if (this.link) throw new Error('Disconnect the current glove first.');
     this.last = null;
     this.lastSeq = null;
     this.buffer = '';
@@ -77,7 +77,7 @@ export class GloveInput {
   }
 
   async connectUsb() {
-    if (!("serial" in navigator)) throw new Error("Web Serial은 Chrome/Edge에서만 지원됩니다.");
+    if (!("serial" in navigator)) throw new Error("Web Serial requires Chrome or Edge.");
     const port = await navigator.serial.requestPort();
     await port.open({ baudRate: 115200 });
     const reader = port.readable.getReader();
@@ -110,7 +110,7 @@ export class GloveInput {
   }
 
   async connectBle() {
-    if (!navigator.bluetooth) throw new Error("Web Bluetooth는 Chrome/Edge에서만 지원됩니다.");
+    if (!navigator.bluetooth) throw new Error("Web Bluetooth requires Chrome or Edge.");
     const device = await navigator.bluetooth.requestDevice({
       filters: [{ namePrefix: "WavePilot" }, { services: [NUS.service] }],
       optionalServices: [NUS.service],
@@ -210,7 +210,7 @@ export class GloveInput {
     if (!["flat", "bent"].includes(which) || this.flex0.recent.length < 10) return false;
     this.flex0[which] = Math.round(this.flex0.recent.reduce((sum, value) => sum + value, 0) / this.flex0.recent.length);
     this.saveFlex();
-    this.onLog(this.flexReady() ? `Flex 보정: flat=${this.flex0.flat}, bent=${this.flex0.bent}` : 'Flex 두 기준값의 간격이 30 이상이어야 합니다.');
+    this.onLog(this.flexReady() ? `Flex calibration: flat=${this.flex0.flat}, bent=${this.flex0.bent}` : 'Flex endpoints must differ by at least 30.');
     return true;
   }
 
@@ -218,7 +218,7 @@ export class GloveInput {
     if(command==='c') this.yawDegrees=0;
     try { if (this.link) await this.link.send(command); }
     catch (error) { this.onLog(`Send failed: ${error.message}`); }
-    if (command === 'g') this.onLog('자이로 보정 중 · 장갑을 움직이지 마세요');
+    if (command === 'g') this.onLog('Calibrating gyro · Keep the glove still');
   }
 
   async disconnect() {

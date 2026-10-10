@@ -4,12 +4,27 @@ import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import { resolveMovement, sphereIntersectsAabb } from '../tools/mission_demo/collision.js';
 import { AutoPilotInput, GloveInput } from '../tools/mission_demo/input.js';
+import { AnalysisEngine } from '../tools/mission_demo/analysis.js';
+import { PEOPLE } from '../tools/mission_demo/population.js';
 const require = createRequire(import.meta.url);
 const T = require('../tools/visualizer/three.min.js');
 globalThis.window = { THREE: T };
 Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem() { return null; }, setItem() {} } });
 const { DroneWorld } = await import('../tools/mission_demo/world.js');
 const { createDrone } = await import('../tools/mission_demo/drone-model.js');
+
+
+test('scene report describes only supplied visible targets and their measured distance', () => {
+  const engine = new AnalysisEngine(()=>{});
+  const report = engine.buildReport([{id:'T-07',kind:'VEHICLE',distance:24.3,screenSide:'Right'}],{altitude:32,speed:0,mode:'MANUAL'});
+  const text = report.map(line=>line.text).join(' ');
+  assert.ok(text.includes('1 vehicles'));
+  assert.ok(text.includes('Right of frame · 24.3m'));
+  assert.ok(text.includes('Hovering'));
+  assert.ok(!report.some(line=>line.ids.includes('T-03')));
+  assert.match(engine.buildReport([])[0].text,/No targets visible/);
+  assert.ok(!text.includes('moving north'));
+});
 
 test('main axis mapping, gyro/info commands, logs and yaw reset remain available', async () => {
   const logs=[],sent=[];
@@ -27,7 +42,7 @@ test('main axis mapping, gyro/info commands, logs and yaw reset remain available
   for(const command of ['g','i','c']) await glove.send(command);
   assert.deepEqual(sent,['g','i','c']);
   assert.equal(glove.yawDegrees,0);
-  assert.deepEqual(logs,['INFO,ready','자이로 보정 중 · 장갑을 움직이지 마세요']);
+  assert.deepEqual(logs,['INFO,ready','Calibrating gyro · Keep the glove still']);
 });
 
 test('chase view shows drone while inset uses original camera without self-occlusion', () => {
@@ -61,6 +76,26 @@ function flightWorld(boxes = []) {
   world.reset();
   return world;
 }
+
+test('added people use matching scene and tracking positions and remain stationary', () => {
+  const world=flightWorld();
+  world.environment=new T.Group();
+  const body=new T.Mesh(new T.BoxGeometry(.5,1.5,.3));
+  body.name='Person_T03_Body'; body.position.set(2,1,-22);
+  world.environment.add(body);
+  world.addPeople();
+  const engine=new AnalysisEngine(()=>{}), tracks=engine.tracks(0);
+  for(const person of PEOPLE) {
+    const model=world.environment.getObjectByName(`Person_${person.id}`);
+    assert.equal(model.children.length,1);
+    assert.deepEqual(model.position.toArray(),person.feet);
+    const track=tracks.find(t=>t.id===person.id);
+    assert.equal(track.position[1],person.feet[1]+1.7);
+    assert.deepEqual(engine.tracks(100).find(t=>t.id===person.id).position,track.position);
+  }
+  world.syncTargets(tracks);
+  assert.equal(world.environment.getObjectByName('Person_T-11').position.y,20.66);
+});
 
 test('IMU 50% throttle hovers; full throttle accelerates upward with main gravity and drag', () => {
   const world = flightWorld();
@@ -139,6 +174,9 @@ test('runtime collects only explicit GLB proxies, never enclosing facade bounds'
 
 test('visual occlusion removes a target but invisible collision proxies do not', () => {
   const world = flightWorld();
+  world.camera.position.y = 12;
+  world.camera.rotation.set(0,0,0);
+  world.camera.updateMatrixWorld(true);
   world.environment = new T.Group();
   const wall = new T.Mesh(new T.BoxGeometry(4, 8, 1));
   wall.position.set(0, 12, 34);
@@ -252,6 +290,15 @@ test('fast movement cannot tunnel through a wall; backing away remains possible'
   assert.ok(hit.position[2] > .9);
   const retreat = resolveMovement(hit.position, [-1,0,0], .7, walls);
   assert.equal(retreat.blocked, false);
+});
+
+test('drone keeps two metres of side clearance from building walls', () => {
+  const wall = [{min:[3,0,-100],max:[4,48,100]}];
+  const world = flightWorld(wall);
+  world.camera.position.set(0, 12, 0);
+  const input = {source:'keyboard', roll:1, pitch:0, yaw:0, throttle:0};
+  for (let frame=0; frame<240; frame++) world.update(input, 1/60);
+  assert.ok(world.camera.position.x <= 1.01, `wall clearance was only ${(3-world.camera.position.x).toFixed(2)}m`);
 });
 
 test('urban AUTO completes a loop without collision against actual GLB proxies and flight physics', () => {

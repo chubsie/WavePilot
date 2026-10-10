@@ -1,6 +1,8 @@
+import { PEOPLE } from './population.js';
 const URBAN_TRACKS = [
-    { id: "T-03", kind: "PERSON", confidence: 91, position: [2, 1.7, -22], movement: "북쪽 이동", zone: "중앙 광장" },
-    { id: "T-07", kind: "VEHICLE", confidence: 87, position: [-1, 1.2, 5], movement: "저속 접근", zone: "주도로" },
+    { id: "T-03", kind: "PERSON", confidence: 91, position: [2, 1.7, -22], movement: "Moving", zone: "Central street" },
+    { id: "T-07", kind: "VEHICLE", confidence: 87, position: [-1, 1.2, 5], movement: "Moving", zone: "Main road" },
+    ...PEOPLE.map(person=>({id:person.id,kind:'PERSON',confidence:90,position:[person.feet[0],person.feet[1]+1.7,person.feet[2]],movement:'Stationary',zone:person.zone})),
 ];
 
 export class AnalysisEngine {
@@ -15,7 +17,7 @@ export class AnalysisEngine {
     return URBAN_TRACKS.map((track, index) => {
       const phase = elapsedSeconds * (0.15 + index * 0.03);
       const position = [...track.position];
-      if (track.movement !== "정차") {
+      if (track.movement !== "Stationary") {
         position[0] += Math.sin(phase) * 1.4;
         position[2] += Math.cos(phase * 0.7) * 1.4;
       }
@@ -23,14 +25,14 @@ export class AnalysisEngine {
     });
   }
 
-  async requestReport(tracks, force = false) {
+  async requestReport(tracks, force = false, context = {}) {
     const remaining = 8000 - (performance.now() - this.lastReportAt);
     if (this.pending || (!force && remaining > 0)) return false;
     this.pending = true;
     this.onState({ status: "loading" });
     const captured = tracks.map((track) => ({ ...track }));
     this.timer = setTimeout(() => {
-      const lines = this.buildReport(captured);
+      const lines = this.buildReport(captured, context);
       this.lastReportAt = performance.now();
       this.pending = false;
       this.onState({ status: "ready", lines, generatedAt: new Date(), stateTime: performance.now() });
@@ -38,11 +40,11 @@ export class AnalysisEngine {
     return true;
   }
 
-  buildReport(tracks) {
+  buildReport(tracks, context = {}) {
     return [
-      { ids: ["T-03"], text: "중앙 광장에서 보행자 한 명이 북쪽으로 이동 중입니다." },
-      { ids: ["T-07"], text: "차량 한 대가 주도로를 따라 저속 접근하고 있습니다." },
-      { ids: ["T-03", "T-07"], text: "두 대상의 예상 이동 경로가 가까워 광장과 주도로의 추가 관측이 필요합니다." },
+      { ids: ['VIEW'], text: tracks.length ? `Visible: ${tracks.filter(t=>t.kind==='PERSON').length} people, ${tracks.filter(t=>t.kind==='VEHICLE').length} vehicles.` : 'No targets visible in the current camera view.' },
+      ...tracks.map(track=>({ids:[track.id], text:`${track.kind==='PERSON'?'Person':'Vehicle'} · ${track.screenSide || 'Center'} of frame${Number.isFinite(track.distance)?` · ${track.distance.toFixed(1)}m away`:''}${track.zone?` · ${track.zone}`:''}.`})),
+      ...(Number.isFinite(context.altitude) ? [{ids:['FLIGHT'],text:`Altitude ${context.altitude.toFixed(1)}m · ${context.speed < .2 ? 'Hovering' : `Speed ${context.speed.toFixed(1)}m/s`} · ${context.mode || 'MANUAL'}.`}] : []),
     ];
   }
 }

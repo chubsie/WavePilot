@@ -10,13 +10,12 @@ DEMO = ROOT / "tools" / "mission_demo"
 def test_demo_shell_contract():
     html = (DEMO / "index.html").read_text()
     required_ids = (
-        "scenario-code",
-        "mode-imu",
-        "mode-keyboard",
-        "mode-auto",
+        "flight-mode-badge",
+        "connect-ble",
+        "zero-imu",
+        "observation-toggle",
         "detection-list",
         "report-content",
-        "request-analysis",
     )
     for element_id in required_ids:
         assert f'id="{element_id}"' in html
@@ -51,8 +50,13 @@ def test_actual_flight_and_glove_behavior():
 
 def test_cinematic_environment_contract():
     html = (DEMO / "index.html").read_text()
-    for element_id in ("quality-cinematic", "quality-performance", "cinematic-effects"):
-        assert f'id="{element_id}"' in html
+    assert 'id="cinematic-effects"' in html
+    assert 'data-quality=' not in html
+    assert 'world.setQuality("cinematic")' in (DEMO / "app.js").read_text()
+    for element_id in ("flex-flat", "flex-bent"):
+        assert f'id="{element_id}"' in html.split('<details id="advanced-controls">')[0]
+    assert '>FLAT</button>' in html
+    assert '>BENT</button>' in html
 
     manifest = json.loads((DEMO / "assets" / "environment-manifest.json").read_text())
     assert set(manifest) == {"urban"}

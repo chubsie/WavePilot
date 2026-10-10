@@ -2,10 +2,13 @@ import { resolveMovement, sphereIntersectsAabb } from "./collision.js";
 import { createDrone } from "./drone-model.js";
 import { MainFlightCore, D2R, DRAG_H, DRAG_V } from "./flight-core.js";
 import { HeartBeam, updateStatusLeds } from "./hearts.js";
+import { PEOPLE } from './population.js';
 
 const THREE = window.THREE;
 
-const URBAN = { sky: 0x768384, fog: 0x65706b, start: [0, 12, 54], heading: 0 };
+const URBAN = { sky: 0x768384, fog: 0x65706b, start: [0, 32, 54], heading: 0 };
+const DRONE_RADIUS = .7;
+const BUILDING_SIDE_CLEARANCE = 2;
 
 export class DroneWorld {
   constructor(container, onAssetStatus = () => {}, fpvContainer = null) {
@@ -94,10 +97,11 @@ export class DroneWorld {
           object.visible = false;
         }
       });
-      if (this.colliders.some(box => sphereIntersectsAabb(URBAN.start, .7, box))) {
+      if (this.colliders.some(box => sphereIntersectsAabb(URBAN.start, BUILDING_SIDE_CLEARANCE, box, DRONE_RADIUS))) {
         throw new Error("Urban asset contains an occupied spawn point");
       }
       this.scene.add(this.environment);
+      this.addPeople();
       this.setQuality(this.quality);
       this.reset();
       this.loading = false;
@@ -138,7 +142,7 @@ export class DroneWorld {
     this.mainFlight ??= new MainFlightCore();
     this.hoverAltitude = URBAN.start[1];
     this.lastSource = null;
-    this.camera.rotation.set(-.35, this.heading, 0, "YXZ");
+    this.camera.rotation.set(-.65, this.heading, 0, "YXZ");
     this.camera.updateMatrixWorld(true);
     this.chaseReady = false;
   }
@@ -168,7 +172,7 @@ export class DroneWorld {
     if (input.source === 'imu-stale' || input.brake) this.velocity.set(0, 0, 0);
     const movement = this.velocity.clone().multiplyScalar(delta);
     if (!moveAltitude) movement.y = 0;
-    const resolved = resolveMovement(this.camera.position.toArray(), movement.toArray(), 0.7, this.colliders);
+    const resolved = resolveMovement(this.camera.position.toArray(), movement.toArray(), DRONE_RADIUS, this.colliders, BUILDING_SIDE_CLEARANCE);
     this.camera.position.fromArray(resolved.position);
     if (resolved.blocked) {
       for (let axis = 0; axis < 3; axis++) {
@@ -191,7 +195,8 @@ export class DroneWorld {
       this.camera.position.setComponent(axis, bounded);
     }
     this.camera.rotation.y = this.heading;
-    this.camera.rotation.x = mainControl ? this.mainFlight.shown.pitch * D2R : -.35 - input.pitch * 0.09;
+    const overview = THREE.MathUtils.clamp((this.camera.position.y - 12) / 20, 0, 1);
+    this.camera.rotation.x = mainControl ? this.mainFlight.shown.pitch * D2R : -.35 - overview * .3 - input.pitch * 0.09;
     this.camera.rotation.z = mainControl ? -this.mainFlight.shown.roll * D2R : -input.roll * 0.10;
     this.camera.updateMatrixWorld(true);
     this.renderViews(delta, input);
@@ -225,16 +230,11 @@ export class DroneWorld {
     });
     updateStatusLeds(this.leds || []);
     this.heartBeam?.update(delta, this.drone, this.velocity, this.flashHeld);
-    const offset=new THREE.Vector3(Math.sin(this.heading)*6,2.5,Math.cos(this.heading)*6);
+    // Rigid follow offset: altitude, turning and acceleration never change the distance.
+    const followDistance = 4;
+    const offset=new THREE.Vector3(Math.sin(this.heading)*followDistance,1.8,Math.cos(this.heading)*followDistance);
     const desired=this.camera.position.clone().add(offset);
-    // Keep the chase camera on the drone side of nearby building walls.
-    const ray=new THREE.Raycaster(this.camera.position,offset.clone().normalize(),.1,offset.length());
-    if (this.environment) {
-      const hit=ray.intersectObject(this.environment,true).find(h=>h.object.isMesh && h.object.visible && !h.object.name.startsWith('COLLIDER_'));
-      if(hit) desired.copy(this.camera.position).addScaledVector(offset.clone().normalize(),Math.max(.8,hit.distance-.4));
-    }
-    if(!this.chaseReady) this.chaseCamera.position.copy(desired);
-    else this.chaseCamera.position.lerp(desired,1-Math.exp(-delta*8));
+    this.chaseCamera.position.copy(desired);
     this.chaseReady=true;
     this.chaseCamera.lookAt(this.camera.position.clone().add(new THREE.Vector3(-Math.sin(this.heading)*3,0,-Math.cos(this.heading)*3)));
     const w=this.container.clientWidth,h=this.container.clientHeight;
@@ -265,6 +265,24 @@ export class DroneWorld {
         object.updateMatrixWorld(true);
       }
     }
+  }
+
+  addPeople() {
+    const parts=[];
+    this.environment.traverse(object=>{if(object.isMesh && object.name.startsWith('Person_T03')) parts.push(object);});
+    for (const person of PEOPLE) {
+      const group=new THREE.Group();
+      group.name=`Person_${person.id}`;
+      group.position.set(...person.feet);
+      for (const source of parts) {
+        const mesh=source.clone();
+        mesh.position.sub(new THREE.Vector3(2,0,-22));
+        group.add(mesh);
+      }
+      this.environment.add(group);
+      this.targetMeshes.set(person.id,[{object:group,initial:group.position.clone(),origin:[person.feet[0],person.feet[2]]}]);
+    }
+    this.environment.updateMatrixWorld(true);
   }
 
   canObserve(position) {

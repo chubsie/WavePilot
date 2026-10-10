@@ -7,8 +7,9 @@ const startedAt = performance.now();
 let mode = "keyboard";
 let lastFrame = performance.now();
 let lastTracks = [];
+let reportTracks = [];
+let reportContext = {};
 let initialReportRequested = false;
-let quality = localStorage.getItem("wavepilot-quality") || "cinematic";
 let blockedUntil = 0;
 let auxHeld = false, keyFlash = false;
 
@@ -16,14 +17,11 @@ const world = new DroneWorld($("viewport"), (status) => $("asset-status").textCo
 const keyboard = new KeyboardInput(() => { if (mode === "auto" || mode === "ai") setMode("keyboard"); });
 const glove = new GloveInput({
   onStatus: ({ connected, kind, error }) => {
-    $("connect-imu").classList.toggle("connected", connected && kind === "usb");
     $("connect-ble").classList.toggle("connected", connected && kind === "ble");
-    $("connect-imu").textContent = connected && kind === "usb" ? "USB 해제" : "USB 연결";
-    $("connect-ble").textContent = connected && kind === "ble" ? "Bluetooth 해제" : "Bluetooth 연결";
-    $('connect-imu').disabled = connected && kind === 'ble';
+    $("connect-ble").textContent = connected && kind === "ble" ? "PAIRED" : "PAIRING";
     $('connect-ble').disabled = connected && kind === 'usb';
     for (const id of ['zero-imu','gyro-imu','info-imu','flex-flat','flex-bent']) $(id).disabled = !connected;
-    $('glove-status').textContent = error || (connected ? `${kind.toUpperCase()} 장갑 연결됨` : '장갑 미연결 · USB 또는 Bluetooth 연결을 선택하세요');
+    connectionNotice(error || '');
     if (!connected && mode === "imu") setMode("keyboard");
   },
   onModeToggle: () => toggleMainMode(),
@@ -36,19 +34,24 @@ const analysis = new AnalysisEngine(renderReportState);
 function setMode(next) {
   if (next !== mode) autopilot.resetObservation();
   mode = next;
+  document.querySelector('.compact-flex').hidden = mode === 'ai' || mode === 'auto';
+  for (const id of ['flex-bent', 'flex-flat']) $(id).hidden = mode === 'ai' || mode === 'auto';
+  $('flight-mode-text').textContent = mode === 'ai' ? 'AI · CIRCLE' : mode === 'auto' ? 'AUTO · OBSERVE' : 'MANUAL';
+  $('flight-mode-badge').classList.toggle('automatic',mode==='ai'||mode==='auto');
+  $('observation-toggle').textContent=mode==='auto'?'Manual control':'Start observation';
+  $('main-mode-toggle').textContent=mode==='ai'?'Mode: AI (circling)':'Mode: Manual';
+  $('main-mode-toggle').classList.toggle('active',mode==='ai');
   document.querySelectorAll("[data-mode]").forEach((button) => button.classList.toggle("active", button.dataset.mode === mode));
-  $("flight-hint").textContent = mode === "keyboard" ? "WASD 이동 · Q/E 회전 · R/F 고도" : mode === "auto" ? "관측 AUTO · 식별 대상 접근" : mode === 'ai' ? 'AI 원형 비행 · 반경 20m · 진입 고도 유지 · M: 수동' : "장갑 수동 · M: AI · L: LED · 입력 손실 시 정지";
+  $("flight-hint").textContent = '';
 }
 
-function toggleMainMode() { setMode(mode === 'ai' ? 'imu' : 'ai'); }
+function toggleMainMode() { setMode(mode === 'ai' ? (glove.link?'imu':'keyboard') : 'ai'); }
 
-function setQuality(next) {
-  quality = next;
-  localStorage.setItem("wavepilot-quality", quality);
-  document.body.classList.toggle("performance", quality === "performance");
-  document.querySelectorAll("[data-quality]").forEach((button) => button.classList.toggle("active", button.dataset.quality === quality));
-  world.setQuality(quality);
+function connectionNotice(message) {
+  $('glove-status').textContent=message;
+  $('glove-status').hidden=!message;
 }
+
 
 function renderTracks(tracks, visibleTracks) {
   $("track-count").textContent = String(tracks.length).padStart(2, "0");
@@ -59,12 +62,13 @@ function renderTracks(tracks, visibleTracks) {
     list.innerHTML = tracks.map((track, index) => `
     <article class="detection-card" style="animation-delay:${index*55}ms">
       <span class="detection-id">${track.id}</span>
-      <div class="detection-main"><b>${track.kind}</b><span>${track.zone} · ${track.movement}</span></div>
-      <div class="detection-side"><b>${track.confidence}</b><small>CONFIDENCE</small></div>
+      <div class="detection-main"><b>${track.kind==='PERSON'?'Person':'Vehicle'}</b><span></span></div>
+      <div class="detection-side"><b></b><small>DISTANCE</small></div>
     </article>`).join("");
   }
   tracks.forEach((track, index) => {
-    list.children[index].querySelector(".detection-side b").textContent = track.confidence;
+    list.children[index].querySelector(".detection-side b").textContent = `${track.distance.toFixed(1)}m`;
+    list.children[index].querySelector(".detection-main span").textContent = `${track.screenSide} of frame`;
   });
 
   const overlay = $("detection-overlay");
@@ -87,16 +91,12 @@ function renderTracks(tracks, visibleTracks) {
 
 function renderReportState(state) {
   if (state.status === "loading") {
-    $("llm-status").textContent = "ANALYZING";
-    $("request-analysis").disabled = true;
     $("analysis-cooldown").textContent = "WORKING";
     return;
   }
-  $("llm-status").textContent = "READY";
-  $("request-analysis").disabled = false;
-  $("analysis-cooldown").textContent = "08S LOCK";
-  $("report-time").textContent = `${state.generatedAt.toLocaleTimeString("ko-KR", { hour12:false })} 생성`;
-  $("report-state").textContent = `STATE / ${Math.round(state.stateTime)}MS`;
+  $("analysis-cooldown").textContent = "AUTO UPDATE";
+  $("report-time").textContent = `${state.generatedAt.toLocaleTimeString("en-GB", { hour12:false })} captured`;
+  $("report-state").textContent = "Camera snapshot";
   $("report-content").innerHTML = state.lines.map((line, index) => `<div class="report-line" style="animation-delay:${index*85}ms"><span class="cite">${line.ids.join("+")}</span><span>${line.text}</span></div>`).join("");
 }
 
@@ -109,18 +109,19 @@ function updateTelemetry() {
   $("coord-e").textContent = telemetry.position.x.toFixed(1).padStart(5,"0");
   const m = glove.mapped();
   const bend=glove.flexReady()?Math.round(glove.flexBend()*100):0;
-  for(const [id,value] of [['roll',m.rollDegrees.toFixed(1)+'°'],['pitch',m.pitchDegrees.toFixed(1)+'°'],['yaw',m.yawDegrees.toFixed(0)+'°'],['rate',m.yawRate.toFixed(0)+'°/s'],['adc',glove.flex0.raw],['bend',glove.flexReady()?bend+'%':'미보정']]) $('sensor-'+id).textContent=glove.last?value:'—';
+  for(const [id,value] of [['roll',m.rollDegrees.toFixed(1)+'°'],['pitch',m.pitchDegrees.toFixed(1)+'°'],['yaw',m.yawDegrees.toFixed(0)+'°'],['rate',m.yawRate.toFixed(0)+'°/s'],['adc',glove.flex0.raw],['bend',glove.flexReady()?bend+'%':'UNCAL']]) $('sensor-'+id).textContent=glove.last?value:'—';
   $('sensor-hz').textContent=`${glove.hz} Hz`;
   $('flat-value').textContent=glove.flex0.flat ?? '—';
   $('bent-value').textContent=glove.flex0.bent ?? '—';
-  $('flex-calibration').textContent = glove.flexReady() ? '편 상태 0% → 굽힌 상태 100% · 50%에서 호버' : '손가락을 펴고 FLAT, 굽히고 BENT로 보정하세요';
+  $('flex-calibration').textContent = glove.flexReady() ? 'Flat 0% → Bent 100% · Level hover at 50%' : 'Save FLAT with finger straight, then BENT with finger bent';
   $('bend-fill').style.height = `${bend}%`;
   $('flex-gauge').setAttribute('aria-valuenow',String(bend));
-  $('flight-details').textContent = `추력 ${Math.round(telemetry.throttle*100)}%${telemetry.autoHover ? ' · 자동 호버' : ''}${telemetry.onGround ? ' · 착륙' : ''}\n상승 ${telemetry.climb.toFixed(1)} m/s · ${Math.hypot(telemetry.position.x,telemetry.position.z-54).toFixed(0)} m from home\n모터 FL/FR/RL/RR ${telemetry.motors.map(value=>Math.round(value*100)+'%').join(' / ')}`;
+  $('flight-details').textContent = `Thrust ${Math.round(telemetry.throttle*100)}%${telemetry.autoHover ? ' · Auto hover' : ''}${telemetry.onGround ? ' · Grounded' : ''}\nClimb ${telemetry.climb.toFixed(1)} m/s · ${Math.hypot(telemetry.position.x,telemetry.position.z-54).toFixed(0)} m from home\nMotors FL/FR/RL/RR ${telemetry.motors.map(value=>Math.round(value*100)+'%').join(' / ')}`;
   return telemetry;
 }
 
 function drawSensorChart() {
+  if (!$('advanced-controls').open) return;
   const canvas = $('sensor-chart'), ctx = canvas.getContext('2d');
   const width = canvas.clientWidth, height = canvas.clientHeight, dpr = window.devicePixelRatio || 1;
   if (canvas.width !== width*dpr || canvas.height !== height*dpr) { canvas.width=width*dpr; canvas.height=height*dpr; }
@@ -150,16 +151,21 @@ function frame(now) {
     if (mode === 'auto') autopilot.notifyBlocked();
   }
   if (mode === 'auto') {
-    const messages = {PATROL:'자동 순찰', APPROACH:'식별 대상 접근', OBSERVE:'거리 유지 · 관측', BLOCKED:'장애물 · 접근 중단', LOST:'대상 놓침 · 정지'};
-    $('flight-hint').textContent = `${messages[autopilot.status]} ${autopilot.targetId || ''} · 키 입력 시 수동 복귀`;
+    const messages = {PATROL:'Patrol', APPROACH:'Approaching target', OBSERVE:'Holding observation', BLOCKED:'Obstacle · Stopped', LOST:'Target lost · Stopped'};
+    $('flight-hint').textContent = `${messages[autopilot.status]} ${autopilot.targetId || ''} · Key input resumes manual`;
   }
   $("obstacle-warning").classList.toggle("show", now < blockedUntil);
   glove.advanceFrame(); // Main also updates flex after this frame's physics.
-  renderTracks(lastTracks, visibleTracks); updateTelemetry();
+  reportTracks = lastTracks.filter(t=>world.canObserve(t.position)).map(track=>{
+    const screen=world.project(track.position), ratio=screen.x/$('fpv-view').clientWidth;
+    return {...track,distance:screen.distance,screenSide:ratio<.35?'Left':ratio>.65?'Right':'Center'};
+  });
+  const current=updateTelemetry();
+  reportContext={altitude:current.altitude,speed:current.speed,mode:$('flight-mode-text').textContent};
+  renderTracks(reportTracks, reportTracks);
   drawSensorChart();
   const seconds = Math.floor((now-startedAt)/1000);
-  $("mission-clock").textContent = new Date(seconds*1000).toISOString().slice(11,19);
-  if (!initialReportRequested && seconds >= 2) { initialReportRequested = true; analysis.requestReport(lastTracks, true); }
+  if (seconds >= 2) { analysis.requestReport(reportTracks, !initialReportRequested, reportContext); initialReportRequested = true; }
   requestAnimationFrame(frame);
 }
 
@@ -167,22 +173,31 @@ document.querySelectorAll("[data-mode]").forEach((button) => button.addEventList
   if (button.dataset.mode === 'imu' && !glove.link) connectGlove('usb');
   else setMode(button.dataset.mode);
 }));
-document.querySelectorAll("[data-quality]").forEach((button) => button.addEventListener("click", () => setQuality(button.dataset.quality)));
 let connecting = false;
+const settings = $('advanced-controls');
+function closeSettings() { settings.open = false; settings.querySelector('summary').focus({preventScroll:true}); }
+$('close-settings').addEventListener('click', closeSettings);
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && settings.open) closeSettings();
+});
+document.addEventListener('pointerdown', event => {
+  if (settings.open && !settings.contains(event.target)) settings.open = false;
+});
 async function connectGlove(kind) {
   if (connecting) return;
   if (glove.link?.kind === kind) { await glove.disconnect(); return; }
   connecting = true;
-  $('glove-status').textContent = `${kind === 'usb' ? 'USB' : 'Bluetooth'} 기기 선택창에서 장갑을 선택하세요`;
+  connectionNotice('');
   try { await glove.connect(kind); setMode('imu'); }
   catch (error) {
-    $('glove-status').textContent = error.name === 'NotFoundError' ? '기기 선택이 취소됐습니다. 연결 버튼을 다시 눌러주세요.' : `연결 실패: ${error.message}`;
+    connectionNotice(error.name === 'NotFoundError' ? '' : `Connection failed: ${error.message}`);
   } finally { connecting = false; }
 }
-$("connect-imu").addEventListener("click", () => connectGlove('usb'));
+$('observation-toggle').addEventListener('click',()=>setMode(mode==='auto'?(glove.link?'imu':'keyboard'):'auto'));
+ $('main-mode-toggle').addEventListener('click',toggleMainMode);
 $("connect-ble").addEventListener("click", () => connectGlove('ble'));
-$("flex-flat").addEventListener("click", () => { $("flight-hint").textContent = glove.calibrateFlex("flat") ? "Flex 평평한 상태 저장" : "Flex 샘플을 먼저 수집하세요"; });
-$("flex-bent").addEventListener("click", () => { $("flight-hint").textContent = glove.calibrateFlex("bent") ? "Flex 굽힌 상태 저장" : "Flex 샘플을 먼저 수집하세요"; });
+$("flex-flat").addEventListener("click", () => { $("flight-hint").textContent = glove.calibrateFlex("flat") ? "FLAT saved" : "Waiting for flex samples"; });
+$("flex-bent").addEventListener("click", () => { $("flight-hint").textContent = glove.calibrateFlex("bent") ? "BENT saved" : "Waiting for flex samples"; });
 $("zero-imu").addEventListener("click", () => glove.send("c"));
 for(const [id,command] of [['gyro-imu','g'],['info-imu','i']]) $(id).addEventListener('click',()=>glove.send(command).catch(error=>{$('glove-log').textContent=error.message;}));
 for(const id of ['invRoll','invPitch','invYaw','swapRP']) {
@@ -199,8 +214,7 @@ window.addEventListener('keyup',event=>{if(event.key.toLowerCase()==='l') keyFla
 window.addEventListener('blur',()=>{keyFlash=false;});
 setInterval(()=>{glove.hz=glove.packetCount;glove.packetCount=0;},1000);
 $("reset-flight").addEventListener("click", () => { world.reset(); autopilot.reset(); blockedUntil = 0; });
-$("request-analysis").addEventListener("click", () => analysis.requestReport(lastTracks, true));
 
-setQuality(quality);
+world.setQuality("cinematic");
 await world.loadEnvironment();
 requestAnimationFrame(frame);

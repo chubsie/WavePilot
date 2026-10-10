@@ -1,131 +1,114 @@
 <!doctype html>
-<html lang="ko">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#080b09">
   <title>WavePilot — Field Command</title>
-  <link rel="stylesheet" href="styles.css?v=telemetry-4">
+  <link rel="stylesheet" href="styles.css?v=urban-ui-1">
 </head>
 <body>
   <header class="command-bar">
-    <a class="brand" href="#" aria-label="WavePilot 홈">
+    <a class="brand" href="#" aria-label="WavePilot home">
       <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
       <span><b>WAVEPILOT</b><small>FIELD COMMAND / 01</small></span>
     </a>
-    <div class="scenario-switch" aria-label="현재 시나리오"><span class="seg active"><span>01</span> 폐허 시가전</span></div>
-    <div class="system-strip" aria-label="시스템 상태">
-      <span><i class="status-dot ok"></i> ORIN <b id="orin-status">DEMO</b></span>
-      <span><i class="status-dot ok"></i> YOLO <b>LIVE</b></span>
-      <span><i class="status-dot warm"></i> NEMOTRON <b id="llm-status">READY</b></span>
-      <time id="mission-clock">00:00:00</time>
-    </div>
   </header>
 
   <main class="command-grid">
-    <section class="camera-panel" aria-label="드론 실시간 화면">
+    <section class="camera-panel" aria-label="Drone live view">
       <div id="viewport" class="viewport"></div>
-      <section class="fpv-inset" aria-label="드론 1인칭 카메라 미니 화면">
-        <div class="fpv-title">● DRONE CAMERA <span>1인칭 시야</span></div>
+      <section class="fpv-inset" aria-label="Drone camera inset">
+        <div class="fpv-title">● DRONE CAMERA</div>
         <div id="fpv-view"><div id="detection-overlay" class="detection-overlay" aria-hidden="true"></div>
           <div class="reticle" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
         </div>
       </section>
-      <section class="sensor-panel" aria-label="실시간 장갑 센서">
-        <header>GLOVE TELEMETRY <span id="sensor-hz">0 Hz</span></header>
-        <div class="sensor-body">
-          <div id="sensor-values" class="sensor-grid">
-            <div><small>ROLL</small><output id="sensor-roll">—</output></div>
-            <div><small>PITCH</small><output id="sensor-pitch">—</output></div>
-            <div><small>YAW</small><output id="sensor-yaw">—</output></div>
-            <div><small>회전 속도</small><output id="sensor-rate">—</output></div>
-            <div><small>FLEX ADC</small><output id="sensor-adc">—</output></div>
-            <div><small>굽힘</small><output id="sensor-bend">—</output></div>
-          </div>
-          <div class="flex-scale">
-            <span>BENT · <b id="bent-value">—</b></span>
-            <div class="bend-meter" id="flex-gauge" role="meter" aria-label="손가락 굽힘" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="bend-fill"></i><span class="hover-mark">50%</span></div>
-            <span>FLAT · <b id="flat-value">—</b></span>
-          </div>
+      <section class="sensor-panel compact-controller" aria-label="Glove controls">
+        <div class="original-buttons primary-controls">
+          <button id="connect-ble" class="utility-button" title="Pair Bluetooth glove">PAIRING</button>
+          <button id="zero-imu" class="utility-button" disabled>Zero</button>
+          <button id="flex-bent" class="utility-button" title="Save bent position as 100%" disabled>BENT</button>
+          <button id="flex-flat" class="utility-button" title="Save flat position as 0%" disabled>FLAT</button>
         </div>
-        <p id="flex-calibration">FLAT/BENT 보정 필요</p>
-        <output id="flight-details"></output>
-        <canvas id="sensor-chart" aria-label="최근 500개 Roll, Pitch, Yaw rate 센서 샘플"></canvas>
-        <p class="chart-legend"><span>Roll</span><span>Pitch</span><span>Yaw rate</span></p>
-        <details class="glove-settings">
-        <summary>축 설정 · 기기 보정</summary>
-        <label><input id="invRoll" type="checkbox">Roll 반전</label>
-        <label><input id="invPitch" type="checkbox">Pitch 반전</label>
-        <label><input id="invYaw" type="checkbox">Yaw 반전</label>
-        <label><input id="swapRP" type="checkbox">Roll/Pitch 교환</label>
-        <button id="gyro-imu" class="utility-button" disabled>자이로 보정</button>
-        <button id="info-imu" class="utility-button" disabled>IMU 정보</button>
-        <p>M: 수동/AI · L 또는 중지 버튼: 하트 빔</p>
-        <pre id="glove-log" aria-live="polite"></pre>
-      </details>
+        <div class="original-flex compact-flex">
+          <div class="flex-heading"><span title="Finger bend">BEND</span><output id="sensor-bend">—</output></div>
+          <span class="gauge-endpoint">BENT</span>
+          <div class="bend-meter" id="flex-gauge" role="meter" aria-label="Finger bend" title="Center: 50% bend, hover when level" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="bend-fill"></i><span class="hover-mark" aria-hidden="true"></span></div>
+          <span class="gauge-endpoint">FLAT</span>
+        </div>
+        <details id="advanced-controls"><summary aria-label="Control settings" title="Control settings">⚙</summary>
+          <div class="advanced-body">
+            <div class="settings-heading"><strong>Control settings</strong><button id="close-settings" type="button" aria-label="Close settings">×</button></div>
+            <header>Sensor data <span id="sensor-hz">0 Hz</span></header>
+            <div id="sensor-values" class="sensor-grid">
+              <div><small>Roll</small><output id="sensor-roll">—</output></div>
+              <div><small>Pitch</small><output id="sensor-pitch">—</output></div>
+              <div><small>Yaw</small><output id="sensor-yaw">—</output></div>
+              <div><small>Yaw rate</small><output id="sensor-rate">—</output></div>
+            </div>
+            <p>Flex ADC <b id="sensor-adc">—</b></p>
+            <div class="flex-endpoints"><span>Flat <b id="flat-value">—</b></span><span>Bent <b id="bent-value">—</b></span></div>
+            <p id="flex-calibration">Calibrate FLAT and BENT</p>
+            <div class="original-buttons">
+              <button id="gyro-imu" class="utility-button" disabled>Calibrate gyro</button>
+              <button id="info-imu" class="utility-button" disabled>IMU info</button>
+            </div>
+            <fieldset class="glove-settings"><legend>Axis mapping</legend>
+              <label><input id="invRoll" type="checkbox">Invert roll</label>
+              <label><input id="invPitch" type="checkbox">Invert pitch</label>
+              <label><input id="invYaw" type="checkbox">Invert yaw</label>
+              <label><input id="swapRP" type="checkbox">Swap roll/pitch</label>
+            </fieldset>
+            <div class="original-buttons">
+              <button id="main-mode-toggle" class="utility-button">Mode: Manual</button>
+              <button id="observation-toggle" class="utility-button">Start observation</button>
+              <button id="reset-flight" class="utility-button">Reset position</button>
+            </div>
+            <p>Thumb / M: Manual ↔ Circle · Middle / L: Hearts</p>
+            <output id="flight-details"></output>
+            <canvas id="sensor-chart" aria-label="Last 500 sensor samples"></canvas>
+            <p class="chart-legend"><span>Roll</span><span>Pitch</span><span>Yaw rate</span></p>
+            <pre id="glove-log" aria-live="polite"></pre>
+          </div>
+        </details>
       </section>
+      <div id="flight-mode-badge" class="flight-mode-badge" role="status"><i></i><span id="flight-mode-text">MANUAL</span></div>
       <div class="scanlines" aria-hidden="true"></div>
       <div id="cinematic-effects" class="cinematic-effects urban" aria-hidden="true"></div>
-      <div class="camera-topline">
-        <span class="recording"><i></i> DRONE / FOLLOW CAM</span>
-        <span id="scenario-code">URBAN_RECON</span>
-        <span>LINK <b>98%</b></span>
-      </div>
       <div class="camera-footer">
-        <div><small>ALT</small><b id="altitude">12.0</b><span>M</span></div>
+        <div><small>ALT</small><b id="altitude">32.0</b><span>M</span></div>
         <div><small>SPD</small><b id="speed">0.0</b><span>M/S</span></div>
         <div><small>HDG</small><b id="heading">000</b><span>°</span></div>
         <div><small>BAT</small><b>87</b><span>%</span></div>
       </div>
-      <div class="control-dock">
-        <div class="mode-switch" role="group" aria-label="비행 모드">
-          <button id="mode-imu" data-mode="imu">IMU</button>
-          <button id="mode-keyboard" data-mode="keyboard" class="active">KEYBOARD</button>
-          <button id="mode-ai" data-mode="ai" title="원본 AI: 반경 20m 원형 비행">AI CIRCLE</button>
-          <button id="mode-auto" data-mode="auto" title="식별 대상 접근 및 관측">AUTO</button>
-        </div>
-        <div class="quality-switch" role="group" aria-label="그래픽 품질">
-          <button id="quality-cinematic" data-quality="cinematic" class="active">CINEMATIC</button>
-          <button id="quality-performance" data-quality="performance">PERFORMANCE</button>
-        </div>
-        <div class="glove-controls" aria-label="장갑 연결 및 보정">
-          <button id="connect-imu" class="utility-button">USB 연결</button>
-          <button id="connect-ble" class="utility-button">Bluetooth 연결</button>
-          <button id="flex-flat" class="utility-button" disabled>FLAT</button>
-          <button id="flex-bent" class="utility-button" disabled>BENT</button>
-          <button id="zero-imu" class="utility-button" disabled>ZERO</button>
-        </div>
-        <button id="reset-flight" class="icon-button" aria-label="비행 위치 재설정" title="비행 위치 재설정">↻</button>
-      </div>
       <div id="obstacle-warning" class="obstacle-warning" role="status">OBSTACLE / FLIGHT BLOCKED</div>
-      <div id="glove-status" class="glove-status" role="status">장갑 미연결 · USB 또는 Bluetooth 연결을 선택하세요</div>
-      <div id="flight-hint" class="flight-hint">WASD 이동 · Q/E 회전 · R/F 고도</div>
+      <div id="glove-status" class="glove-status" role="status" hidden></div>
+      <div id="flight-hint" class="flight-hint" role="status"></div>
     </section>
 
-    <aside class="analysis-panel" aria-label="상황 분석">
+    <aside class="analysis-panel" aria-label="Scene analysis">
       <section class="panel-section detections-section">
         <header class="section-heading">
-          <div><span class="eyebrow">01 / SENSOR FUSION</span><h1>LIVE DETECTION</h1></div>
-          <div class="metric"><b id="track-count">0</b><small>TRACKS</small></div>
+          <div><h1>Visible targets</h1></div>
+          <div class="metric"><b id="track-count">0</b><small>TARGETS</small></div>
         </header>
-        <div class="confidence-rail"><span>YOLO11N / TRACKING</span><i></i><b>27 FPS</b></div>
         <div id="detection-list" class="detection-list" aria-live="polite"></div>
       </section>
 
       <section class="panel-section report-section">
         <header class="section-heading">
-          <div><span class="eyebrow">02 / NEMOTRON ANALYSIS</span><h2>SITUATION REPORT</h2></div>
-          <span id="report-grounding" class="grounded">● GROUNDED</span>
+          <div><h2>Scene report</h2></div>
+          <span id="report-grounding" class="grounded">Simulation</span>
         </header>
         <div class="report-meta">
-          <span id="report-time">대기 중</span>
-          <span id="report-state">STATE / —</span>
+          <span id="report-time">Waiting</span>
+          <span id="report-state">Camera snapshot</span>
         </div>
         <div id="report-content" class="report-content" aria-live="polite">
-          <div class="empty-report"><span>⌁</span><p>안정된 트랙이 수집되면<br>상황 보고서를 생성합니다.</p></div>
+          <div class="empty-report"><p>Checking camera view</p></div>
         </div>
         <footer class="report-actions">
-          <button id="request-analysis" class="analysis-button"><span>⌁</span> 현재 장면 다시 분석</button>
           <span id="analysis-cooldown">READY</span>
         </footer>
       </section>
