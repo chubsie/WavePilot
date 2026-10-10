@@ -124,6 +124,7 @@ class KinematicFlightControl:
             battery_pct=max(0.0, min(FULL_BATTERY_PCT, battery_pct)),
             flight_mode=self._flight_mode,
             gps=ned_to_gps(self._north_m, self._east_m, self._down_m),
+            height_above_ground_m=max(0.0, -self._down_m),  # 평지 — 지면은 down 0
         )
 
     def _apply_command(self, command: Command) -> None:
