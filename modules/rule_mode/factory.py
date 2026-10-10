@@ -2,28 +2,32 @@
 
 | 이름                       | 결과                                              |
 |----------------------------|---------------------------------------------------|
-| search / approach / hold / return_home | 해당 모드 클래스 `(params, settings)`  |
-| aim_and_fire / observe     | UnsupportedRuleModeError (Phase 4 에서 구현)       |
+| search / approach / hold / return_home / aim_and_fire / observe | 해당 모드 클래스 `(params, settings)` |
 | RULE_MODES 밖 이름          | ValueError                                        |
 
-호출 쪽(임무 루프)이 UnsupportedRuleModeError 를 받으면 비행 없이 자리표시 결과로 처리한다.
+PHASE4_RULE_MODES(빈 튜플)와 UnsupportedRuleModeError 는 임무 루프가 아직 import 하는 잔재다.
 """
 
 from modules.decision.interface.menu import RULE_MODES
+from modules.rule_mode.aim_and_fire import AimAndFireMode
 from modules.rule_mode.approach import ApproachMode
 from modules.rule_mode.hold import HoldMode
 from modules.rule_mode.interface import ModeParams, RuleMode, RuleModeSettings
+from modules.rule_mode.observe import ObserveMode
 from modules.rule_mode.return_home import ReturnHomeMode
 from modules.rule_mode.search import SearchMode
 
-SUPPORTED_RULE_MODES = ("search", "approach", "hold", "return_home")
-PHASE4_RULE_MODES = ("aim_and_fire", "observe")
+SUPPORTED_RULE_MODES = ("search", "approach", "hold", "return_home", "aim_and_fire", "observe")
+# 04-04 가 mission_loop 정리 뒤 PHASE4_RULE_MODES 와 UnsupportedRuleModeError 를 함께 지운다
+PHASE4_RULE_MODES: tuple[str, ...] = ()
 
 _MODE_CLASS_BY_NAME = {
     "search": SearchMode,
     "approach": ApproachMode,
     "hold": HoldMode,
     "return_home": ReturnHomeMode,
+    "aim_and_fire": AimAndFireMode,
+    "observe": ObserveMode,
 }
 
 

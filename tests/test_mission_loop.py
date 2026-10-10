@@ -28,7 +28,6 @@ from modules.flight_control.interface import TakeOff
 from modules.perception.interface import DEFAULT_CAMERA
 from modules.perception.tracking import TrackAggregator
 from modules.rule_mode.factory import (
-    PHASE4_RULE_MODES,
     SUPPORTED_RULE_MODES,
     UnsupportedRuleModeError,
     create_rule_mode,
@@ -43,6 +42,13 @@ PARAMS_BY_MODE = {
     "approach": {"target_track": "T1", "stop_distance_m": 5.0, "timeout_sec": 30.0},
     "hold": {"duration_sec": 5.0},
     "return_home": {"home_north_m": 0.0, "home_east_m": 0.0, "return_altitude_m": 10.0},
+    "aim_and_fire": {
+        "target_track": "T1",
+        "center_tolerance_ratio": 0.05,
+        "stable_frame_count": 5,
+        "timeout_sec": 15.0,
+    },
+    "observe": {"target_track": "T1", "timeout_sec": 10.0},
 }
 
 
@@ -55,15 +61,6 @@ def test_factory_creates_supported_modes(rule_mode):
 
     assert mode.rule_mode == rule_mode
     assert isinstance(mode, RuleMode)
-
-
-@pytest.mark.parametrize("rule_mode", PHASE4_RULE_MODES)
-def test_factory_rejects_phase4_modes(rule_mode):
-    with pytest.raises(UnsupportedRuleModeError) as error:
-        create_rule_mode(rule_mode, {}, RuleModeSettings())
-
-    assert error.value.rule_mode == rule_mode
-    assert "not implemented until Phase 4" in str(error.value)
 
 
 def test_factory_rejects_unknown_name_with_plain_value_error():
