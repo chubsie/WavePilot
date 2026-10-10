@@ -161,21 +161,26 @@ class SystemOneClient:
 
         return True
 
-    def measure_rtt_ms(self) -> float | None:
-        """추론 없는 GET /health 왕복 시간(ms) — 네트워크 몫 추정치(rtt_method health_probe). 실패하면 None.
+    def probe_rtt_ms(self) -> float:
+        """추론 없는 GET /health 왕복 시간(ms) — 네트워크 몫 추정치(rtt_method health_probe).
 
-        01-05 가 orin_processing_ms = max(0, total_ms − 이 값) 으로 쓰고, None 이면 POST 없이 unavailable 로 본다.
+        실패하면 ask_choice 와 같은 LLMBackendError 계열을 그대로 올린다 — 01-05 D1Selector 가 원인별로
+        timeout·unavailable·bad_response 를 가르고, 실패한 probe 뒤에는 POST 를 보내지 않는다(WR-02).
         """
         request = self._build_request(HEALTH_PATH, payload=None)
 
         started_sec = time.monotonic()
-        try:
-            self._fetch_json(request, self._health_timeout_sec)
-        except LLMBackendError:
-            return None
+        self._fetch_json(request, self._health_timeout_sec)
         elapsed_sec = time.monotonic() - started_sec
 
         return elapsed_sec * MS_PER_SEC
+
+    def measure_rtt_ms(self) -> float | None:
+        """probe_rtt_ms 와 같되 실패하면 None 을 돌려준다(원인이 필요 없는 진단·라이브 테스트용)."""
+        try:
+            return self.probe_rtt_ms()
+        except LLMBackendError:
+            return None
 
     def ask_choice(self, state_text: str, question_id: str, instructions: str, criteria: dict[str, str]) -> ChoiceReply:
         """choice 질문 1개를 보내 검증된 ChoiceReply 를 돌려준다. 보기는 criteria 의 키다(D-02).

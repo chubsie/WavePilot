@@ -96,15 +96,24 @@ def _build_reply(choice: str, options: tuple[str, ...], confidence: float = 0.8)
 class StubClient:
     """SystemOneClient 와 같은 두 메서드만 가진 HTTP 없는 객체 (D-11)."""
 
-    def __init__(self, rtt_ms: float | None = STUB_RTT_MS, reply: ChoiceReply | None = None, error: Exception | None = None):
+    def __init__(
+        self,
+        rtt_ms: float = STUB_RTT_MS,
+        reply: ChoiceReply | None = None,
+        error: Exception | None = None,
+        probe_error: Exception | None = None,
+    ):
         self.rtt_ms = rtt_ms
         self.reply = reply
         self.error = error
+        self.probe_error = probe_error
         self.calls: list[tuple[str, str, str, dict[str, str]]] = []
         self.rtt_calls = 0
 
-    def measure_rtt_ms(self) -> float | None:
+    def probe_rtt_ms(self) -> float:
         self.rtt_calls += 1
+        if self.probe_error is not None:
+            raise self.probe_error
         return self.rtt_ms
 
     def ask_choice(self, state_text: str, question_id: str, instructions: str, criteria: dict[str, str]) -> ChoiceReply:
@@ -197,15 +206,24 @@ def test_d1_selector_sends_filtered_options_and_serialized_state():
     assert client.rtt_calls == 1
 
 
-def test_d1_selector_rtt_none_raises_unavailable_without_post():
+@pytest.mark.parametrize(
+    ("probe_error", "reason"),
+    [
+        (LLMTimeoutError("probe slow"), FALLBACK_TIMEOUT),
+        (LLMUnavailableError("probe refused"), FALLBACK_UNAVAILABLE),
+        (LLMResponseError("probe 404"), FALLBACK_BAD_RESPONSE),
+    ],
+)
+def test_d1_selector_probe_failure_skips_post_with_cause_reason(probe_error: Exception, reason: str):
     state, event = _build_state(), _build_event()
-    client = StubClient(rtt_ms=None, reply=_build_reply("search", filter_options(state, event, ParamDefaults().approach_stop_distance_m)))
+    client = StubClient(reply=_build_reply("search", filter_options(state, event, ParamDefaults().approach_stop_distance_m)), probe_error=probe_error)
 
     with pytest.raises(D1SelectionError) as raised:
         _build_d1_selector(client).select(state, event)
 
-    # probe 실패는 서버 도달 불가로 보고 POST 를 보내지 않는다(WR-02)
-    assert raised.value.reason == FALLBACK_UNAVAILABLE
+    # probe 가 실패하면 POST 를 보내지 않고, 사유는 probe 실패 원인을 따른다(WR-02)
+    assert raised.value.reason == reason
+    assert raised.value.__cause__ is probe_error
     assert client.calls == []
     assert raised.value.latency.orin_processing_ms is None
     assert raised.value.latency.network_rtt_ms is None

@@ -1,6 +1,7 @@
-"""01-REVIEW CR-02·WR-02·WR-06 회귀 테스트 — d1 지연 범위, probe 실패 시 POST 생략, probe timeout 상한, base_url 검증.
+"""01-REVIEW CR-02·WR-02·WR-06 회귀 테스트 — d1 지연 범위, probe 실패 원인별 사유와 POST 생략, probe timeout 상한,
+base_url 검증.
 
-HTTP 서버는 띄우지 않는다. probe timeout 실측만 응답하지 않는 로컬 소켓을 쓴다.
+HTTP 서버는 띄우지 않는다. probe 실패 실측만 응답하지 않는 로컬 소켓·닫힌 로컬 포트를 쓴다.
 """
 
 import socket
@@ -11,6 +12,7 @@ import pytest
 from modules.decision.d1_selector import D1SelectionError, D1Selector, estimate_latency
 from modules.decision.interface import (
     EVENT_PERIODIC_CHECK,
+    FALLBACK_BAD_RESPONSE,
     FALLBACK_TIMEOUT,
     FALLBACK_UNAVAILABLE,
     DroneState,
@@ -23,7 +25,7 @@ from modules.decision.interface import (
 from modules.decision.options import filter_options
 from modules.decision.params import ParamDefaults
 from modules.decision.systemone_client import HEALTH_TIMEOUT_SEC, ChoiceReply, SystemOneClient
-from modules.llm_report.interface import LLMTimeoutError
+from modules.llm_report.interface import LLMResponseError, LLMTimeoutError, LLMUnavailableError
 
 PROBE_DELAY_SEC = 0.05
 PROBE_DELAY_MS = PROBE_DELAY_SEC * 1000.0
@@ -66,16 +68,18 @@ def _make_reply(choice: str = "search") -> ChoiceReply:
 
 
 class SlowProbeClient:
-    """probe 가 PROBE_DELAY_SEC 만큼 실제로 막힌 뒤 rtt_ms 를 돌려주는 가짜 클라이언트."""
+    """probe 가 PROBE_DELAY_SEC 만큼 실제로 막힌 뒤 FAKE_RTT_MS 를 돌려주거나 probe_error 를 내는 가짜 클라이언트."""
 
-    def __init__(self, rtt_ms: float | None = FAKE_RTT_MS, error: Exception | None = None) -> None:
-        self.rtt_ms = rtt_ms
+    def __init__(self, error: Exception | None = None, probe_error: Exception | None = None) -> None:
         self.error = error
+        self.probe_error = probe_error
         self.ask_count = 0
 
-    def measure_rtt_ms(self) -> float | None:
+    def probe_rtt_ms(self) -> float:
         time.sleep(PROBE_DELAY_SEC)
-        return self.rtt_ms
+        if self.probe_error is not None:
+            raise self.probe_error
+        return FAKE_RTT_MS
 
     def ask_choice(self, state_text: str, question_id: str, instructions: str, criteria: dict[str, str]) -> ChoiceReply:
         self.ask_count += 1
@@ -120,13 +124,24 @@ def test_estimate_latency_splits_request_not_selection():
 # --- WR-02: probe 실패면 POST 를 보내지 않는다 ---
 
 
-def test_probe_failure_skips_post_and_raises_unavailable():
-    client = SlowProbeClient(rtt_ms=None)
+@pytest.mark.parametrize(
+    ("probe_error", "reason"),
+    [
+        (LLMTimeoutError("timed out waiting for /health"), FALLBACK_TIMEOUT),
+        (LLMUnavailableError("cannot reach orin"), FALLBACK_UNAVAILABLE),
+        (LLMResponseError("HTTP 404 from /health"), FALLBACK_BAD_RESPONSE),
+    ],
+    ids=["timeout", "refused", "bad_response"],
+)
+def test_probe_failure_skips_post_with_cause_reason(probe_error: Exception, reason: str):
+    # probe 시간 초과를 unavailable 로 보면 짧은 timeout 설정에서 회로가 즉시 열린다(라이브 회귀)
+    client = SlowProbeClient(probe_error=probe_error)
 
     with pytest.raises(D1SelectionError, match="health probe failed") as raised:
         _select(client)
 
-    assert raised.value.reason == FALLBACK_UNAVAILABLE
+    assert raised.value.reason == reason
+    assert raised.value.__cause__ is probe_error
     assert client.ask_count == 0
     assert raised.value.latency.total_ms >= PROBE_DELAY_MS
     assert raised.value.latency.orin_processing_ms is None
@@ -156,18 +171,32 @@ def test_probe_timeout_is_min_of_health_and_request(
     assert used_timeouts == [expected_probe_timeout_sec, expected_probe_timeout_sec]
 
 
-def test_probe_against_silent_socket_gives_up_within_request_timeout():
+def test_probe_against_silent_socket_raises_timeout_within_request_timeout():
     # listen 만 하고 응답하지 않는 로컬 소켓 — connect 는 되고 본문 읽기에서 timeout 이 난다
     with socket.create_server(("127.0.0.1", 0)) as silent_server:
         port = silent_server.getsockname()[1]
         client = SystemOneClient(f"http://127.0.0.1:{port}", SHORT_REQUEST_TIMEOUT_SEC)
 
         started_sec = time.monotonic()
-        rtt_ms = client.measure_rtt_ms()
+        with pytest.raises(LLMTimeoutError):
+            client.probe_rtt_ms()
         elapsed_sec = time.monotonic() - started_sec
 
-    assert rtt_ms is None
+        assert client.measure_rtt_ms() is None
+
     assert elapsed_sec < HEALTH_TIMEOUT_SEC
+
+
+def test_probe_against_closed_port_raises_unavailable():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as placeholder:
+        placeholder.bind(("127.0.0.1", 0))
+        port = placeholder.getsockname()[1]
+    client = SystemOneClient(f"http://127.0.0.1:{port}", SHORT_REQUEST_TIMEOUT_SEC)
+
+    with pytest.raises(LLMUnavailableError):
+        client.probe_rtt_ms()
+
+    assert client.measure_rtt_ms() is None
 
 
 # --- WR-06: base_url 검증 ---
