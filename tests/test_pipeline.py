@@ -7,13 +7,16 @@ InMemoryLink 가 CommLink 자리를 채운다. 보낸 메시지를 목록에 쌓
 
 import logging
 import re
+import threading
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
 from drone.pipeline import DronePipeline, PipelineConfig, RunSummary
 from interfaces.comm import MESSAGE_TYPES, LinkStatus, Message
-from interfaces.flight_control import ReturnToHome
+from interfaces.detection import Frame
+from interfaces.flight_control import CommandAck, ReturnToHome, Telemetry
 from interfaces.geometry import DEFAULT_CAMERA
 from llm_module import LLMModuleConfig, create_llm_module
 from mocks.clock import SimClock
@@ -37,6 +40,7 @@ class InMemoryLink:
         self, inbound: list[Message] | None = None, fail_after_send_count: int | None = None
     ) -> None:
         self.sent: list[Message] = []
+        self.send_thread_ids: list[int] = []
         self.is_closed = False
         self._inbound = list(inbound or [])
         self._fail_after_send_count = fail_after_send_count
@@ -47,6 +51,7 @@ class InMemoryLink:
             raise ConnectionError("memory link broken")
 
         self.sent.append(message)
+        self.send_thread_ids.append(threading.get_ident())
 
     def receive(self, timeout_sec: float | None = None) -> Message | None:
         if not self._inbound:
@@ -246,3 +251,152 @@ def test_link_loss_stops_run_without_raising(checkpoint_pipeline) -> None:
     assert summary.frame_count < CHECKPOINT_FRAME_COUNT
     assert len(link.sent) == 3
     assert link.is_closed
+
+
+# --- 백그라운드 보고 (RESEARCH Pitfall 6) ---
+
+STUB_FRAME_TIMES_SEC = (0.0, 1.0, 2.0, 3.0)
+STUB_REPORT_INTERVAL_SEC = 1.0
+STUB_BLOCK_SEC = 0.3
+
+
+class StubDetectionSource:
+    def __init__(self, frame_times_sec: tuple[float, ...]) -> None:
+        self._frame_times_sec = list(frame_times_sec)
+        self._frame_index = 0
+
+    def read_frame(self) -> Frame | None:
+        if self._frame_index >= len(self._frame_times_sec):
+            return None
+
+        frame = Frame(
+            frame_id=self._frame_index,
+            timestamp_sec=self._frame_times_sec[self._frame_index],
+            image_width=DEFAULT_CAMERA.width_px,
+            image_height=DEFAULT_CAMERA.height_px,
+            detections=(),
+        )
+        self._frame_index += 1
+        return frame
+
+
+class StubFlightControl:
+    def get_telemetry(self) -> Telemetry:
+        return Telemetry(
+            time_sec=0.0, north_m=0.0, east_m=0.0, down_m=-40.0, roll_deg=0.0, pitch_deg=0.0, yaw_deg=0.0,
+            gimbal_pitch_deg=-55.0, gimbal_yaw_deg=0.0, battery_pct=100.0, flight_mode="hover",
+        )
+
+    def send_command(self, command) -> CommandAck:
+        return CommandAck(accepted=True, reason="stub")
+
+
+class StubTrackProvider:
+    def update(self, frame: Frame, telemetry: Telemetry) -> None:
+        pass
+
+    def snapshot(self, now_sec: float) -> list:
+        return []
+
+
+@dataclass(frozen=True)
+class StubState:
+    time_sec: float
+
+    def to_dict(self) -> dict:
+        return {"time_sec": self.time_sec}
+
+
+@dataclass(frozen=True)
+class StubOutput:
+    time_sec: float
+
+    def to_report_payload(self) -> dict:
+        return {"time_sec": self.time_sec, "decision": {"verdict": "act"}, "report": None, "report_error": None}
+
+
+class BlockingModule:
+    """process_state 가 block_sec 동안(또는 release 까지) 멈추는 느린 LLM 흉내."""
+
+    def __init__(self, block_sec: float, error: Exception | None = None) -> None:
+        self.release_event = threading.Event()
+        self._block_sec = block_sec
+        self._error = error
+
+    def build_state(self, tracks: list, telemetry: Telemetry) -> StubState:
+        return StubState(time_sec=telemetry.time_sec)
+
+    def process_state(self, state: StubState) -> StubOutput:
+        self.release_event.wait(self._block_sec)
+        if self._error is not None:
+            raise self._error
+        return StubOutput(time_sec=state.time_sec)
+
+
+def _run_background_pipeline(
+    module: BlockingModule,
+    frame_times_sec: tuple[float, ...] = STUB_FRAME_TIMES_SEC,
+    drain_timeout_sec: float = 5.0,
+) -> tuple[RunSummary, InMemoryLink]:
+    link = InMemoryLink()
+    config = PipelineConfig(
+        report_interval_sec=STUB_REPORT_INTERVAL_SEC,
+        run_reports_in_background=True,
+        report_drain_timeout_sec=drain_timeout_sec,
+    )
+    pipeline = DronePipeline(
+        StubDetectionSource(frame_times_sec), StubFlightControl(), StubTrackProvider(), module, link, config=config
+    )
+
+    summary = pipeline.run()
+    module.release_event.set()
+    return summary, link
+
+
+def test_background_reports_skip_while_previous_is_pending(caplog) -> None:
+    module = BlockingModule(block_sec=STUB_BLOCK_SEC)
+
+    with caplog.at_level(logging.WARNING):
+        summary, link = _run_background_pipeline(module)
+
+    sent_types = [message.type for message in link.sent]
+    assert sent_types.index("state") < sent_types.index("report")
+    assert summary.skipped_report_count >= 1
+    assert summary.report_count >= 1
+    assert summary.report_count == len(_get_payloads(link, "report"))
+    assert summary.state_count == summary.report_count + summary.skipped_report_count
+    assert sent_types[-1] == "report"
+    assert link.is_closed
+    warnings = [record.getMessage() for record in caplog.records]
+    assert any("report skipped: previous report still running" in message for message in warnings)
+
+
+def test_background_sends_happen_on_run_thread() -> None:
+    module = BlockingModule(block_sec=STUB_BLOCK_SEC)
+
+    _, link = _run_background_pipeline(module)
+
+    assert link.send_thread_ids
+    assert set(link.send_thread_ids) == {threading.get_ident()}
+
+
+def test_background_report_failure_is_counted() -> None:
+    module = BlockingModule(block_sec=0.0, error=RuntimeError("boom"))
+
+    summary, link = _run_background_pipeline(module, frame_times_sec=(0.0, 1.0))
+
+    assert summary.failed_report_count == 1
+    assert summary.report_count == 0
+    assert _get_payloads(link, "report") == []
+    assert link.is_closed
+
+
+def test_pending_report_is_dropped_after_drain_timeout(caplog) -> None:
+    module = BlockingModule(block_sec=1.0)
+
+    with caplog.at_level(logging.WARNING):
+        summary, link = _run_background_pipeline(module, frame_times_sec=(0.0, 1.0), drain_timeout_sec=0.2)
+
+    assert summary.report_count == 0
+    assert link.is_closed
+    assert any("report dropped at shutdown" in record.getMessage() for record in caplog.records)
