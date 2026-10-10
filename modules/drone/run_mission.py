@@ -6,6 +6,7 @@ pipeline.py / run_scenario.py 는 건드리지 않는 별도 컴포지션 루트
 실행 예시 (WavePilot 루트에서):
     uv run python -m modules.drone.run_mission --sim mock
     uv run --group yolo python -m modules.drone.run_mission --sim browser
+    uv run python -m modules.drone.run_mission --sim browser --yolo orin --yolo-url http://<orin-ip>:8082
     (browser: http://127.0.0.1:8766/drone_camera.html 을 열고 AI 모드로 전환한다)
 
 --sim mock 은 헤드리스다. KinematicFlightControl 과 스크립트 대상(person 1명)으로 YOLO 없이 돈다.
@@ -15,7 +16,6 @@ pipeline.py / run_scenario.py 는 건드리지 않는 별도 컴포지션 루트
 
 import argparse
 import dataclasses
-import functools
 import logging
 import math
 import os
@@ -50,6 +50,7 @@ from modules.drone.run_scenario import (
     BrowserComponents,
     WallClockPacer,
 )
+from modules.drone.yolo_factory import DEFAULT_YOLO_URL, YOLO_CHOICES, YOLO_LOCAL, create_yolo_factory
 from modules.flight_control.interface import FlightControl, Telemetry
 from modules.perception.interface import DEFAULT_CAMERA
 from modules.perception.tracking import TrackAggregator
@@ -184,6 +185,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="how long to wait for AI mode to be switched on in the page (--sim browser)",
     )
     parser.add_argument("--device", default=DEFAULT_YOLO_DEVICE, help="YOLO device for --sim browser: auto | mps | cpu | 0")
+    parser.add_argument(
+        "--yolo", choices=YOLO_CHOICES, default=YOLO_LOCAL, help="YOLO for --sim browser: local (Mac) | orin (remote server)"
+    )
+    parser.add_argument("--yolo-url", default=DEFAULT_YOLO_URL, help=f"Orin YOLO server URL for --yolo orin (default {DEFAULT_YOLO_URL})")
     parser.add_argument("--log-level", default="INFO", help="logging level (DEBUG, INFO, WARNING, ...)")
     return parser
 
@@ -259,7 +264,7 @@ def _run_browser_mission(
             return None
 
         flight_control = components.browser_flight_control(bridge)
-        yolo_factory = functools.partial(components.create_jpeg_yolo_source, device=args.device)
+        yolo_factory = create_yolo_factory(args.yolo, args.device, args.yolo_url)
         detection_source = components.browser_detection_source(bridge, yolo_factory=yolo_factory)
         frame_reader = LatestFrameReader(detection_source)
 
@@ -309,14 +314,12 @@ def _load_browser_components() -> BrowserComponents:
     from modules.simulation.browser.detection_source import BrowserDetectionSource
     from modules.simulation.browser.flight_control import BrowserFlightControl
     from modules.simulation.browser.server import start_sim_server
-    from modules.yolo_detection.jpeg_source import create_jpeg_yolo_source
 
     return BrowserComponents(
         sim_bridge=SimBridge,
         start_sim_server=start_sim_server,
         browser_flight_control=BrowserFlightControl,
         browser_detection_source=BrowserDetectionSource,
-        create_jpeg_yolo_source=create_jpeg_yolo_source,
     )
 
 

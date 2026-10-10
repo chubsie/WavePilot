@@ -17,10 +17,12 @@ llm_module 은 최상위 파사드(LLMModuleConfig, create_llm_module)만 쓴다
 시뮬레이터 서버를 띄운 뒤 페이지가 연결되기를 기다리고, 프레임은 yolo 그룹의 실제 YOLO 로 분석한다:
     uv run --group yolo python -m modules.drone.run_scenario --sim browser --operator-port 8765 --backend fake
     브라우저로 http://127.0.0.1:8766/drone_camera.html 을 연다
+
+--yolo orin 은 프레임을 Orin YOLO 서버로 보낸다 — Mac 에 yolo 그룹이 없어도 된다:
+    uv run python -m modules.drone.run_scenario --sim browser --yolo orin --yolo-url http://<orin-ip>:8082 --operator-port 8765 --backend fake
 """
 
 import argparse
-import functools
 import logging
 import sys
 import threading
@@ -35,6 +37,7 @@ from modules.drone.pipeline import (
     DronePipeline,
     PipelineConfig,
 )
+from modules.drone.yolo_factory import DEFAULT_YOLO_URL, YOLO_CHOICES, YOLO_LOCAL, create_yolo_factory
 from modules.perception.interface.geometry import DEFAULT_CAMERA
 from modules.llm_report import LLMBackendError, LLMModuleConfig, create_llm_module
 from modules.simulation.clock import SimClock
@@ -142,6 +145,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="stop the browser run after this many seconds (default: until Ctrl-C or the page stops)",
     )
     parser.add_argument("--device", default=DEFAULT_YOLO_DEVICE, help="YOLO device for --sim browser: auto | mps | cpu | 0")
+    parser.add_argument(
+        "--yolo", choices=YOLO_CHOICES, default=YOLO_LOCAL, help="YOLO for --sim browser: local (Mac) | orin (remote server)"
+    )
+    parser.add_argument("--yolo-url", default=DEFAULT_YOLO_URL, help=f"Orin YOLO server URL for --yolo orin (default {DEFAULT_YOLO_URL})")
     parser.add_argument("--log-level", default="INFO", help="logging level (DEBUG, INFO, WARNING, ...)")
     return parser
 
@@ -236,7 +243,6 @@ class BrowserComponents:
     start_sim_server: Callable
     browser_flight_control: Callable
     browser_detection_source: Callable
-    create_jpeg_yolo_source: Callable
 
 
 def _load_browser_components() -> BrowserComponents:
@@ -245,14 +251,12 @@ def _load_browser_components() -> BrowserComponents:
     from modules.simulation.browser.detection_source import BrowserDetectionSource
     from modules.simulation.browser.flight_control import BrowserFlightControl
     from modules.simulation.browser.server import start_sim_server
-    from modules.yolo_detection.jpeg_source import create_jpeg_yolo_source
 
     return BrowserComponents(
         sim_bridge=SimBridge,
         start_sim_server=start_sim_server,
         browser_flight_control=BrowserFlightControl,
         browser_detection_source=BrowserDetectionSource,
-        create_jpeg_yolo_source=create_jpeg_yolo_source,
     )
 
 
@@ -270,7 +274,7 @@ def _run_browser_sim(args: argparse.Namespace) -> int:
             return EXIT_FAILURE
 
         flight_control = components.browser_flight_control(bridge)
-        yolo_factory = functools.partial(components.create_jpeg_yolo_source, device=args.device)
+        yolo_factory = create_yolo_factory(args.yolo, args.device, args.yolo_url)
         detection_source = components.browser_detection_source(bridge, yolo_factory=yolo_factory)
 
         if args.duration_sec:

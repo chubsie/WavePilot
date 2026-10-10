@@ -123,7 +123,6 @@ def test_browser_without_connection_fails_and_closes_server(monkeypatch):
         start_sim_server=lambda bridge, host, port: server,
         browser_flight_control=lambda bridge: None,
         browser_detection_source=lambda bridge, yolo_factory: None,
-        create_jpeg_yolo_source=lambda items, device="auto": None,
     )
     monkeypatch.setattr(run_mission, "_load_browser_components", lambda: components)
 
@@ -132,6 +131,47 @@ def test_browser_without_connection_fails_and_closes_server(monkeypatch):
     assert exit_code == run_mission.EXIT_FAILURE
     assert server.shutdown_called
     assert server.server_close_called
+
+
+class UnfinishedRunner:
+    def run(self):
+        return None
+
+
+class FakeConnectedBridge:
+    ai_mode = True
+
+    def is_connected(self) -> bool:
+        return True
+
+
+def test_browser_orin_args_reach_yolo_factory(monkeypatch):
+    monkeypatch.delenv("WAVEPILOT_SELECTOR", raising=False)
+    factory_calls: list[tuple[str, str, str]] = []
+    yolo_factories: list = []
+    components = BrowserComponents(
+        sim_bridge=FakeConnectedBridge,
+        start_sim_server=lambda bridge, host, port: FakeServer(),
+        browser_flight_control=lambda bridge: None,
+        browser_detection_source=lambda bridge, yolo_factory: yolo_factories.append(yolo_factory),
+    )
+
+    def fake_create_yolo_factory(kind, device, url):
+        factory_calls.append((kind, device, url))
+        return "orin-factory"
+
+    monkeypatch.setattr(run_mission, "_load_browser_components", lambda: components)
+    monkeypatch.setattr(run_mission, "create_yolo_factory", fake_create_yolo_factory)
+    monkeypatch.setattr(run_mission, "LatestFrameReader", lambda source: None)
+    monkeypatch.setattr(run_mission, "_build_runner", lambda *args, **kwargs: UnfinishedRunner())
+
+    exit_code = run_mission.main(
+        ["--sim", "browser", "--yolo", "orin", "--yolo-url", "http://10.0.0.5:8082", "--device", "cpu"]
+    )
+
+    assert exit_code == run_mission.EXIT_FAILURE
+    assert factory_calls == [("orin", "cpu", "http://10.0.0.5:8082")]
+    assert yolo_factories == ["orin-factory"]
 
 
 # --- 보조 클래스 ---
