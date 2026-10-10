@@ -5,6 +5,7 @@
 - confidence <- boxes.conf (0~1)
 - xyxy       <- boxes.xyxy (픽셀, 좌상단 (x1, y1) / 우하단 (x2, y2))
 - track_id   <- boxes.id   (트래커가 아직 ID 를 주지 않았으면 None)
+- upper_color <- YOLO 소스가 상체 HSV 로 계산(person 만), 없으면 None
 
 mock 이든 실제 YOLO 어댑터든 같은 Frame 을 내므로, 인식 계층은 구현체를 몰라도 된다.
 """
@@ -15,6 +16,9 @@ from typing import Protocol, runtime_checkable
 # Ultralytics COCO 번호 그대로 — 실제 모델로 교체해도 숫자가 바뀌지 않게
 COCO_CLASS_IDS: dict[str, int] = {"person": 0, "car": 2, "bus": 5, "truck": 7}
 
+# 상체 색 토큰 — 판단 불가(unknown)는 None 으로 표현. 상태 JSON CLASS_NAME_PATTERN 규약에 맞는 토큰만 쓴다
+UPPER_COLORS: tuple[str, ...] = ("red", "other")
+
 
 @dataclass(frozen=True, slots=True)
 class Detection:
@@ -23,6 +27,7 @@ class Detection:
     confidence: float
     xyxy: tuple[float, float, float, float]
     track_id: int | None
+    upper_color: str | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -31,6 +36,7 @@ class Detection:
             "confidence": self.confidence,
             "xyxy": list(self.xyxy),
             "track_id": self.track_id,
+            "upper_color": self.upper_color,
         }
 
     @classmethod
@@ -47,12 +53,15 @@ class Detection:
         if track_id is not None and not _is_int(track_id):
             raise ValueError(f"field 'track_id' must be int or null, got {track_id!r}")
 
+        upper_color = _read_upper_color(data)
+
         return cls(
             class_id=_require_int(data, "class_id"),
             class_name=_require_str(data, "class_name"),
             confidence=confidence,
             xyxy=xyxy,
             track_id=track_id,
+            upper_color=upper_color,
         )
 
 
@@ -149,3 +158,13 @@ def _require_xyxy(data: dict, key: str) -> tuple[float, float, float, float]:
     if x1 > x2 or y1 > y2:
         raise ValueError(f"field '{key}' must satisfy x1<=x2 and y1<=y2, got {value!r}")
     return (x1, y1, x2, y2)
+
+
+def _read_upper_color(data: dict) -> str | None:
+    # 키 없음은 허용한다 — 옛 JSON·원격 프로토콜 하위 호환
+    value = data.get("upper_color")
+    if value is None:
+        return None
+    if not isinstance(value, str) or value not in UPPER_COLORS:
+        raise ValueError(f"field 'upper_color' must be one of {UPPER_COLORS} or null, got {value!r}")
+    return value

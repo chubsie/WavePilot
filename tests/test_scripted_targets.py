@@ -133,3 +133,28 @@ def test_kinematic_flight_reports_flat_ground_agl():
     telemetry = control.get_telemetry()
     assert telemetry.flight_mode == "hover"
     assert telemetry.height_above_ground_m == pytest.approx(telemetry.altitude_m)
+
+
+@pytest.mark.parametrize("upper_color", ["red", "other", None])
+def test_person_target_upper_color_is_carried_to_detection(drone_telemetry, upper_color):
+    target = ScriptedTarget(7, "person", 30.0, 0.0, upper_color=upper_color)
+
+    frame = ScriptedTargetSource(_FixedControl(drone_telemetry), [target]).read_frame()
+
+    assert frame.detections[0].upper_color == upper_color
+
+
+def test_target_upper_color_defaults_to_none(drone_telemetry):
+    target = ScriptedTarget(7, "person", 30.0, 0.0)
+
+    frame = ScriptedTargetSource(_FixedControl(drone_telemetry), [target]).read_frame()
+
+    assert target.upper_color is None
+    assert frame.detections[0].upper_color is None
+
+
+def test_target_rejects_unknown_upper_color_or_color_on_non_person():
+    with pytest.raises(ValueError, match="upper_color"):
+        ScriptedTarget(1, "person", 10.0, 0.0, upper_color="blue")
+    with pytest.raises(ValueError, match="person"):
+        ScriptedTarget(2, "car", 10.0, 0.0, upper_color="red")

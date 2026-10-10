@@ -6,6 +6,7 @@
 박스는 발 점과 머리 점(발 위 height_m)을 각각 투영해 만든다. 그래서 박스 밑변 중앙이 정확히 발 픽셀이고,
 approach 의 지면 투영 추정이 기하 정답과 일치한다. 프레임마다 그 순간의 텔레메트리를 기록해 두고
 telemetry_for(timestamp_sec) 로 돌려준다 (frame_telemetry — 촬영 순간 자세).
+배우 색은 upper_color 로 그대로 실어 보낸다(HSV 없음, D-07).
 """
 
 import math
@@ -16,6 +17,7 @@ from dataclasses import dataclass
 from modules.flight_control.interface import FlightControl, Telemetry
 from modules.perception.interface import DEFAULT_CAMERA, CameraIntrinsics, project_ned_to_pixel
 from modules.yolo_detection.interface import COCO_CLASS_IDS, Detection, Frame
+from modules.yolo_detection.interface.detection import UPPER_COLORS
 
 DEFAULT_CONFIDENCE = 0.9
 BOX_WIDTH_RATIO = 0.4
@@ -34,12 +36,19 @@ class ScriptedTarget:
     ground_down_m: float = 0.0
     north_mps: float = 0.0
     east_mps: float = 0.0
+    upper_color: str | None = None
 
     def __post_init__(self) -> None:
         if self.class_name not in COCO_CLASS_IDS:
             raise ValueError(f"unknown class_name {self.class_name!r}, expected one of {sorted(COCO_CLASS_IDS)}")
         if not self.height_m > 0:
             raise ValueError(f"field 'height_m' must be > 0, got {self.height_m!r}")
+
+        if self.upper_color is not None:
+            if self.upper_color not in UPPER_COLORS:
+                raise ValueError(f"field 'upper_color' must be one of {UPPER_COLORS} or None, got {self.upper_color!r}")
+            if self.class_name != "person":
+                raise ValueError(f"field 'upper_color' is only for person targets, got class_name {self.class_name!r}")
 
     def get_position_ned(self, time_sec: float) -> tuple[float, float, float]:
         """time_sec 시점의 발 점 (north, east, down)."""
@@ -135,4 +144,5 @@ class ScriptedTargetSource:
             confidence=self._confidence,
             xyxy=(x1, head[1], x2, feet[1]),
             track_id=target.track_id,
+            upper_color=target.upper_color,
         )
