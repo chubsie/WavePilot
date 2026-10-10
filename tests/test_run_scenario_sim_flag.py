@@ -62,8 +62,15 @@ class FakeDetectionSource:
         self.closed.set()
 
 
-def fake_create_jpeg_yolo_source(jpeg_items, device: str = "auto"):
-    return ("yolo", device)
+class FakeYoloFactoryRecorder:
+    """create_yolo_factory 대역. 받은 (kind, device, url) 을 기록하고 장치만 담은 팩토리를 돌려준다."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, str]] = []
+
+    def __call__(self, kind: str, device: str, url: str):
+        self.calls.append((kind, device, url))
+        return lambda jpeg_items: ("yolo", device)
 
 
 class FakeComponents:
@@ -73,6 +80,7 @@ class FakeComponents:
         self.bridge = FakeBridge(connected)
         self.server = FakeServer()
         self.server_address: tuple[str, int] | None = None
+        self.yolo_factory_recorder = FakeYoloFactoryRecorder()
 
     def build(self) -> run_scenario.BrowserComponents:
         return run_scenario.BrowserComponents(
@@ -80,7 +88,6 @@ class FakeComponents:
             start_sim_server=self._start_sim_server,
             browser_flight_control=FakeFlightControl,
             browser_detection_source=FakeDetectionSource,
-            create_jpeg_yolo_source=fake_create_jpeg_yolo_source,
         )
 
     def _start_sim_server(self, bridge: FakeBridge, host: str, port: int) -> FakeServer:
@@ -94,6 +101,7 @@ def _parse_browser_args(*extra: str):
 
 def _install_components(monkeypatch: pytest.MonkeyPatch, components: FakeComponents) -> None:
     monkeypatch.setattr(run_scenario, "_load_browser_components", components.build)
+    monkeypatch.setattr(run_scenario, "create_yolo_factory", components.yolo_factory_recorder)
 
 
 # --- 파서·검증 ---
@@ -203,10 +211,23 @@ def test_browser_sim_wires_browser_components_into_pipeline(monkeypatch: pytest.
     assert isinstance(detection_source, FakeDetectionSource)
     assert detection_source.bridge is components.bridge
     assert detection_source.yolo_factory([]) == ("yolo", "cpu")
+    assert components.yolo_factory_recorder.calls == [("local", "cpu", "http://127.0.0.1:8082")]
     assert captured["pace"] is None
     assert detection_source.closed.is_set()
     assert components.server.shutdown_called
     assert components.server.server_close_called
+
+
+def test_browser_sim_passes_orin_yolo_args_to_factory(monkeypatch: pytest.MonkeyPatch) -> None:
+    components = FakeComponents()
+    _install_components(monkeypatch, components)
+    monkeypatch.setattr(run_scenario, "_run_pipeline", lambda *args, **kwargs: run_scenario.EXIT_OK)
+
+    run_scenario._run_browser_sim(
+        _parse_browser_args("--yolo", "orin", "--yolo-url", "http://10.0.0.5:8082", "--device", "cpu")
+    )
+
+    assert components.yolo_factory_recorder.calls == [("orin", "cpu", "http://10.0.0.5:8082")]
 
 
 def test_browser_sim_cleans_up_when_pipeline_raises(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -3,20 +3,27 @@
 실행 (저장소 루트에서):
     uv run python -m modules.drone.sim_demo
     실시간 YOLO 박스까지: uv run --group yolo python -m modules.drone.sim_demo --live
+    Orin YOLO 서버로: uv run python -m modules.drone.sim_demo --live --yolo orin --yolo-url http://<orin-ip>:8082
     → 브라우저(Chrome/Edge)로 http://127.0.0.1:8765/drone_camera.html 열고 M 으로 AI 모드
 
 GoTo → SetYaw → SetGimbal → SetVelocity → FireHeart → Land 를 차례로 보내고(D-06, D-07),
 각 단계를 지키는 동안 GPS 를 포함한 텔레메트리 줄을 찍는다.
-drone/ 은 컴포지션 루트라 --live 에서만 YOLO 구현(02-03)을 함수 안에서 늦게 import 한다.
+drone/ 은 컴포지션 루트라 --live 에서만 YOLO 구현을 고른다 — create_yolo_factory 가 함수 안에서 늦게 import 한다.
 """
 
 import argparse
-import functools
 import threading
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
+from modules.drone.yolo_factory import (
+    DEFAULT_YOLO_URL,
+    YOLO_CHOICES,
+    YOLO_LOCAL,
+    YoloFactory,
+    create_yolo_factory,
+)
 from modules.flight_control.interface import (
     Command,
     FireHeart,
@@ -111,6 +118,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"port (default {DEFAULT_PORT})")
     parser.add_argument("--live", action="store_true", help="run yolo11n on browser frames (needs uv --group yolo)")
     parser.add_argument("--device", default="auto", help="--live device: auto | mps | cpu | 0 (default auto)")
+    parser.add_argument("--yolo", choices=YOLO_CHOICES, default=YOLO_LOCAL, help="--live YOLO: local (Mac) | orin (remote server)")
+    parser.add_argument("--yolo-url", default=DEFAULT_YOLO_URL, help=f"--live --yolo orin server URL (default {DEFAULT_YOLO_URL})")
     return parser.parse_args(argv)
 
 
@@ -123,7 +132,7 @@ def main(argv: list[str] | None = None) -> None:
 
     try:
         if args.live:
-            _start_live_yolo(bridge, args.device)
+            _start_live_yolo(bridge, create_yolo_factory(args.yolo, args.device, args.yolo_url))
         _wait_for_ai_mode(bridge)
         run_demo(BrowserFlightControl(bridge), build_demo_steps())
     except KeyboardInterrupt:
@@ -134,12 +143,10 @@ def main(argv: list[str] | None = None) -> None:
         server.server_close()
 
 
-def _start_live_yolo(bridge: SimBridge, device: str) -> None:
-    # ultralytics·cv2 는 yolo 그룹에만 있다 — --live 일 때만 import 한다
+def _start_live_yolo(bridge: SimBridge, yolo_factory: YoloFactory) -> None:
+    # --live 일 때만 import 한다
     from modules.simulation.browser.detection_source import run_live_yolo
-    from modules.yolo_detection.jpeg_source import create_jpeg_yolo_source
 
-    yolo_factory = functools.partial(create_jpeg_yolo_source, device=device)
     threading.Thread(
         target=run_live_yolo,
         args=(bridge,),
