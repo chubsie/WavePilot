@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#080b09">
+  <title>WavePilot — Field Command</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="command-bar">
+    <a class="brand" href="#" aria-label="WavePilot 홈">
+      <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span><b>WAVEPILOT</b><small>FIELD COMMAND / 01</small></span>
+    </a>
+    <nav class="scenario-switch" aria-label="시나리오">
+      <button id="scenario-urban" class="seg active" aria-pressed="true"><span>01</span> 도심전</button>
+      <button id="scenario-forest" class="seg" aria-pressed="false"><span>02</span> 숲전</button>
+    </nav>
+    <div class="system-strip" aria-label="시스템 상태">
+      <span><i class="status-dot ok"></i> ORIN <b id="orin-status">DEMO</b></span>
+      <span><i class="status-dot ok"></i> YOLO <b>LIVE</b></span>
+      <span><i class="status-dot warm"></i> NEMOTRON <b id="llm-status">READY</b></span>
+      <time id="mission-clock">00:00:00</time>
+    </div>
+  </header>
+
+  <main class="command-grid">
+    <section class="camera-panel" aria-label="드론 실시간 화면">
+      <div id="viewport" class="viewport"></div>
+      <div id="detection-overlay" class="detection-overlay" aria-hidden="true"></div>
+      <div class="scanlines" aria-hidden="true"></div>
+      <div class="camera-topline">
+        <span class="recording"><i></i> LIVE / EO CAM 01</span>
+        <span id="scenario-code">URBAN_RECON</span>
+        <span>LINK <b>98%</b></span>
+      </div>
+      <div class="reticle" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+      <div class="attitude-line"><i></i><span>— 0 —</span><i></i></div>
+      <div class="camera-footer">
+        <div><small>ALT</small><b id="altitude">18.0</b><span>M</span></div>
+        <div><small>SPD</small><b id="speed">0.0</b><span>M/S</span></div>
+        <div><small>HDG</small><b id="heading">000</b><span>°</span></div>
+        <div><small>BAT</small><b>87</b><span>%</span></div>
+      </div>
+      <div class="control-dock">
+        <div class="mode-switch" role="group" aria-label="비행 모드">
+          <button id="mode-imu" data-mode="imu">IMU</button>
+          <button id="mode-keyboard" data-mode="keyboard" class="active">KEYBOARD</button>
+          <button id="mode-auto" data-mode="auto">AUTO</button>
+        </div>
+        <button id="connect-imu" class="utility-button">장갑 연결</button>
+        <button id="reset-flight" class="icon-button" aria-label="비행 위치 재설정" title="비행 위치 재설정">↻</button>
+      </div>
+      <div id="flight-hint" class="flight-hint">WASD 이동 · Q/E 회전 · R/F 고도</div>
+    </section>
+
+    <aside class="analysis-panel" aria-label="상황 분석">
+      <section class="panel-section detections-section">
+        <header class="section-heading">
+          <div><span class="eyebrow">01 / SENSOR FUSION</span><h1>LIVE DETECTION</h1></div>
+          <div class="metric"><b id="track-count">0</b><small>TRACKS</small></div>
+        </header>
+        <div class="confidence-rail"><span>YOLO11N / TRACKING</span><i></i><b>27 FPS</b></div>
+        <div id="detection-list" class="detection-list" aria-live="polite"></div>
+      </section>
+
+      <section class="panel-section report-section">
+        <header class="section-heading">
+          <div><span class="eyebrow">02 / NEMOTRON ANALYSIS</span><h2>SITUATION REPORT</h2></div>
+          <span id="report-grounding" class="grounded">● GROUNDED</span>
+        </header>
+        <div class="report-meta">
+          <span id="report-time">대기 중</span>
+          <span id="report-state">STATE / —</span>
+        </div>
+        <div id="report-content" class="report-content" aria-live="polite">
+          <div class="empty-report"><span>⌁</span><p>안정된 트랙이 수집되면<br>상황 보고서를 생성합니다.</p></div>
+        </div>
+        <footer class="report-actions">
+          <button id="request-analysis" class="analysis-button"><span>⌁</span> 현재 장면 다시 분석</button>
+          <span id="analysis-cooldown">READY</span>
+        </footer>
+      </section>
+    </aside>
+  </main>
+
+  <footer class="footer-strip">
+    <span>SIMULATION / LOCAL FALLBACK</span>
+    <span id="asset-status">BLENDER ASSET · LOADING</span>
+    <span class="coordinates">N <b id="coord-n">000.0</b> · E <b id="coord-e">000.0</b></span>
+  </footer>
+
+  <script src="../visualizer/three.min.js"></script>
+  <script src="vendor/GLTFLoader.js"></script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
