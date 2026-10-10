@@ -1,27 +1,45 @@
-"""비행 제어 계약 — 텔레메트리, 명령 4종, FlightControl Protocol."""
+"""비행 제어 계약 — 텔레메트리(시뮬레이션 GPS 포함), 명령 8종, FlightControl Protocol."""
 
 from modules.flight_control.interface.flight_control import (
     FLIGHT_MODES,
+    HOME_GPS_FIX,
+    HOME_LATITUDE_DEG,
+    HOME_LONGITUDE_DEG,
     Command,
     CommandAck,
+    FireHeart,
     FlightControl,
     GoTo,
+    GpsFix,
     Land,
     ReturnToHome,
+    SetGimbal,
+    SetVelocity,
+    SetYaw,
     TakeOff,
     Telemetry,
     command_from_dict,
+    ned_to_gps,
 )
 
 __all__ = [
     "FLIGHT_MODES",
+    "HOME_GPS_FIX",
+    "HOME_LATITUDE_DEG",
+    "HOME_LONGITUDE_DEG",
     "Command",
     "CommandAck",
+    "FireHeart",
     "FlightControl",
     "GoTo",
+    "GpsFix",
     "Land",
     "ReturnToHome",
+    "SetGimbal",
+    "SetVelocity",
+    "SetYaw",
     "TakeOff",
     "Telemetry",
     "command_from_dict",
+    "ned_to_gps",
 ]

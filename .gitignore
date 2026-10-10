@@ -31,3 +31,6 @@ Thumbs.db
 
 # graft's local graph cache — regenerable, not committed (run `graft build`).
 /graft/
+
+# Drone camera recordings (tools/visualizer/serve_camera.py)
+recordings/

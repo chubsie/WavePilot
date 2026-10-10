@@ -5,6 +5,8 @@
 
 모든 명령을 받아들인다. 착륙 중 Land, 귀환 중 TakeOff 처럼 실제 비행 제어기라면 거절할 명령도
 Phase 1 에서는 의도를 기록하는 데 의미가 있으므로 accepted=True 로 둔다(거절 규칙은 v2 실제 FC 몫).
+SetVelocity 는 moving 으로 바꾸고, SetYaw·SetGimbal·FireHeart 는 현재 모드를 유지한 채 기록만 한다.
+텔레메트리 GPS 는 호버 위치를 ned_to_gps 로 바꿔 채운다.
 """
 
 import logging
@@ -13,11 +15,16 @@ from typing import Protocol
 from modules.flight_control.interface.flight_control import (
     Command,
     CommandAck,
+    FireHeart,
     GoTo,
     Land,
     ReturnToHome,
+    SetGimbal,
+    SetVelocity,
+    SetYaw,
     TakeOff,
     Telemetry,
+    ned_to_gps,
 )
 
 HOVER_ALTITUDE_M = 40.0
@@ -32,7 +39,10 @@ MODE_BY_COMMAND_KIND = {
     GoTo.KIND: "moving",
     Land.KIND: "landing",
     ReturnToHome.KIND: "returning",
+    SetVelocity.KIND: "moving",
 }
+# 자세·짐벌·하트 명령은 비행 모드를 바꾸지 않는다
+MODE_KEEPING_COMMAND_KINDS = frozenset({SetYaw.KIND, SetGimbal.KIND, FireHeart.KIND})
 
 logger = logging.getLogger(__name__)
 
@@ -69,12 +79,13 @@ class MockFlightControl:
     def get_telemetry(self) -> Telemetry:
         time_sec = self._clock.now_sec
         battery_pct = _clamp_battery(FULL_BATTERY_PCT - time_sec * BATTERY_DRAIN_PCT_PER_SEC)
+        down_m = -self._hover_altitude_m
 
         return Telemetry(
             time_sec=time_sec,
             north_m=self._hover_north_m,
             east_m=self._hover_east_m,
-            down_m=-self._hover_altitude_m,
+            down_m=down_m,
             roll_deg=0.0,
             pitch_deg=0.0,
             yaw_deg=0.0,
@@ -82,11 +93,13 @@ class MockFlightControl:
             gimbal_yaw_deg=0.0,
             battery_pct=battery_pct,
             flight_mode=self._flight_mode,
+            gps=ned_to_gps(self._hover_north_m, self._hover_east_m, down_m),
         )
 
     def send_command(self, command: Command) -> CommandAck:
         self._commands_received.append((self._clock.now_sec, command))
-        self._flight_mode = MODE_BY_COMMAND_KIND[command.KIND]
+        if command.KIND not in MODE_KEEPING_COMMAND_KINDS:
+            self._flight_mode = MODE_BY_COMMAND_KIND[command.KIND]
 
         logger.info("command received: %s -> mode=%s", command.KIND, self._flight_mode)
         return CommandAck(accepted=True, reason=f"mock recorded {command.KIND}")
