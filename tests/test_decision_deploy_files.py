@@ -24,6 +24,9 @@ FORBIDDEN_FLAGS = ("--jinja", "--chat-template-kwargs", "--mmproj", "-hf", "--ap
 ALLOWED_IPV4 = frozenset({"127.0.0.1", "0.0.0.0"})
 IPV4_PATTERN = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b")
 
+# 프로젝트 결정: 인증 없음 — RUNBOOK 은 바인딩 주소 + ufw 로만 접근을 좁힌다.
+API_KEY_PATTERN = re.compile(r"api[ _-]?key", re.IGNORECASE)
+
 
 @pytest.fixture
 def decision_jetson_dir(wavepilot_root: Path) -> Path:
@@ -38,6 +41,11 @@ def decision_dockerfile_text(decision_jetson_dir: Path) -> str:
 @pytest.fixture
 def decision_compose_text(decision_jetson_dir: Path) -> str:
     return (decision_jetson_dir / "compose.yaml").read_text(encoding="utf-8")
+
+
+@pytest.fixture
+def decision_runbook_text(decision_jetson_dir: Path) -> str:
+    return (decision_jetson_dir / "RUNBOOK.md").read_text(encoding="utf-8")
 
 
 def load_compose_command(text: str) -> list[str]:
@@ -154,7 +162,53 @@ def test_decision_compose_healthcheck_port_and_volume(decision_compose_text: str
 
 
 def test_decision_deploy_files_have_no_real_ip(decision_jetson_dir: Path) -> None:
-    for file_name in ("compose.yaml", "Dockerfile"):
+    for file_name in ("compose.yaml", "Dockerfile", "RUNBOOK.md"):
         text = (decision_jetson_dir / file_name).read_text(encoding="utf-8")
         found = set(IPV4_PATTERN.findall(text))
         assert found <= ALLOWED_IPV4, f"{file_name}: only 127.0.0.1 / 0.0.0.0 allowed, use <orin-ip> placeholders, got {found - ALLOWED_IPV4}"
+
+
+def test_decision_runbook_covers_user_steps(decision_runbook_text: str) -> None:
+    for expected in (
+        "D-10",
+        "cat /etc/nv_tegra_release",
+        "nvcc --version",
+        "hf download LiquidAI/d1-3B-GGUF d1-3B-Q4_K_M.gguf",
+        "sha256sum",
+        "1674456672",
+        "docker compose build llama-decision",
+        "docker compose up -d llama-decision",
+        "decision model type: lfm2-d1",
+        "/v1/models",
+        f"http://localhost:{DECISION_PORT}/health",
+        f"http://localhost:{DECISION_PORT}/v1/systemone",
+        f"http://<orin-ip>:{DECISION_PORT}",
+        "docker compose down",
+        LLAMA_CPP_REF,
+    ):
+        assert expected in decision_runbook_text, f"RUNBOOK.md: expected {expected!r}"
+
+
+def test_decision_runbook_has_latency_cross_check(decision_runbook_text: str) -> None:
+    for expected in (
+        "%{time_connect}",
+        "%{time_starttransfer}",
+        "%{time_total}",
+        f"localhost:{DECISION_PORT}",
+        f"<orin-ip>:{DECISION_PORT}",
+        "network_rtt_ms",
+        "orin_processing_ms",
+    ):
+        assert expected in decision_runbook_text, f"RUNBOOK.md: expected latency cross-check token {expected!r}"
+
+
+def test_decision_runbook_access_control_without_api_key(decision_runbook_text: str) -> None:
+    for expected in ("LLAMA_BIND_ADDR", "ufw"):
+        assert expected in decision_runbook_text, f"RUNBOOK.md: expected access control via {expected!r}"
+
+    api_key_mentions = API_KEY_PATTERN.findall(decision_runbook_text)
+    assert api_key_mentions == [], f"RUNBOOK.md: no-auth project decision, API key must not appear, got {api_key_mentions}"
+
+
+def test_decision_runbook_states_agent_does_not_execute(decision_runbook_text: str) -> None:
+    assert "에이전트는 실행하지 않는다" in decision_runbook_text, "RUNBOOK.md: expected '에이전트는 실행하지 않는다' (D-10)"
