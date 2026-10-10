@@ -1,6 +1,7 @@
 """SimBridge — 브라우저 시뮬레이터(10 Hz push) ⇄ Python 사이의 유일한 공유 상태 (D-09, D-11, D-12).
 
 - 텔레메트리·AI 모드·이벤트는 브라우저가 밀어 넣고, 연결 여부는 마지막 수신 후 LINK_TIMEOUT_SEC 로 판정한다.
+- 브리지 연결(LINK_TIMEOUT_SEC) = 기체 내부 배선, 운용자 링크(OPERATOR_LINK_TIMEOUT_SEC) = 텔레메트리 POST 의 operator_link heartbeat (Phase 5 D-01).
 - 프레임은 최신 한 칸만 유지한다 — 새 프레임이 오면 오래된 프레임은 버린다(YOLO 가 밀려도 지연이 쌓이지 않게).
 - 명령은 큐에 쌓였다가 drain 한 번에 한 번만 배달된다(id 는 1 부터 단조 증가).
 
@@ -17,6 +18,7 @@ from dataclasses import dataclass
 from modules.flight_control.interface import Command, Telemetry
 
 LINK_TIMEOUT_SEC = 1.0
+OPERATOR_LINK_TIMEOUT_SEC = 3.0
 RECENT_EVENT_LIMIT = 50
 FRAME_FPS_WINDOW_SEC = 1.0
 
@@ -41,6 +43,11 @@ class SimBridge:
         self._ai_mode = False
         self._events: deque[dict] = deque(maxlen=RECENT_EVENT_LIMIT)
 
+        self._operator_heartbeat_at_sec: float | None = None
+        self._operator_heartbeat_time_sec: float | None = None
+
+        self._mission_status: dict | None = None
+
         self._next_command_id = 1
         self._pending_commands: list[tuple[int, Command]] = []
 
@@ -52,13 +59,25 @@ class SimBridge:
 
     # --- 브라우저 → Python: 텔레메트리·AI 모드·이벤트 ---
 
-    def update_from_browser(self, telemetry: Telemetry, ai_mode: bool, events: list[dict]) -> None:
+    def update_from_browser(
+        self,
+        telemetry: Telemetry,
+        ai_mode: bool,
+        events: list[dict],
+        operator_link: bool = True,
+    ) -> None:
         with self._condition:
+            received_at_sec = self._clock()
             self._telemetry = telemetry
-            self._telemetry_received_at_sec = self._clock()
+            self._telemetry_received_at_sec = received_at_sec
             self._ai_mode = ai_mode
             # 호출자가 나중에 dict 를 고쳐도 저장본이 바뀌지 않게 복사한다
             self._events.extend(dict(event) for event in events)
+
+            # 운용자 링크가 끊긴 POST 는 heartbeat 로 치지 않는다 — 브리지 연결은 위에서 그대로 갱신된다 (D-01)
+            if operator_link:
+                self._operator_heartbeat_at_sec = received_at_sec
+                self._operator_heartbeat_time_sec = telemetry.time_sec
 
     def latest_telemetry(self) -> Telemetry | None:
         with self._condition:
@@ -69,6 +88,18 @@ class SimBridge:
             if self._telemetry_received_at_sec is None:
                 return False
             return self._clock() - self._telemetry_received_at_sec <= LINK_TIMEOUT_SEC
+
+    def operator_link_status(self) -> tuple[bool, float | None]:
+        """(운용자 링크 연결 여부, 마지막 heartbeat 의 sim 시각). 05-06 BridgeOperatorInput 이 LinkStatus(*...) 로 쓴다.
+
+        heartbeat 를 받은 적 없으면 (False, None). 연결 여부는 마지막 heartbeat 뒤 bridge clock 경과로 판정한다.
+        """
+        with self._condition:
+            if self._operator_heartbeat_at_sec is None:
+                return False, None
+
+            elapsed_sec = self._clock() - self._operator_heartbeat_at_sec
+            return elapsed_sec <= OPERATOR_LINK_TIMEOUT_SEC, self._operator_heartbeat_time_sec
 
     @property
     def ai_mode(self) -> bool:
@@ -97,6 +128,21 @@ class SimBridge:
             self._pending_commands = []
 
         return [{"id": command_id, **command.to_dict()} for command_id, command in pending]
+
+    # --- Python → 브라우저: 임무 상태 (Phase 5 패널) ---
+
+    def set_mission_status(self, status: dict) -> None:
+        if not isinstance(status, dict):
+            raise TypeError(f"status must be a dict, got {type(status).__name__}")
+
+        with self._condition:
+            self._mission_status = dict(status)
+
+    def mission_status(self) -> dict | None:
+        with self._condition:
+            if self._mission_status is None:
+                return None
+            return dict(self._mission_status)
 
     # --- 프레임 슬롯 ---
 

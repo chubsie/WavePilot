@@ -34,3 +34,6 @@ Thumbs.db
 
 # Drone camera recordings (tools/visualizer/serve_camera.py)
 recordings/
+
+# Mission structured logs (modules/mission/mission_log.py, run_mission --log-dir)
+logs/

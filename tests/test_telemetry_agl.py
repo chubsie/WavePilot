@@ -144,7 +144,7 @@ def post_frame_with_telemetry_header(port: int, telemetry_dict: dict) -> int:
 def test_parse_telemetry_post_preserves_agl() -> None:
     payload = {"telemetry": make_telemetry().to_dict(), "ai_mode": True, "events": []}
 
-    telemetry, _, _ = parse_telemetry_post(payload)
+    telemetry, _, _, _ = parse_telemetry_post(payload)
 
     assert telemetry.height_above_ground_m == 12.5
 
@@ -154,7 +154,7 @@ def test_parse_telemetry_post_without_agl_key_gives_none() -> None:
     del telemetry_dict["height_above_ground_m"]
     payload = {"telemetry": telemetry_dict, "ai_mode": True, "events": []}
 
-    telemetry, _, _ = parse_telemetry_post(payload)
+    telemetry, _, _, _ = parse_telemetry_post(payload)
 
     assert telemetry.height_above_ground_m is None
 

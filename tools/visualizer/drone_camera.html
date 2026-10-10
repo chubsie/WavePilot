@@ -41,6 +41,7 @@
   }
   #view.ai #aiBanner { display: block; }
   #home.active { background: var(--yaw); color: #1a1305; font-weight: 600; }
+  #faults button.active { background: var(--yaw); color: #1a1305; font-weight: 600; }
   #view.ai { box-shadow: inset 0 0 0 4px var(--yaw); }
   @keyframes pulse { 50% { opacity: .35; } }
   @keyframes aiGlow { 70%, 100% { box-shadow: 0 0 0 33px rgba(245,185,66,0); } }
@@ -86,7 +87,7 @@
   #camWrap canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
   #camOverlay { pointer-events: none; }
   /* D-04: simulator link panel */
-  #simLink, #simTelemetry, .simList { font: 12px/1.4 ui-monospace, Consolas, monospace; color: var(--muted); }
+  #simLink, #simMission, #simTelemetry, .simList { font: 12px/1.4 ui-monospace, Consolas, monospace; color: var(--muted); }
   #simTelemetry { margin: 0; white-space: pre; overflow-x: auto; }
   .simList { margin: 0; padding-left: 16px; min-height: 1.4em; }
   @media (max-width: 760px) {
@@ -105,6 +106,16 @@
     <fieldset>
       <legend>Simulator link</legend>
       <div id="simLink">Python: disconnected</div>
+      <div id="simMission">AI mission: –</div>
+    </fieldset>
+    <fieldset id="faults">
+      <legend>Fault injection</legend>
+      <div class="buttons">
+        <button id="faultLink" title="Stops the operator link heartbeat (telemetry keeps flowing)">Cut link</button>
+        <button id="faultGpsLost" title="Sends telemetry with gps = null (no fix)">GPS lost: off</button>
+        <button id="faultGpsJump" title="Shifts the reported GPS 500 m north per click (NED stays true)">GPS jump: 0 m</button>
+        <button id="faultBattery" title="Lowers the battery start value by 30 % (floor 0)">Battery −30%</button>
+      </div>
     </fieldset>
     <fieldset>
       <legend>Telemetry</legend>
@@ -794,7 +805,7 @@ const nowSec = () => performance.now() / 1000;
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const spawnGround = Math.max(terrainHeight(HOME.x, HOME.z), 0);
 const home = { x: HOME.x, z: HOME.z, ground: spawnGround, gps: null };
-const batteryStartPct = SimLink.parseBatteryStartPct(location.search);   // ?battery=<0..100>
+let batteryStartPct = SimLink.parseBatteryStartPct(location.search);   // ?battery=<0..100>; Battery −30% lowers it
 const autopilot = SimLink.createAutopilot({ onHeart: (trackId) => SimLink.startHeart(trackId, nowSec()) });
 
 function setReturnHome(active) {
@@ -843,6 +854,51 @@ function getGps() {
   return SimLink.nedToGps(-(flight.pos.z - HOME.z), flight.pos.x - HOME.x, -(flight.alt - spawnGround));
 }
 
+// ---------- Fault injection (Phase 5 D-19): panel buttons only, no URL/CLI injection ----------
+// getGps() stays the true position (home.gps, to-home distance); only the GPS sent to Python is faulted.
+const GPS_JUMP_STEP_M = 500;
+const BATTERY_DROP_PCT = 30;
+const faults = { isLinkCut: false, isGpsLost: false, gpsJumpNorthM: 0 };
+
+function getReportedGps() {
+  if (faults.isGpsLost) return null;
+  const northM = -(flight.pos.z - HOME.z) + faults.gpsJumpNorthM;
+  return SimLink.nedToGps(northM, flight.pos.x - HOME.x, -(flight.alt - spawnGround));
+}
+
+function renderFaultButtons() {
+  $('faultLink').textContent = faults.isLinkCut ? 'Restore link (link cut)' : 'Cut link';
+  $('faultLink').classList.toggle('active', faults.isLinkCut);
+  $('faultGpsLost').textContent = `GPS lost: ${faults.isGpsLost ? 'on' : 'off'}`;
+  $('faultGpsLost').classList.toggle('active', faults.isGpsLost);
+  $('faultGpsJump').textContent = `GPS jump: ${faults.gpsJumpNorthM} m`;
+  $('faultGpsJump').classList.toggle('active', faults.gpsJumpNorthM !== 0);
+}
+
+$('faultLink').onclick = () => {
+  faults.isLinkCut = !faults.isLinkCut;
+  renderFaultButtons();
+  log(faults.isLinkCut ? 'Fault: operator link cut' : 'Fault: operator link restored');
+};
+
+$('faultGpsLost').onclick = () => {
+  faults.isGpsLost = !faults.isGpsLost;
+  renderFaultButtons();
+  log(faults.isGpsLost ? 'Fault: GPS lost' : 'Fault: GPS restored');
+};
+
+$('faultGpsJump').onclick = () => {
+  faults.gpsJumpNorthM += GPS_JUMP_STEP_M;
+  renderFaultButtons();
+  log(`Fault: GPS jumped, offset ${faults.gpsJumpNorthM} m north`);
+};
+
+$('faultBattery').onclick = () => {
+  batteryStartPct = Math.max(0, batteryStartPct - BATTERY_DROP_PCT);
+  $('faultBattery').textContent = `Battery −30% (start ${batteryStartPct}%)`;
+  log(`Fault: battery start lowered to ${batteryStartPct}%`);
+};
+
 function rememberHomeAtPairing() {
   home.x = flight.pos.x;
   home.z = flight.pos.z;
@@ -878,7 +934,7 @@ function buildTelemetry() {
     gimbal_yaw_deg: autopilot.gimbal.yawDeg,
     battery_pct: SimLink.batteryPctAt(batteryStartPct, timeSec),
     flight_mode: isAutopilotFlying() ? autopilot.flightMode : getManualFlightMode(),
-    gps: getGps(),
+    gps: getReportedGps(),
     height_above_ground_m: SimLink.heightAboveGroundM(flight.alt, groundBelowM),
   };
 }
@@ -888,6 +944,7 @@ const link = SimLink.createLink({
   canvas: camRenderer.domElement,
   getTelemetry: buildTelemetry,
   isAiMode: () => mode.ai,
+  isOperatorLinkUp: () => !faults.isLinkCut,
   onCommand: (cmd) => {
     const isApplied = autopilot.apply(cmd, nowSec());
     if (!isApplied) log('Rejected command ' + cmd.kind);
@@ -900,7 +957,13 @@ const link = SimLink.createLink({
 link.start();
 
 const PANEL_REFRESH_MS = 200;
-const simPanel = { link: $('simLink'), telemetry: $('simTelemetry'), commands: $('simCommands'), detections: $('simDetections') };
+const simPanel = {
+  link: $('simLink'),
+  mission: $('simMission'),
+  telemetry: $('simTelemetry'),
+  commands: $('simCommands'),
+  detections: $('simDetections'),
+};
 setInterval(() => SimLink.renderPanel(simPanel, buildTelemetry(), link.state, home.gps), PANEL_REFRESH_MS);
 
 // ---------- Render loop ----------

@@ -1,5 +1,6 @@
 """SimBridge — 텔레메트리·연결 판정·명령 1회 배달·이벤트·최신 프레임 슬롯·탐지 상태 (D-09, D-11, D-12)."""
 
+import dataclasses
 import threading
 
 import pytest
@@ -7,6 +8,7 @@ import pytest
 from modules.flight_control.interface import FireHeart, GoTo, Telemetry
 from modules.simulation.browser.bridge import (
     LINK_TIMEOUT_SEC,
+    OPERATOR_LINK_TIMEOUT_SEC,
     RECENT_EVENT_LIMIT,
     BrowserFrame,
     SimBridge,
@@ -66,6 +68,8 @@ def test_new_bridge_is_empty(bridge: SimBridge) -> None:
     assert bridge.latest_detections() is None
     assert bridge.recent_events() == ()
     assert bridge.status() == {"frame_fps": 0.0, "yolo_latency_ms": None}
+    assert bridge.operator_link_status() == (False, None)
+    assert bridge.mission_status() is None
 
 
 # --- 텔레메트리·연결 ---
@@ -89,6 +93,52 @@ def test_update_from_browser_sets_telemetry_and_link(
     assert bridge.is_connected() is False
 
 
+# --- 운용자 링크 (Phase 5 D-01, D-02) ---
+
+
+def test_operator_link_heartbeat_times_out_after_timeout(
+    bridge: SimBridge, clock: FakeClock, hover_telemetry: Telemetry
+) -> None:
+    telemetry = dataclasses.replace(hover_telemetry, time_sec=5.0)
+    clock.now_sec = 10.0
+
+    bridge.update_from_browser(telemetry, True, [], operator_link=True)
+
+    assert bridge.operator_link_status() == (True, 5.0)
+
+    clock.now_sec = 10.0 + OPERATOR_LINK_TIMEOUT_SEC
+    assert bridge.operator_link_status() == (True, 5.0)
+
+    clock.now_sec = 13.01
+    assert bridge.operator_link_status() == (False, 5.0)
+
+
+def test_operator_link_cut_keeps_bridge_connected(
+    bridge: SimBridge, clock: FakeClock, hover_telemetry: Telemetry
+) -> None:
+    clock.now_sec = 10.0
+    bridge.update_from_browser(dataclasses.replace(hover_telemetry, time_sec=5.0), True, [])
+
+    # 링크를 끊은 뒤에도 브라우저는 계속 POST 한다 — heartbeat 만 멈춘다
+    for step in range(1, 9):
+        clock.now_sec = 10.0 + 0.5 * step
+        cut_telemetry = dataclasses.replace(hover_telemetry, time_sec=5.0 + 0.5 * step)
+        bridge.update_from_browser(cut_telemetry, True, [], operator_link=False)
+
+    assert bridge.operator_link_status() == (False, 5.0)
+    assert bridge.is_connected() is True
+
+
+def test_operator_link_defaults_to_heartbeat(
+    bridge: SimBridge, clock: FakeClock, hover_telemetry: Telemetry
+) -> None:
+    clock.now_sec = 2.0
+
+    bridge.update_from_browser(dataclasses.replace(hover_telemetry, time_sec=7.5), False, [])
+
+    assert bridge.operator_link_status() == (True, 7.5)
+
+
 # --- 명령 큐 ---
 
 
@@ -107,6 +157,27 @@ def test_commands_are_delivered_once_with_increasing_ids(bridge: SimBridge) -> N
 def test_enqueue_rejects_non_command(bridge: SimBridge) -> None:
     with pytest.raises(TypeError):
         bridge.enqueue_command("go_to")
+
+
+# --- 임무 상태 ---
+
+
+def test_mission_status_is_copied(bridge: SimBridge) -> None:
+    status = {"mode": "AI", "reason": None, "t": 1.0}
+
+    bridge.set_mission_status(status)
+    status["mode"] = "MANUAL"
+
+    stored = bridge.mission_status()
+    assert stored == {"mode": "AI", "reason": None, "t": 1.0}
+
+    stored["mode"] = "RETURN"
+    assert bridge.mission_status()["mode"] == "AI"
+
+
+def test_set_mission_status_rejects_non_dict(bridge: SimBridge) -> None:
+    with pytest.raises(TypeError, match="status must be a dict"):
+        bridge.set_mission_status(["AI"])
 
 
 # --- 이벤트 ---

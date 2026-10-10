@@ -1,0 +1,18 @@
+# 예제 임무: 빨간 상체 person 을 찾아 heart 를 보낸다.
+# 실행 예: uv run python -m modules.drone.run_mission --mission missions/red_heart.toml ...
+# 복귀 지점은 파일에 없다: initialize 때 GPS(운용자 위치)로 돌아온다 (D-12).
+# 탐색 구역은 홈 기준 북·동 미터 사각형이다 (D-13).
+
+[target]
+class = "person"
+upper_color = "red"         # "red" | "any"
+action = "heart"            # "heart"
+
+[search_area]
+north_m = [20.0, 120.0]     # [min, max] m, min < max
+east_m = [-50.0, 50.0]      # [min, max] m, 음수 = 서쪽
+
+[safety]
+geofence_margin_m = 20.0    # m, 구역 밖 허용 폭 (>= 0)
+battery_reserve_pct = 15.0  # %, 이 아래면 복귀 (0 <= x < 100)
+max_flight_sec = 300.0      # s, 최대 비행 시간 (> 0)

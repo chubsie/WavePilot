@@ -6,7 +6,7 @@
 
 와이어 프로토콜:
 1. POST /sim/frame?seq=<0..2^31>  — body image/jpeg, 헤더 X-Telemetry(Telemetry JSON) → 204
-2. POST /sim/telemetry            — body JSON {telemetry, ai_mode, events} → 200 {commands, detections, status}
+2. POST /sim/telemetry            — body JSON {telemetry, ai_mode, events, operator_link?} → 200 {commands, detections, status, mission}
 3. GET  /<file>                   — tools/visualizer/ 정적 파일 (페이지 /drone_camera.html)
 
 잘못된 요청은 400 으로 거절하고 bridge 를 건드리지 않는다. 본문은 길이를 먼저 검증한 뒤에만 읽는다.
@@ -98,17 +98,18 @@ class SimRequestHandler(SimpleHTTPRequestHandler):
             return
 
         try:
-            telemetry, ai_mode, events = parse_telemetry_post(json.loads(body))
+            telemetry, ai_mode, events, operator_link = parse_telemetry_post(json.loads(body))
         except ValueError as error:  # JSONDecodeError·UnicodeDecodeError 도 ValueError
             self.send_error(HTTPStatus.BAD_REQUEST, f"invalid telemetry post: {error}")
             return
 
         bridge = self.server.sim_bridge
-        bridge.update_from_browser(telemetry, ai_mode, events)
+        bridge.update_from_browser(telemetry, ai_mode, events, operator_link)
         response = {
             "commands": bridge.drain_commands(),
             "detections": bridge.latest_detections(),
             "status": bridge.status(),
+            "mission": bridge.mission_status(),
         }
 
         payload = json.dumps(response).encode("utf-8")
@@ -142,8 +143,11 @@ class SimRequestHandler(SimpleHTTPRequestHandler):
             super().log_message(format, *args)
 
 
-def parse_telemetry_post(payload: object) -> tuple[Telemetry, bool, list[dict]]:
-    """POST /sim/telemetry 본문을 검증한다. 잘못되면 ValueError — 호출자는 bridge 를 건드리지 않는다."""
+def parse_telemetry_post(payload: object) -> tuple[Telemetry, bool, list[dict], bool]:
+    """POST /sim/telemetry 본문을 검증한다. 잘못되면 ValueError — 호출자는 bridge 를 건드리지 않는다.
+
+    네 번째 값은 운용자 링크 heartbeat(operator_link, 선택 필드 — 없으면 True, Phase 5 D-01).
+    """
     if not isinstance(payload, dict):
         raise ValueError(f"body must be a JSON object, got {type(payload).__name__}")
 
@@ -160,7 +164,11 @@ def parse_telemetry_post(payload: object) -> tuple[Telemetry, bool, list[dict]]:
         raise ValueError(f"field 'events' must be a list of at most {MAX_EVENTS_PER_POST}")
     events = [_parse_event(event) for event in raw_events]
 
-    return telemetry, ai_mode, events
+    operator_link = payload.get("operator_link", True)
+    if not isinstance(operator_link, bool):
+        raise ValueError(f"field 'operator_link' must be a bool, got {operator_link!r}")
+
+    return telemetry, ai_mode, events, operator_link
 
 
 def _parse_event(event: object) -> dict:

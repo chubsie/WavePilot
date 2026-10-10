@@ -212,6 +212,18 @@ To start the console and the drone together with one command, use `scripts/run_d
 
 Model files are not committed (`*.gguf` and `models/` are in `.gitignore`).
 
+### Run a rule_mode mission
+
+`modules.drone.run_mission` flies a whole mission: take off, search, approach and heart the target, return home and land. A TOML mission file sets the search area, the target's upper-body color and the safety limits; without `--mission` the built-in defaults are used. Every mission writes a JSON Lines log to `logs/missions/<start time>.jsonl` and the same events, one line each, to stderr.
+
+```bash
+uv run python -m modules.drone.run_mission --sim mock --mission missions/red_heart.toml
+uv run python -m modules.drone.run_mission --sim mock --mission missions/red_heart.toml --log-dir logs/missions
+uv run --group yolo python -m modules.drone.run_mission --sim browser --mission missions/red_heart.toml
+```
+
+With `--sim browser`, open `http://127.0.0.1:8766/drone_camera.html` and press M to switch to AI mode. The panel shows the AI mission state, and its Fault injection buttons cut the operator link, drop or shift GPS, and drain the battery.
+
 ### Plugging in a simulator
 
 A simulator such as Colosseum only needs three things from this code:
