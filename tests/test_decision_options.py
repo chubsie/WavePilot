@@ -13,10 +13,13 @@ from modules.decision.interface.state import (
     TrackState,
 )
 from modules.decision.options import filter_options, get_nearest_track
+from modules.decision.params import ParamDefaults
 
 MINIMUM_OPTIONS = ("search", "hold", "return_home")
 ALL_OPTIONS = RULE_MODES
 NO_AIM_OPTIONS = ("search", "approach", "observe", "hold", "return_home")
+STOP_DISTANCE_M = ParamDefaults().approach_stop_distance_m
+AIM_READY_NORTH_M = 6.0  # 조준 가능 거리(정지 거리 + 여유) 안
 
 
 # --- 상태 빌더 ---
@@ -64,63 +67,64 @@ def _make_event(kind: str = EVENT_PERIODIC_CHECK, mode_result: ModeResult | None
 
 
 def test_no_candidate_keeps_only_search_hold_return_home():
-    assert filter_options(_make_state(), _make_event()) == MINIMUM_OPTIONS
+    assert filter_options(_make_state(), _make_event(), STOP_DISTANCE_M) == MINIMUM_OPTIONS
 
 
 def test_candidate_without_color_requirement_keeps_all_modes_in_menu_order():
-    state = _make_state(tracks=(_make_track(),))
+    state = _make_state(tracks=(_make_track(north_m=AIM_READY_NORTH_M),))
 
-    assert filter_options(state, _make_event()) == ALL_OPTIONS
+    assert filter_options(state, _make_event(), STOP_DISTANCE_M) == ALL_OPTIONS
 
 
 def test_color_required_but_unknown_removes_only_aim_and_fire():
     state = _make_state(tracks=(_make_track(upper_color=None),), target_upper_color="red")
 
-    assert filter_options(state, _make_event()) == NO_AIM_OPTIONS
+    assert filter_options(state, _make_event(), STOP_DISTANCE_M) == NO_AIM_OPTIONS
 
 
 def test_color_confirmed_track_keeps_all_modes():
-    state = _make_state(tracks=(_make_track(upper_color="red"),), target_upper_color="red")
+    state = _make_state(tracks=(_make_track(north_m=AIM_READY_NORTH_M, upper_color="red"),), target_upper_color="red")
 
-    assert filter_options(state, _make_event()) == ALL_OPTIONS
+    assert filter_options(state, _make_event(), STOP_DISTANCE_M) == ALL_OPTIONS
 
 
 def test_color_mismatch_track_is_not_candidate():
     state = _make_state(tracks=(_make_track(upper_color="blue"),), target_upper_color="red")
 
-    assert filter_options(state, _make_event()) == MINIMUM_OPTIONS
+    assert filter_options(state, _make_event(), STOP_DISTANCE_M) == MINIMUM_OPTIONS
 
 
 def test_inactive_track_is_not_candidate():
     state = _make_state(tracks=(_make_track(is_active=False),))
 
-    assert filter_options(state, _make_event()) == MINIMUM_OPTIONS
+    assert filter_options(state, _make_event(), STOP_DISTANCE_M) == MINIMUM_OPTIONS
 
 
 def test_other_class_track_is_not_candidate():
     state = _make_state(tracks=(_make_track(class_name="car"),), target_class="person")
 
-    assert filter_options(state, _make_event()) == MINIMUM_OPTIONS
+    assert filter_options(state, _make_event(), STOP_DISTANCE_M) == MINIMUM_OPTIONS
 
 
 def test_hearted_track_is_not_candidate():
     state = _make_state(tracks=(_make_track(track_id="T1"),), hearted=("T1",))
 
-    assert filter_options(state, _make_event()) == MINIMUM_OPTIONS
+    assert filter_options(state, _make_event(), STOP_DISTANCE_M) == MINIMUM_OPTIONS
 
 
 def test_just_hearted_track_is_not_candidate():
     state = _make_state(tracks=(_make_track(track_id="T3"),))
     event = _make_event(EVENT_MODE_ENDED, ModeResult("aim_and_fire", "success", "T3"))
 
-    assert filter_options(state, event) == MINIMUM_OPTIONS
+    assert filter_options(state, event, STOP_DISTANCE_M) == MINIMUM_OPTIONS
 
 
 def test_failed_aim_target_stays_candidate():
-    state = _make_state(tracks=(_make_track(track_id="T3"),))
+    # 방금 조준에 실패한 T3 는 aim_and_fire 대상에서만 빠지고 approach·observe 대상으로는 남는다
+    state = _make_state(tracks=(_make_track(track_id="T3", north_m=AIM_READY_NORTH_M),))
     event = _make_event(EVENT_MODE_ENDED, ModeResult("aim_and_fire", "failure", "T3"))
 
-    assert filter_options(state, event) == ALL_OPTIONS
+    assert filter_options(state, event, STOP_DISTANCE_M) == NO_AIM_OPTIONS
 
 
 def test_options_are_ordered_subset_with_safe_modes_across_states():
@@ -140,7 +144,8 @@ def test_options_are_ordered_subset_with_safe_modes_across_states():
     for tracks in track_sets:
         for target_upper_color in (None, "red"):
             for event in events:
-                options = filter_options(_make_state(tracks=tracks, target_upper_color=target_upper_color), event)
+                state = _make_state(tracks=tracks, target_upper_color=target_upper_color)
+                options = filter_options(state, event, STOP_DISTANCE_M)
 
                 assert list(options) == [mode for mode in RULE_MODES if mode in options]
                 assert set(MINIMUM_OPTIONS) <= set(options)

@@ -132,14 +132,15 @@ def test_search_success_without_candidate_keeps_searching():
 # --- 재시도 방지 ---
 
 
-def test_repeated_failure_on_same_target_holds():
+def test_repeated_failure_on_same_target_moves_down_ladder():
+    # 필터가 방금 실패한 (approach, T2) 를 빼므로 hold 가 아니라 사다리 아래(search)로 내려간다
     state = _make_state(tracks=(_make_track(track_id="T2", north_m=40.0),))
     event = _make_event(EVENT_MODE_ENDED, ModeResult("approach", "failure", "T2"))
 
     result = _select(state, event)
 
-    assert result.rule_mode == "hold"
-    assert result.params == fill_params("hold", state, event, ParamDefaults())
+    assert result.rule_mode == "search"
+    assert result.params == fill_params("search", state, event, ParamDefaults())
 
 
 def test_failure_with_new_nearer_target_keeps_approaching():
@@ -164,7 +165,7 @@ def test_result_fields_are_rule_one_hot_and_local():
     assert result.source == SOURCE_RULE
     assert result.fallback_reason == FALLBACK_NONE
     assert result.confidence == RULE_CONFIDENCE == 1.0
-    assert result.options == filter_options(state, event)
+    assert result.options == filter_options(state, event, ParamDefaults().approach_stop_distance_m)
     assert tuple(result.probabilities) == result.options
     assert result.probabilities == {mode: (1.0 if mode == result.rule_mode else 0.0) for mode in result.options}
     assert result.latency.total_ms >= 0

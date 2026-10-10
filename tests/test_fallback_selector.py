@@ -151,7 +151,7 @@ def _build_fallback_selector(primary: StubPrimary, clock: FakeClock | None = Non
 
 def _build_d1_result() -> SelectionResult:
     state, event = _build_state(), _build_event()
-    options = filter_options(state, event)
+    options = filter_options(state, event, ParamDefaults().approach_stop_distance_m)
     reply = _build_reply("observe", options)
 
     return _build_d1_selector(StubClient(reply=reply)).select(state, event)
@@ -162,7 +162,7 @@ def _build_d1_result() -> SelectionResult:
 
 def test_d1_selector_returns_d1_result_with_shared_params():
     state, event = _build_state(), _build_event()
-    options = filter_options(state, event)
+    options = filter_options(state, event, ParamDefaults().approach_stop_distance_m)
     client = StubClient(reply=_build_reply("observe", options))
 
     result = _build_d1_selector(client).select(state, event)
@@ -179,7 +179,7 @@ def test_d1_selector_returns_d1_result_with_shared_params():
 
 def test_d1_selector_sends_filtered_options_and_serialized_state():
     state, event = _build_state(), _build_event()
-    options = filter_options(state, event)
+    options = filter_options(state, event, ParamDefaults().approach_stop_distance_m)
     client = StubClient(reply=_build_reply("search", options))
 
     _build_d1_selector(client).select(state, event)
@@ -195,7 +195,7 @@ def test_d1_selector_sends_filtered_options_and_serialized_state():
 
 def test_d1_selector_rtt_none_leaves_split_unknown():
     state, event = _build_state(), _build_event()
-    client = StubClient(rtt_ms=None, reply=_build_reply("search", filter_options(state, event)))
+    client = StubClient(rtt_ms=None, reply=_build_reply("search", filter_options(state, event, ParamDefaults().approach_stop_distance_m)))
 
     result = _build_d1_selector(client).select(state, event)
 
@@ -210,7 +210,7 @@ def test_estimate_latency_clamps_orin_to_zero():
 
 def test_d1_selector_low_confidence_raises_with_latency():
     state, event = _build_state(), _build_event()
-    client = StubClient(reply=_build_reply("search", filter_options(state, event), confidence=0.2))
+    client = StubClient(reply=_build_reply("search", filter_options(state, event, ParamDefaults().approach_stop_distance_m), confidence=0.2))
 
     with pytest.raises(D1SelectionError) as raised:
         _build_d1_selector(client).select(state, event)
@@ -243,7 +243,7 @@ def test_d1_selector_maps_client_errors(error: Exception, reason: str):
 
 def test_d1_selector_rejects_choice_outside_options():
     state, event = _build_state(), _build_event()
-    options = filter_options(state, event)
+    options = filter_options(state, event, ParamDefaults().approach_stop_distance_m)
     # 파서를 우회한 응답 — choice 가 보기 밖
     reply = ChoiceReply(choice="teleport", probabilities={options[0]: 1.0}, confidence=0.9, input_tokens=1, total_ms=STUB_TOTAL_MS)
 
@@ -254,7 +254,7 @@ def test_d1_selector_rejects_choice_outside_options():
 
 
 def test_d1_selector_single_option_skips_client(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(d1_selector, "filter_options", lambda state, event: ("hold",))
+    monkeypatch.setattr(d1_selector, "filter_options", lambda state, event, approach_stop_distance_m: ("hold",))
     client = StubClient(reply=None)
 
     with pytest.raises(D1SelectionError) as raised:

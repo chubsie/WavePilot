@@ -73,7 +73,7 @@ class D1Selector:
         self._confidence_threshold = confidence_threshold
 
     def select(self, state: SelectionState, event: SelectionEvent) -> SelectionResult:
-        options = filter_options(state, event)
+        options = filter_options(state, event, self._defaults.approach_stop_distance_m)
         if len(options) < MIN_OPTION_COUNT:
             raise D1SelectionError(FALLBACK_SINGLE_OPTION, None, f"only {options} left after filtering")
 
