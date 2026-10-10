@@ -1,3 +1,4 @@
+import dataclasses
 import logging
 
 import pytest
@@ -24,14 +25,10 @@ from modules.drone.mission_loop import (
     build_rule_mode_settings,
 )
 from modules.drone.run_mission import MOCK_DETECTION_RANGE_M, RangeLimitedTargetSource
-from modules.flight_control.interface import TakeOff
+from modules.flight_control.interface import CommandAck, FireHeart, TakeOff
 from modules.perception.interface import DEFAULT_CAMERA
 from modules.perception.tracking import TrackAggregator
-from modules.rule_mode.factory import (
-    SUPPORTED_RULE_MODES,
-    UnsupportedRuleModeError,
-    create_rule_mode,
-)
+from modules.rule_mode.factory import SUPPORTED_RULE_MODES, create_rule_mode
 from modules.rule_mode.interface import RuleMode, RuleModeSettings
 from modules.rule_mode.return_home import ReturnHomeMode
 from modules.simulation.kinematic_flight import KinematicFlightControl
@@ -63,17 +60,25 @@ def test_factory_creates_supported_modes(rule_mode):
     assert isinstance(mode, RuleMode)
 
 
-def test_factory_rejects_unknown_name_with_plain_value_error():
-    with pytest.raises(ValueError) as error:
+def test_factory_rejects_unknown_name_with_value_error():
+    with pytest.raises(ValueError):
         create_rule_mode("bogus", {}, RuleModeSettings())
-
-    assert not isinstance(error.value, UnsupportedRuleModeError)
 
 
 # --- 임무 루프 도우미 ---
 
 # 홈에서 60 m 라 탐지 거리(40 m) 밖 — search 가 다가가야 보인다
 DEFAULT_PERSON = ScriptedTarget(track_id=1, class_name="person", north_m=60.0, east_m=0.0)
+RED_PERSON = ScriptedTarget(track_id=1, class_name="person", north_m=60.0, east_m=0.0, upper_color="red")
+SWAPPED_TRACK_ID = 7
+
+
+def get_fire_hearts(flight) -> list[FireHeart]:
+    return [command for _, command in flight.commands_received if isinstance(command, FireHeart)]
+
+
+def build_red_settings():
+    return dataclasses.replace(build_rule_mode_settings(ParamDefaults()), target_upper_color="red")
 
 
 class RecordingSelector:
@@ -102,8 +107,15 @@ class ScriptedSelector:
         rule_mode = self._rule_modes[min(len(self.calls), len(self._rule_modes)) - 1]
         if rule_mode == "hold":
             params = {"duration_sec": 1000.0}
-        elif rule_mode in ("aim_and_fire", "observe"):
-            params = {"target_track": state.tracks[0].track_id if state.tracks else None}
+        elif rule_mode == "aim_and_fire":
+            params = {
+                "target_track": self._get_first_person_label(state),
+                "center_tolerance_ratio": self._defaults.aim_center_tolerance_ratio,
+                "stable_frame_count": self._defaults.aim_stable_frame_count,
+                "timeout_sec": self._defaults.aim_timeout_sec,
+            }
+        elif rule_mode == "observe":
+            params = {"target_track": self._get_first_person_label(state), "timeout_sec": self._defaults.observe_timeout_sec}
         else:
             params = fill_params(rule_mode, state, event, self._defaults)
 
@@ -119,18 +131,93 @@ class ScriptedSelector:
             input_tokens=None,
         )
 
+    @staticmethod
+    def _get_first_person_label(state):
+        return next((track.track_id for track in state.tracks if track.class_name == "person"), None)
 
-def build_runner(decision_model, config=None, targets=(DEFAULT_PERSON,), **overrides):
+
+class HeartRejectingControl:
+    """KinematicFlightControl 을 감싸 FireHeart 만 accepted_heart_count 발 뒤부터 거절한다 (D-14 시험)."""
+
+    def __init__(self, inner: KinematicFlightControl, accepted_heart_count: int) -> None:
+        self._inner = inner
+        self._accepted_heart_count = accepted_heart_count
+        self._heart_count = 0
+
+    @property
+    def now_sec(self) -> float:
+        return self._inner.now_sec
+
+    @property
+    def commands_received(self):
+        return self._inner.commands_received
+
+    def advance(self, dt_sec: float) -> None:
+        self._inner.advance(dt_sec)
+
+    def get_telemetry(self):
+        return self._inner.get_telemetry()
+
+    def send_command(self, command):
+        if isinstance(command, FireHeart):
+            self._heart_count += 1
+            if self._heart_count > self._accepted_heart_count:
+                return CommandAck(accepted=False, reason="heart rejected for test")
+
+        return self._inner.send_command(command)
+
+
+class TrackIdSwappingSource:
+    """FireHeart(1) 10발 전에는 track 1 만, 뒤에는 SWAPPED_TRACK_ID 만 내보낸다 (ByteTrack ID 교체 흉내).
+
+    두 track 은 서로 다른 ScriptedTarget 이라 교체 뒤 위치를 따로 둘 수 있다(대조군).
+    """
+
+    def __init__(self, inner, flight: KinematicFlightControl) -> None:
+        self._inner = inner
+        self._flight = flight
+
+    def read_frame(self):
+        frame = self._inner.read_frame()
+        if frame is None:
+            return frame
+
+        hidden_track_id = 1 if self._has_burst_finished() else SWAPPED_TRACK_ID
+        detections = tuple(detection for detection in frame.detections if detection.track_id != hidden_track_id)
+
+        return dataclasses.replace(frame, detections=detections)
+
+    def telemetry_for(self, timestamp_sec: float):
+        return self._inner.telemetry_for(timestamp_sec)
+
+    def _has_burst_finished(self) -> bool:
+        return sum(1 for heart in get_fire_hearts(self._flight) if heart.track_id == 1) >= 10
+
+
+def build_runner(
+    decision_model,
+    config=None,
+    targets=(DEFAULT_PERSON,),
+    settings=None,
+    source_wrapper=None,
+    control_wrapper=None,
+    **overrides,
+):
     flight = KinematicFlightControl()
     defaults = ParamDefaults()
     source = RangeLimitedTargetSource(ScriptedTargetSource(flight, list(targets)), flight, MOCK_DETECTION_RANGE_M)
+    if source_wrapper is not None:
+        source = source_wrapper(source, flight)
+    if control_wrapper is not None:
+        flight = control_wrapper(flight)
+
     runner = MissionRunner(
         flight_control=flight,
         frame_source=source,
         aggregator=TrackAggregator(DEFAULT_CAMERA),
         decision_model=decision_model,
         param_defaults=defaults,
-        settings=build_rule_mode_settings(defaults),
+        settings=settings or build_rule_mode_settings(defaults),
         clock=lambda: flight.now_sec,
         advance=flight.advance,
         config=config or MissionConfig(max_mission_sec=120.0),
@@ -164,6 +251,7 @@ def test_rule_selector_mission_flows_search_approach_fire_search_return():
     assert result.selections[1].params["target_track"] == "T1"
     assert result.elapsed_sec < 300.0
     assert flight.commands_received[0][1] == TakeOff(15.0)
+    assert [heart.track_id for heart in get_fire_hearts(flight)] == [1] * 10
 
 
 def test_every_mode_result_reaches_selector_as_mode_ended_event():
@@ -190,34 +278,119 @@ def test_hearted_label_reaches_next_selection_state():
     assert hearted_after_fire[-1] == ("T1",)
 
 
-# --- 임무 루프: Phase 4 자리표시 ---
+# --- 임무 루프: 실제 aim_and_fire / observe (RM-02, RM-06, HRT-01) ---
 
 
-def test_aim_and_fire_placeholder_succeeds_and_marks_hearted(caplog):
+def test_aim_and_fire_fires_burst_and_marks_hearted(caplog):
     caplog.set_level(logging.INFO, logger="modules.drone.mission_loop")
     selector = ScriptedSelector(["search", "aim_and_fire", "return_home"])
-    runner, _ = build_runner(selector)
-
-    result = runner.run()
-
-    assert result.is_success
-    assert result.mode_results[0].rule_mode == "search"
-    assert result.mode_results[1] == ModeResult("aim_and_fire", "success", "T1")
-    assert selector.calls[2][0].mission.hearted_tracks == ("T1",)
-    assert selector.calls[2][1].mode_result == ModeResult("aim_and_fire", "success", "T1")
-    assert "not implemented until Phase 4" in caplog.text
-
-
-def test_observe_placeholder_fails_immediately():
-    selector = ScriptedSelector(["search", "observe", "return_home"])
     runner, flight = build_runner(selector)
 
     result = runner.run()
 
     assert result.is_success
-    assert result.mode_results[1] == ModeResult("observe", "failure", "T1")
-    assert selector.calls[2][1].mode_result == ModeResult("observe", "failure", "T1")
+    assert [mode_result.rule_mode for mode_result in result.mode_results] == ["search", "aim_and_fire", "return_home"]
+    assert result.mode_results[1] == ModeResult("aim_and_fire", "success", "T1")
+    assert [heart.track_id for heart in get_fire_hearts(flight)] == [1] * 10
+    assert selector.calls[2][0].mission.hearted_tracks == ("T1",)
+    assert selector.calls[2][1].mode_result == ModeResult("aim_and_fire", "success", "T1")
+    assert "heart t=" in caplog.text
+    assert "not implemented until Phase 4" not in caplog.text
+
+
+def test_observe_succeeds_once_color_is_confirmed():
+    selector = ScriptedSelector(["search", "observe", "return_home"])
+    runner, flight = build_runner(selector, targets=(RED_PERSON,), settings=build_red_settings())
+
+    result = runner.run()
+
+    assert result.is_success
+    assert result.mode_results[1] == ModeResult("observe", "success", "T1")
+    assert selector.calls[2][1].mode_result == ModeResult("observe", "success", "T1")
     assert selector.calls[2][0].mission.hearted_tracks == ()
+    assert get_fire_hearts(flight) == []
+
+
+# --- 임무 루프: 발사 기록 (D-14) ---
+
+
+def test_burst_rejected_midway_fails_but_marks_hearted():
+    selector = ScriptedSelector(["search", "aim_and_fire", "return_home"])
+    runner, flight = build_runner(
+        selector, control_wrapper=lambda inner: HeartRejectingControl(inner, accepted_heart_count=3)
+    )
+
+    result = runner.run()
+
+    assert result.is_success
+    assert result.mode_results[1].rule_mode == "aim_and_fire"
+    assert result.mode_results[1].outcome == "failure"
+    assert len(get_fire_hearts(flight)) == 3
+    assert "T1" in selector.calls[2][0].mission.hearted_tracks
+
+
+def test_burst_rejected_from_first_shot_is_not_hearted():
+    selector = ScriptedSelector(["search", "aim_and_fire", "return_home"])
+    runner, flight = build_runner(
+        selector, control_wrapper=lambda inner: HeartRejectingControl(inner, accepted_heart_count=0)
+    )
+
+    result = runner.run()
+
+    assert result.is_success
+    assert result.mode_results[1].outcome == "failure"
+    assert get_fire_hearts(flight) == []
+    assert "T1" not in selector.calls[2][0].mission.hearted_tracks
+
+
+# --- 임무 루프: 위치 기반 중복 제외 (HRT-02, D-13) ---
+
+
+def run_track_id_swap_mission(config, swapped_east_offset_m=0.0):
+    swapped_person = dataclasses.replace(
+        RED_PERSON, track_id=SWAPPED_TRACK_ID, east_m=RED_PERSON.east_m + swapped_east_offset_m
+    )
+    selector = RecordingSelector(RuleSelector(ParamDefaults()))
+    runner, flight = build_runner(
+        selector, config=config, targets=(RED_PERSON, swapped_person), settings=build_red_settings(),
+        source_wrapper=TrackIdSwappingSource,
+    )
+
+    return runner.run(), flight, selector
+
+
+def test_new_track_id_at_hearted_position_is_not_fired_again():
+    result, flight, selector = run_track_id_swap_mission(MissionConfig(max_mission_sec=300.0))
+
+    hearts = get_fire_hearts(flight)
+    assert result.end_reason == END_LANDED
+    assert len(hearts) == 10
+    assert all(heart.track_id == 1 for heart in hearts)
+    assert any("T7" in state.mission.hearted_tracks for state, _ in selector.calls)
+    assert any(any(track.track_id == "T7" for track in state.tracks) for state, _ in selector.calls)
+
+
+def test_new_track_id_within_radius_is_not_fired_again():
+    result, flight, _ = run_track_id_swap_mission(MissionConfig(max_mission_sec=300.0), swapped_east_offset_m=1.0)
+
+    assert result.end_reason == END_LANDED
+    assert {heart.track_id for heart in get_fire_hearts(flight)} == {1}
+
+
+def test_hearted_radius_smaller_than_offset_lets_swapped_track_be_fired():
+    # 대조군 — 위치 판정이 실제로 재발사를 막는다는 증거. mock 위치 추정은 정확하므로 1 m 떨어뜨리고 반경을 0.5 m 로 둔다
+    config = MissionConfig(max_mission_sec=300.0, hearted_radius_m=0.5)
+    result, flight, _ = run_track_id_swap_mission(config, swapped_east_offset_m=1.0)
+
+    hearts = get_fire_hearts(flight)
+    assert result.end_reason == END_LANDED
+    assert any(heart.track_id == SWAPPED_TRACK_ID for heart in hearts)
+
+
+@pytest.mark.parametrize("radius_m", [0.0, -1.0])
+def test_non_positive_hearted_radius_is_rejected(radius_m):
+    with pytest.raises(ValueError):
+        MissionConfig(hearted_radius_m=radius_m)
 
 
 def test_loop_accepts_any_decision_model():

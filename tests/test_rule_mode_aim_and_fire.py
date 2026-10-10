@@ -16,12 +16,7 @@ from modules.flight_control.interface import (
 from modules.perception.interface import DEFAULT_CAMERA, Track
 from modules.perception.tracking import TrackAggregator
 from modules.rule_mode.aim_and_fire import AimAndFireMode
-from modules.rule_mode.factory import (
-    PHASE4_RULE_MODES,
-    SUPPORTED_RULE_MODES,
-    UnsupportedRuleModeError,
-    create_rule_mode,
-)
+from modules.rule_mode.factory import SUPPORTED_RULE_MODES, create_rule_mode
 from modules.rule_mode.interface import ModeTick, RuleMode, RuleModeSettings
 from modules.rule_mode.observe import ObserveMode
 from modules.simulation.kinematic_flight import KinematicFlightControl
@@ -391,11 +386,8 @@ def test_factory_creates_aim_and_fire_and_observe():
     assert isinstance(create_rule_mode("aim_and_fire", AIM_PARAMS, settings), AimAndFireMode)
     assert isinstance(create_rule_mode("observe", {"target_track": "T3", "timeout_sec": 10.0}, settings), ObserveMode)
     assert SUPPORTED_RULE_MODES == ("search", "approach", "hold", "return_home", "aim_and_fire", "observe")
-    assert PHASE4_RULE_MODES == ()
 
 
-def test_factory_rejects_unknown_name_with_plain_value_error():
-    with pytest.raises(ValueError) as error:
+def test_factory_rejects_unknown_name_with_value_error():
+    with pytest.raises(ValueError):
         create_rule_mode("bogus", {}, RuleModeSettings())
-
-    assert not isinstance(error.value, UnsupportedRuleModeError)

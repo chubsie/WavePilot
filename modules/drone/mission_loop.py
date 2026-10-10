@@ -7,17 +7,20 @@ mock·browser 클래스를 모른다. 시간은 clock() 으로 읽고 advance(dt
 | 단계 | 하는 일                                                                                  |
 |------|------------------------------------------------------------------------------------------|
 | a    | now = clock(), 최신 텔레메트리                                                            |
-| b    | 새 프레임이 있으면 TrackAggregator 에 넣고 track 스냅샷                                    |
-| c    | 실행 중인 모드를 step. 결과가 나오면 mode_results 에 담고 모드를 비운다                    |
-| d    | 이번 틱의 모드 결과(없으면 직전 틱의 Phase 4 자리표시 결과)를 trigger.poll 에 넘긴다        |
+| b    | 새 프레임이 있으면 TrackAggregator 에 넣고 track 스냅샷, 발사 지점 반경 안 새 track 을 hearted 로 |
+| c    | 실행 중인 모드를 step(기록 프록시 경유). 결과가 나오면 mode_results 에 담고 모드를 비운다    |
+| d    | 이번 틱의 모드 결과를 trigger.poll 에 넘긴다                                              |
 | e    | return_home 결과 처리: success -> 착륙 종료, failure -> 비정상 종료, timeout -> 한 번 재시도 |
 | f    | max_mission_sec 에 이르면 실행 중 모드를 버리고 선택기 없이 return_home 강제 시작           |
 | g    | 실행 중 모드가 없고 사건이 있으면 DecisionModel.select -> create_rule_mode                  |
 | h    | 모드 실행 중 사건(new_target / periodic_check)은 모드를 끊지 않는다                         |
 | i    | should_abort / 강제 정지 확인, advance(dt)                                                 |
 
-Phase 4 자리표시: aim_and_fire 는 즉시 success(가짜 발사, FireHeart 명령 없음) + 라벨을 hearted 에 추가,
-observe 는 즉시 failure 로 끝난다. 그 결과는 다음 틱에 mode_ended 사건으로 선택기에 닿는다.
+하트 기록 (D-13, D-14, SC5):
+- 모드에는 원본 FlightControl 대신 HeartRecordingControl 프록시를 넘긴다. 수락된 FireHeart 를 보면 그 track 을
+  hearted 로 기록한다 — 연사 중 한 발이라도 수락되면 hearted 다. 모드는 프록시인지 모른다.
+- 기록 순간 그 track 의 지면 위치를 저장하고, 매 틱 저장 위치에서 hearted_radius_m 안의 새 track(ID 바뀜)도
+  hearted 로 넣는다. 판정은 이 모듈에만 있고 선택기·보기 필터는 상태의 hearted_tracks 만 본다.
 
 종료 사유:
 | end_reason            | 뜻                                                                  |
@@ -42,20 +45,21 @@ from modules.decision.interface.state import EVENT_PERIODIC_CHECK, ModeResult, S
 from modules.decision.params import ParamDefaults, fill_params
 from modules.decision.trigger import PERIODIC_CHECK_INTERVAL_SEC, SelectionTrigger
 from modules.drone.selection_state import build_selection_state
-from modules.flight_control.interface import FlightControl, TakeOff, Telemetry
+from modules.flight_control.interface import Command, CommandAck, FireHeart, FlightControl, TakeOff, Telemetry
 from modules.perception.tracking import TrackAggregator
-from modules.rule_mode.factory import UnsupportedRuleModeError, create_rule_mode
-from modules.rule_mode.interface import ModeParams, ModeTick, RuleMode, RuleModeSettings, SearchArea
+from modules.perception.interface import Track
+from modules.rule_mode.factory import create_rule_mode
+from modules.rule_mode.interface import ModeParams, ModeTick, RuleMode, RuleModeSettings, SearchArea, track_label
 from modules.yolo_detection.interface import Frame
 
 logger = logging.getLogger("modules.drone.mission_loop")
 
 SELECTION_LOG_PREFIX = "selection"
 MODE_END_LOG_PREFIX = "mode_end"
+HEART_LOG_PREFIX = "heart"
+HEART_DUPLICATE_LOG_PREFIX = "heart_duplicate"
 
 AIRBORNE_TOLERANCE_M = 1.0
-STUB_FIRE_REASON = "not implemented until Phase 4: stub fire"
-PHASE4_REASON = "not implemented until Phase 4"
 
 EVENT_MAX_MISSION_TIME = "max_mission_time"
 EVENT_RETURN_RETRY = "return_home_retry"
@@ -84,9 +88,13 @@ class MissionConfig:
     takeoff_timeout_sec: float = 30.0
     return_grace_sec: float = 300.0  # 강제 정지 = max_mission_sec + return_grace_sec
     periodic_interval_sec: float = PERIODIC_CHECK_INTERVAL_SEC
+    hearted_radius_m: float = 3.0  # 발사 지점에서 이 거리 안의 새 track 은 같은 사람으로 본다 (D-13)
 
     def __post_init__(self) -> None:
-        for name in ("max_mission_sec", "tick_hz", "takeoff_timeout_sec", "return_grace_sec", "periodic_interval_sec"):
+        for name in (
+            "max_mission_sec", "tick_hz", "takeoff_timeout_sec", "return_grace_sec", "periodic_interval_sec",
+            "hearted_radius_m",
+        ):
             value = getattr(self, name)
             if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value) or value <= 0:
                 raise ValueError(f"field '{name}' must be a finite number > 0, got {value!r}")
@@ -117,9 +125,12 @@ class MissionRunResult:
         return self.end_reason == END_LANDED
 
 
-def build_rule_mode_settings(defaults: ParamDefaults, target_class: str = "person") -> RuleModeSettings:
+def build_rule_mode_settings(
+    defaults: ParamDefaults, target_class: str = "person", target_upper_color: str | None = None
+) -> RuleModeSettings:
     return RuleModeSettings(
         target_class=target_class,
+        target_upper_color=target_upper_color,
         search_area=SearchArea(
             north_min_m=defaults.search_area_north_min_m,
             north_max_m=defaults.search_area_north_max_m,
@@ -129,6 +140,24 @@ def build_rule_mode_settings(defaults: ParamDefaults, target_class: str = "perso
         search_altitude_m=defaults.search_altitude_m,
         search_lane_spacing_m=defaults.search_lane_spacing_m,
     )
+
+
+class HeartRecordingControl:
+    """FlightControl 을 그대로 감싸고, 수락된 FireHeart 의 track_id 를 on_heart_accepted 로 알린다 (D-14, SC5)."""
+
+    def __init__(self, inner: FlightControl, on_heart_accepted: Callable[[int], None]) -> None:
+        self._inner = inner
+        self._on_heart_accepted = on_heart_accepted
+
+    def get_telemetry(self) -> Telemetry:
+        return self._inner.get_telemetry()
+
+    def send_command(self, command: Command) -> CommandAck:
+        ack = self._inner.send_command(command)
+        if isinstance(command, FireHeart) and ack.accepted:
+            self._on_heart_accepted(command.track_id)
+
+        return ack
 
 
 class MissionRunner:
@@ -162,8 +191,10 @@ class MissionRunner:
         self._tick_sec = 1.0 / config.tick_hz
         self._start_sec = 0.0
         self._running_mode: RuleMode | None = None
-        self._pending_result: ModeResult | None = None
-        self._hearted_labels: list[str] = []
+        self._heart_control = HeartRecordingControl(flight_control, self._record_heart)
+        self._latest_tracks: tuple[Track, ...] = ()
+        self._hearted_track_ids: list[int] = []  # 기록 순서 유지
+        self._hearted_positions: list[tuple[float, float]] = []  # 발사 순간 (north_m, east_m)
         self._selections: list[SelectionRecord] = []
         self._mode_results: list[ModeResult] = []
         self._forced_return = False
@@ -213,11 +244,12 @@ class MissionRunner:
             telemetry = self._flight_control.get_telemetry()
             frame, frame_telemetry, tracks = self._observe(now_sec, telemetry)
 
-            step_result = self._step_running_mode(now_sec, telemetry, tracks, frame, frame_telemetry)
-            mode_result = step_result or self._pending_result
-            self._pending_result = None
+            mode_result = self._step_running_mode(now_sec, telemetry, tracks, frame, frame_telemetry)
 
-            state = build_selection_state(now_sec, telemetry, tracks, self._settings.target_class, self._hearted_labels)
+            state = build_selection_state(
+                now_sec, telemetry, tracks, self._settings.target_class, self._get_hearted_labels(),
+                target_upper_color=self._settings.target_upper_color,
+            )
             event = self._trigger.poll(now_sec, state, mode_result)
 
             end_reason = self._handle_return_home_result(now_sec, state, mode_result)
@@ -243,7 +275,10 @@ class MissionRunner:
             frame_telemetry = self._frame_source.telemetry_for(frame.timestamp_sec) or telemetry
             self._aggregator.update(frame, frame_telemetry)
 
-        return frame, frame_telemetry, tuple(self._aggregator.snapshot(now_sec))
+        self._latest_tracks = tuple(self._aggregator.snapshot(now_sec))
+        self._mark_hearted_by_position(now_sec, self._latest_tracks)
+
+        return frame, frame_telemetry, self._latest_tracks
 
     def _step_running_mode(
         self,
@@ -264,7 +299,7 @@ class MissionRunner:
             frame_telemetry=frame_telemetry,
             hearted_track_ids=self._get_hearted_track_ids(),
         )
-        result = self._running_mode.step(tick, self._flight_control)
+        result = self._running_mode.step(tick, self._heart_control)
         if result is not None:
             self._running_mode = None  # 끝난 모드는 다시 step 하지 않는다
             self._record_mode_result(now_sec, result)
@@ -293,7 +328,6 @@ class MissionRunner:
         if self._running_mode is not None:
             logger.info("mode_abandoned t=%.1f mode=%s reason=max_mission_time", now_sec, self._running_mode.rule_mode)
             self._running_mode = None
-        self._pending_result = None
         self._forced_return = True
         self._start_forced_return(now_sec, state, EVENT_MAX_MISSION_TIME)
 
@@ -315,24 +349,43 @@ class MissionRunner:
             now_sec, event.kind, result.rule_mode, result.params, result.source, result.fallback_reason, event.mode_result
         )
         self._record_selection(record)
+        self._running_mode = self._mode_factory(result.rule_mode, result.params, self._settings)
 
-        try:
-            self._running_mode = self._mode_factory(result.rule_mode, result.params, self._settings)
-        except UnsupportedRuleModeError:
-            self._finish_phase4_stub(now_sec, result.rule_mode, result.params)
+    # --- 하트 기록 (D-13, D-14) ---
 
-    def _finish_phase4_stub(self, now_sec: float, rule_mode: str, params: ModeParams) -> None:
-        target_track = params.get("target_track")
-        if rule_mode == "aim_and_fire":
-            self._pending_result = ModeResult(rule_mode, "success", target_track)
-            if target_track is not None and target_track not in self._hearted_labels:
-                self._hearted_labels.append(target_track)
-            reason = STUB_FIRE_REASON
+    def _record_heart(self, track_id: int) -> None:
+        if track_id in self._hearted_track_ids:
+            return  # 연사의 두 번째 발부터는 이미 기록돼 있다
+
+        self._hearted_track_ids.append(track_id)
+        track = next((track for track in self._latest_tracks if track.track_id == track_id), None)
+        if track is None:
+            position_text = "north=none east=none"  # 스냅샷에 없으면 위치 없이 id 만 기록한다
         else:
-            self._pending_result = ModeResult(rule_mode, "failure", target_track)
-            reason = PHASE4_REASON
+            self._hearted_positions.append((track.north_m, track.east_m))
+            position_text = f"north={track.north_m:.1f} east={track.east_m:.1f}"
 
-        self._record_mode_result(now_sec, self._pending_result, reason)
+        logger.info("%s t=%.1f target=%s %s", HEART_LOG_PREFIX, self._clock(), track_label(track_id), position_text)
+
+    def _mark_hearted_by_position(self, now_sec: float, tracks: tuple[Track, ...]) -> None:
+        if not self._hearted_positions:
+            return
+
+        for track in tracks:
+            if not track.is_active or track.track_id in self._hearted_track_ids:
+                continue
+            if self._is_near_hearted_position(track):
+                self._hearted_track_ids.append(track.track_id)  # 위치는 원래 발사 지점만 기준으로 둔다
+                logger.info(
+                    "%s t=%.1f target=%s reason=near_hearted_position",
+                    HEART_DUPLICATE_LOG_PREFIX, now_sec, track_label(track.track_id),
+                )
+
+    def _is_near_hearted_position(self, track: Track) -> bool:
+        return any(
+            math.hypot(track.north_m - north_m, track.east_m - east_m) <= self._config.hearted_radius_m
+            for north_m, east_m in self._hearted_positions
+        )
 
     # --- 기록 ---
 
@@ -344,16 +397,18 @@ class MissionRunner:
             json.dumps(record.params, separators=(",", ":")), record.source, record.fallback_reason,
         )
 
-    def _record_mode_result(self, now_sec: float, result: ModeResult, reason: str | None = None) -> None:
+    def _record_mode_result(self, now_sec: float, result: ModeResult) -> None:
         self._mode_results.append(result)
-        suffix = f" reason={reason}" if reason else ""
         logger.info(
-            "%s t=%.1f mode=%s outcome=%s target=%s%s",
-            MODE_END_LOG_PREFIX, now_sec, result.rule_mode, result.outcome, result.target_track, suffix,
+            "%s t=%.1f mode=%s outcome=%s target=%s",
+            MODE_END_LOG_PREFIX, now_sec, result.rule_mode, result.outcome, result.target_track,
         )
 
+    def _get_hearted_labels(self) -> tuple[str, ...]:
+        return tuple(track_label(track_id) for track_id in self._hearted_track_ids)
+
     def _get_hearted_track_ids(self) -> frozenset[int]:
-        return frozenset(int(label.removeprefix("T")) for label in self._hearted_labels)
+        return frozenset(self._hearted_track_ids)
 
     def _finish(self, end_reason: str) -> MissionRunResult:
         result = MissionRunResult(
