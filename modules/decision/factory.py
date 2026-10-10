@@ -7,11 +7,13 @@
 환경 변수:
 | 이름                              | 기본값 | 뜻                                              |
 |-----------------------------------|--------|-------------------------------------------------|
-| WAVEPILOT_SELECTOR                | rule   | rule 또는 d1 (대소문자·앞뒤 공백 무시)          |
-| D1_SERVER_URL                     | 없음   | d1-3B llama-server 주소. d1 이면 필수 (01-04 실서버 테스트와 같은 이름) |
+| WAVEPILOT_SELECTOR                | rule   | rule 또는 d1 (대소문자·앞뒤 공백 무시, 비우면 기본값) |
+| D1_SERVER_URL                     | 없음   | d1-3B llama-server 주소. d1 이면 필수 (앞뒤 공백 무시, 01-04 실서버 테스트와 같은 이름) |
 | WAVEPILOT_D1_TIMEOUT_MS           | 1000   | /v1/systemone 요청 timeout (ms, > 0)            |
 | WAVEPILOT_D1_CONFIDENCE_THRESHOLD | 0.3    | 이 값 미만이면 low_confidence 로 규칙 대체 ([0, 1]) |
-| WAVEPILOT_D1_CIRCUIT_OPEN_SEC     | 5.0    | unavailable 뒤 d1 을 건너뛰는 시간 (s, >= 0, 0 이면 끔) |
+| WAVEPILOT_D1_CIRCUIT_OPEN_SEC     | 5.0    | unavailable·연속 timeout 뒤 d1 을 건너뛰는 시간 (s, >= 0, 0 이면 끔) |
+
+숫자 변수와 WAVEPILOT_SELECTOR 는 비우거나 공백만 두면 기본값을 쓴다.
 
 설정 오류는 시작 시점에 바로 ValueError 로 실패한다 — 규칙 대체 대상이 아니다(T-01-05-04).
 warm-up 은 여기서 하지 않는다(01-06 재생 하네스 --warmup 몫).
@@ -70,8 +72,8 @@ class SelectorConfig:
     @classmethod
     def from_env(cls, environ: Mapping[str, str]) -> "SelectorConfig":
         """호출 쪽이 os.environ 을 넘긴다(테스트는 dict)."""
-        kind = environ.get(SELECTOR_ENV, SELECTOR_RULE).strip().lower()
-        d1_url = environ.get(D1_URL_ENV) or None
+        kind = (environ.get(SELECTOR_ENV) or "").strip().lower() or SELECTOR_RULE
+        d1_url = (environ.get(D1_URL_ENV) or "").strip() or None
 
         return cls(
             kind=kind,
