@@ -26,13 +26,27 @@ def get_target_track_id(upper_color: str) -> int:
     return next(target.track_id for target in DEFAULT_MOCK_TARGETS if target.upper_color == upper_color)
 
 
-def run_headless_mission(target_upper_color: str | None):
+class RecordingAggregator(TrackAggregator):
+    def __init__(self) -> None:
+        super().__init__(DEFAULT_CAMERA)
+        self.seen_colors_by_track: dict[int, set[str]] = {}
+
+    def snapshot(self, now_sec: float):
+        track_list = super().snapshot(now_sec)
+        for track in track_list:
+            if track.upper_color is not None:
+                self.seen_colors_by_track.setdefault(track.track_id, set()).add(track.upper_color)
+
+        return track_list
+
+
+def run_headless_mission(target_upper_color: str | None, aggregator: TrackAggregator | None = None):
     defaults = ParamDefaults()
     flight, frame_source = build_mock_world()
     runner = MissionRunner(
         flight_control=flight,
         frame_source=frame_source,
-        aggregator=TrackAggregator(DEFAULT_CAMERA),
+        aggregator=aggregator or TrackAggregator(DEFAULT_CAMERA),
         decision_model=RuleSelector(defaults),
         param_defaults=defaults,
         settings=build_rule_mode_settings(defaults, target_upper_color=target_upper_color),
@@ -60,23 +74,22 @@ def test_red_target_mission_hearts_only_the_red_actor_once():
         if mode_result.rule_mode == "aim_and_fire" and mode_result.outcome == "success"
     ]
     assert result.end_reason == END_LANDED
+    assert not result.forced_return
     assert result.final_flight_mode == "grounded"
     assert hearts_by_track == {red_track_id: HEART_BURST_COUNT}
     assert hearts_by_track.get(other_track_id, 0) == 0
     assert [mode_result.target_track for mode_result in aim_successes] == [track_label(red_track_id)]
 
 
-def test_red_target_mission_actually_sees_the_other_actor(caplog):
+def test_red_target_mission_actually_sees_the_other_actor():
     # other 배우가 0발인 이유가 "못 봐서" 가 아니라 "색이 달라서" 임을 확인한다
-    other_label = track_label(get_target_track_id("other"))
-    caplog.set_level("INFO", logger="modules.drone.mission_loop")
+    other_track_id = get_target_track_id("other")
+    aggregator = RecordingAggregator()
 
-    result, _ = run_headless_mission("red")
+    result, _ = run_headless_mission("red", aggregator)
 
     assert result.end_reason == END_LANDED
-    assert other_label in caplog.text or any(
-        mode_result.target_track == other_label for mode_result in result.mode_results
-    )
+    assert aggregator.seen_colors_by_track.get(other_track_id) == {"other"}
 
 
 def test_no_target_color_hearts_both_actors_like_phase3():
