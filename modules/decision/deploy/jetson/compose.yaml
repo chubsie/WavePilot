@@ -1,0 +1,60 @@
+# 판단 모델(d1-3B) llama-server — Jetson Orin Nano 용.
+#
+# 사용자가 Orin 의 이 디렉터리에서 `docker compose up -d llama-decision` 으로 띄운다.
+# 에이전트는 빌드·기동하지 않는다 (D-10). 순서는 RUNBOOK.md 참고.
+#
+# 기동 플래그는 서버 기본값을 믿지 않고 전부 명시한다:
+#   - --port 8081: 예전 보고 서버 포트와 겹치지 않게 한다 (판단 모델이 아닌 서버는 /v1/systemone 에 501 을 준다)
+#   - -c 4096: 미지정이면 모델 최대 컨텍스트를 잡아 CUDA OOM → 4096 명시
+#   - -np 1: 기본 auto 는 컨텍스트를 슬롯 여러 개로 나눈다 → 슬롯 하나가 컨텍스트 전체를 쓰게 1 명시
+#   - --jinja / --chat-template-kwargs / --mmproj 는 넣지 않는다: 판단 경로는 자체 렌더러를 쓰고
+#     텍스트만 보낸다 (RESEARCH 3절, A6 ASSUMED).
+
+# 두 배포 디렉터리(llm_report, decision)가 모두 `jetson` 이라 이름이 없으면 기본 프로젝트 이름을 공유한다.
+# 그러면 여기서 `down` 할 때 llm_report 컨테이너를 orphan 으로 건드릴 수 있어 프로젝트 이름을 고정한다.
+name: wavepilot-decision
+
+services:
+  llama-decision:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        L4T_TAG: ${L4T_TAG:-r36.4.0}
+        LLAMA_CPP_REF: ${LLAMA_CPP_REF:-b11541}
+        CUDA_ARCH: "87"
+        BUILD_JOBS: ${BUILD_JOBS:-4}
+    image: wavepilot/llama-server:b11541-r36.4.0
+    runtime: nvidia
+
+    # 인증 없는 포트다 (프로젝트 결정: API 키 없음). 신뢰 LAN 에서만 띄우고,
+    # 바인딩 주소(LLAMA_BIND_ADDR)와 ufw 로 접근을 좁힌다 (RUNBOOK 9단계).
+    ports:
+      - "${LLAMA_BIND_ADDR:-0.0.0.0}:8081:8081"
+
+    # 모델 디렉터리 기본값 ../../../../models (= WavePilot/models/) 는 빌드 컨텍스트(modules/decision/deploy/jetson) 밖이다.
+    # 그래서 GGUF 가 build context 로 전송되지 않는다. 읽기 전용으로 마운트한다.
+    volumes:
+      - "${MODELS_DIR:-../../../../models}:/models:ro"
+
+    # 정적 테스트가 json.loads 로 읽는다 — 모든 원소를 큰따옴표 문자열로 쓰는 JSON 호환 flow sequence 유지.
+    command: [
+      "-m", "/models/d1-3B-Q4_K_M.gguf",
+      "--alias", "d1-3b",
+      "--host", "0.0.0.0",
+      "--port", "8081",
+      "-c", "4096",
+      "-np", "1",
+      "-ngl", "999"
+    ]
+
+    # 모델 로딩 중 /health 는 503, 준비되면 200 {"status":"ok"}. start_period 동안의 실패는 세지 않는다.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8081/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 120s
+
+    # OOM 으로 죽었을 때 재시작 루프로 Orin 을 붙잡지 않도록 자동 재시작하지 않는다.
+    restart: "no"
