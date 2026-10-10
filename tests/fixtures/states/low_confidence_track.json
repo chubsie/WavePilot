@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "time_sec": 9.6,
+  "drone": {
+    "position_ned_m": {
+      "north": 0.0,
+      "east": 0.0,
+      "down": -40.0
+    },
+    "altitude_m": 40.0,
+    "attitude_deg": {
+      "roll": 0.0,
+      "pitch": 0.0,
+      "yaw": 0.0
+    },
+    "gimbal_deg": {
+      "pitch": -55.0,
+      "yaw": 0.0
+    },
+    "battery_pct": 97.5,
+    "flight_mode": "hover"
+  },
+  "tracks": [
+    {
+      "track_id": "T7",
+      "class": "person",
+      "position_ned_m": {
+        "north": 35.5,
+        "east": -8.2
+      },
+      "first_seen_sec": 9.5,
+      "last_seen_sec": 9.5,
+      "observation_count": 1,
+      "mean_confidence": 0.42,
+      "is_active": true
+    }
+  ],
+  "counts_by_class": {
+    "person": 1
+  },
+  "omitted_track_count": 0
+}

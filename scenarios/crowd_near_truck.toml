@@ -1,0 +1,35 @@
+# 정차 트럭 주변 군중: north 30, east 8 에 트럭이 서 있고, 두 명은 트럭 앞(north 25~28)에 서 있으며,
+# 두 명은 north 12 에서 출발해 트럭 10 m 안쪽까지 걸어온다 (다수 인원 + 차량 근접 상황).
+name = "crowd_near_truck"
+description = "Four people gather around a parked truck; two walk in from the south."
+duration_sec = 45.0
+
+[[objects]]
+id = "veh-1"
+kind = "truck"
+size_m = [8.0, 2.5, 3.0]
+waypoints = [ {t = 0.0, north = 30.0, east = 8.0} ]
+
+[[objects]]
+id = "ped-1"
+kind = "person"
+size_m = [0.5, 0.5, 1.75]
+waypoints = [ {t = 0.0, north = 25.0, east = 3.0} ]
+
+[[objects]]
+id = "ped-2"
+kind = "person"
+size_m = [0.5, 0.5, 1.75]
+waypoints = [ {t = 0.0, north = 28.0, east = 12.0} ]
+
+[[objects]]
+id = "ped-3"
+kind = "person"
+size_m = [0.5, 0.5, 1.75]
+waypoints = [ {t = 0.0, north = 12.0, east = 0.0}, {t = 35.0, north = 24.0, east = 5.0} ]
+
+[[objects]]
+id = "ped-4"
+kind = "person"
+size_m = [0.5, 0.5, 1.75]
+waypoints = [ {t = 0.0, north = 12.0, east = 15.0}, {t = 35.0, north = 25.0, east = 12.0} ]

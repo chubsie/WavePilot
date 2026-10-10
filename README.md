@@ -73,3 +73,150 @@ At rest, yaw drift measures about 0.1° per 30 s. While the glove is still, the 
 ## Third-party code
 
 `tools/visualizer/three.min.js` is [three.js](https://threejs.org) r128, MIT license.
+
+## Python: LLM overwatch pipeline
+
+The same repository also holds a set of Python packages for an LLM overwatch drone. A mock detection source and a mock flight controller feed perception tracks; the LLM module turns them into a state JSON, a rule-based decision and an English situation report in which every sentence cites the track IDs it is based on. The drone side sends all of this over a TCP link to an operator console that runs as a separate process.
+
+These packages are independent of `firmware/` and `tools/`. They need Python 3.12 and [uv](https://docs.astral.sh/uv/), and have no runtime dependencies (standard library only; pytest is a dev dependency).
+
+### Package layout
+
+```
+interfaces/         Protocols and message dataclasses: DetectionSource, FlightControl, CommLink, Track, geometry
+mocks/              Scenario-driven detection source, hovering flight control, sim clock
+perception/         Pixel -> ground projection, track aggregation
+comm/               TCP JSON-lines CommLink
+drone/              Drone-side runner that wires everything together
+operator_console/   Operator CLI
+llm_module/         LLM layer: state JSON, decision model, LLM backend, report (import only the top-level facade)
+scenarios/          TOML scenarios with ground truth
+deploy/jetson/      llama-server container for Jetson Orin Nano + runbook
+scripts/            Demo and local llama-server launchers
+examples/           Using llm_module on its own
+tests/              pytest
+```
+
+The operator package is `operator_console/`, not `operator/`, because `operator` would shadow the Python standard library module of the same name.
+
+### Setup
+
+Run every command in this section from the repository root (the folder that holds `pyproject.toml`).
+
+```bash
+uv sync
+```
+
+### Tests
+
+| Command | What it runs |
+|---|---|
+| `uv run pytest` | Unit tests. `e2e` and `llm` tests are excluded by default |
+| `uv run pytest -m e2e` | Starts the operator console and the drone runner as two processes, with the fake LLM backend |
+| `LLAMA_SERVER_URL=http://127.0.0.1:8080 uv run pytest -m llm` | Tests against a real model; needs a running llama-server (see below) |
+
+### Run the two processes
+
+Start the operator console first. It listens; the drone connects to it.
+
+```bash
+# Terminal 1: operator console
+uv run python -m operator_console --host 127.0.0.1 --port 8765
+
+# Terminal 2: drone side
+uv run python -m drone.run_scenario --scenario scenarios/checkpoint.toml --operator-host 127.0.0.1 --operator-port 8765 --backend fake
+```
+
+The port must be the same in both commands (8765 is the console's default). If the console is not up, the drone retries for `--connect-timeout-sec` seconds and then exits with code 1. Add `--exit-on-disconnect` to the console to make it exit when the drone finishes.
+
+Other scenarios: `scenarios/road_crossing.toml`, `scenarios/crowd_near_truck.toml`.
+
+`--speed` sets sim seconds per wall second: `1` (default) is real time, `2` is twice as fast, and `0` runs as fast as possible. With `--speed 0` reports are generated synchronously, so the same scenario always gives the same telemetry, states and reports.
+
+While the console runs, you can type commands into it. Each one is sent to the drone:
+
+| Command | Action |
+|---|---|
+| `rth` | Return to home |
+| `land` | Land |
+| `takeoff <alt_m>` | Take off to an altitude in metres |
+| `goto <north_m> <east_m> <alt_m>` | Fly to a position (NED metres from home, altitude in metres) |
+| `quit` | Close the console |
+
+### Console output
+
+Every console line starts with the local time in ISO 8601 with milliseconds, then a space and a tag:
+
+```
+2026-10-10T19:00:20.478+09:00 LISTEN host=127.0.0.1 port=8765
+2026-10-10T19:00:20.730+09:00 LINK connected peer=127.0.0.1:64022
+2026-10-10T19:00:20.741+09:00 TELEMETRY t=8.0s mode=hover pos_ned=(0.0,0.0,-40.0) alt=40.0m att_deg=(0.0,0.0,0.0) gimbal_deg=(-55.0,0.0) battery=99.8%
+2026-10-10T19:00:20.787+09:00 STATE t=40.0s alt=40.0m battery=99.2% tracks=2 ids=T1,T2 counts=car:1,person:1 omitted=0
+2026-10-10T19:00:20.787+09:00 DECISION t=40.0s verdict=escalate reason=urgency 2 from T2; ambiguous: person-vehicle distance 15.4 m is within 15+-3 m answers=urgency=2@0.50; next_action=alert_operator@0.50; report_needed=True@0.50
+2026-10-10T19:00:20.787+09:00 REPORT t=40.0s sentences=2 grounded=true flags=-
+2026-10-10T19:00:20.787+09:00 REPORT   [T1] (observation) 1 car track: T1 at 27.7 m N, 19.3 m E.
+2026-10-10T19:00:20.787+09:00 REPORT   [T2] (observation) 1 person track: T2 at 21.8 m N, 5.1 m E.
+2026-10-10T19:00:20.787+09:00 LINK disconnected peer=127.0.0.1:64022 last_received_at=2026-10-10T10:00:20.787+00:00
+```
+
+| Tag | Meaning |
+|---|---|
+| `LISTEN` | The console is listening; shows the host and the actual port |
+| `LINK` | The drone connected or disconnected |
+| `TELEMETRY` | Drone sim time, flight mode, NED position, altitude, attitude, gimbal angles and battery |
+| `STATE` | Summary of the state JSON: track count, track IDs, counts by class, tracks left out |
+| `DECISION` | Rule-based verdict (`act` or `escalate`), the reason, and each typed answer as `question=value@confidence` |
+| `REPORT` | First a header line (sentence count, whether every sentence is grounded, flags), then one line per report sentence, or a line with `error=` if the report failed |
+| `COMMAND` | A command the console sent to the drone |
+| `WARN` | A malformed message, an unknown command or a send failure |
+
+A report sentence line looks like `REPORT   [T1,T3] (observation) <text>`. The brackets list the track IDs the sentence is based on, and `(observation)` or `(suggestion)` is the sentence kind. A track label such as `T3` means tracker ID 3.
+
+### Real LLM on the Mac (llama-server)
+
+The report LLM is Nemotron-3-Nano-4B (GGUF, Q4_K_M) served by llama.cpp's `llama-server`.
+
+```bash
+brew install llama.cpp
+scripts/run_llama_server_mac.sh
+```
+
+The script serves the model on `127.0.0.1:8080`; the first run downloads the model from Hugging Face. Once `http://127.0.0.1:8080/health` returns 200, run the drone side with the real backend:
+
+```bash
+uv run python -m drone.run_scenario --scenario scenarios/checkpoint.toml --operator-host 127.0.0.1 --operator-port 8765 --backend llama_server --llm-url http://127.0.0.1:8080
+```
+
+To start the console and the drone together with one command, use `scripts/run_demo.sh --backend fake` or `scripts/run_demo.sh --backend llama_server`. For its other options, see the comment at the top of the script.
+
+Model files are not committed (`*.gguf` and `models/` are in `.gitignore`).
+
+### Plugging in a simulator
+
+A simulator such as Colosseum only needs three things from this code:
+
+1. `interfaces.DetectionSource`: implement `read_frame() -> Frame | None`. A `Frame` holds `Detection`s whose fields map 1:1 to Ultralytics tracking output: class id and name, confidence, pixel `xyxy` box and track id.
+2. `interfaces.FlightControl`: implement `get_telemetry() -> Telemetry` and `send_command(command) -> CommandAck`. Positions are NED metres and angles are degrees; the sign conventions are in `interfaces/geometry.py` and match the glove's drone frame described above.
+3. The top-level `llm_module` facade:
+
+   ```python
+   from llm_module import LLMModuleConfig, create_llm_module
+
+   module = create_llm_module(LLMModuleConfig(backend="fake"))
+   output = module.process(tracks, telemetry)  # or module.process_state(state_json_dict)
+   payload = output.to_report_payload()        # state, decision and report
+   ```
+
+   `create_llm_module` returns an `LLMModule`. `process` takes perception tracks and telemetry (`perception.tracking.TrackAggregator` turns frames and telemetry into tracks); `process_state` takes a state JSON directly.
+
+Do not import anything else: no `llm_module` submodules and no implementations from `mocks/` or `comm/`. `tests/test_import_boundaries.py` enforces this.
+
+A standalone example that uses only the facade:
+
+```bash
+PYTHONPATH=. uv run python examples/use_llm_module.py
+```
+
+### Jetson Orin Nano
+
+On the Jetson Orin Nano only `llama-server` runs, in a container; `llm_module` stays on the Mac and talks to it over HTTP at `http://<orin-ip>:8080`. The server has no authentication, so limit access with the bind address and a firewall rule as the runbook describes. You build and run the container yourself; the steps are in [deploy/jetson/RUNBOOK.md](deploy/jetson/RUNBOOK.md). Switching the drone runner to the remote backend by configuration is Phase 3 scope.
