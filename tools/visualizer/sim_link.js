@@ -52,6 +52,9 @@
   const DETECTION_STALE_SEC = 1.0;
   const MAX_PENDING_EVENTS = 50;
 
+  // D-09: 아래쪽 거리 센서(레인지파인더) 최대 측정 거리
+  const MAX_RANGEFINDER_M = 50;
+
   // ---------- 순수 헬퍼 ----------
   const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 
@@ -69,6 +72,13 @@
       longitude_deg: HOME_LONGITUDE_DEG + eastM / metersPerDegLon,
       altitude_m: -downM,
     };
+  }
+
+  function heightAboveGroundM(altitudeM, groundM) {
+    // 드론 바로 밑 지면까지 거리 [m]; 측정 범위 밖이면 null (Python Telemetry.height_above_ground_m)
+    const heightM = Math.max(altitudeM - groundM, 0);
+
+    return Number.isFinite(heightM) && heightM <= MAX_RANGEFINDER_M ? heightM : null;
   }
 
   function measureToHome(gps, homeGps) {
@@ -547,6 +557,7 @@
 
     lines.push(
       `NED      N ${fixed(telemetry.north_m, 1)}  E ${fixed(telemetry.east_m, 1)}  D ${fixed(telemetry.down_m, 1)} m`,
+      `AGL      ${telemetry.height_above_ground_m == null ? 'out of range' : fixed(telemetry.height_above_ground_m, 1) + ' m'}`,
       `Attitude R ${fixed(telemetry.roll_deg, 1)}  P ${fixed(telemetry.pitch_deg, 1)}  Y ${fixed(telemetry.yaw_deg, 1)}°`,
       `Gimbal   P ${fixed(telemetry.gimbal_pitch_deg, 1)}  Y ${fixed(telemetry.gimbal_yaw_deg, 1)}°`,
       `Battery  ${fixed(telemetry.battery_pct, 1)} %`,
@@ -583,7 +594,8 @@
     GIMBAL_PITCH_MIN_DEG, GIMBAL_PITCH_MAX_DEG, GIMBAL_YAW_MIN_DEG, GIMBAL_YAW_MAX_DEG, DEFAULT_GIMBAL_PITCH_DEG,
     GOTO_SPEED_MPS, CLIMB_SPEED_MPS, LAND_SPEED_MPS, GOAL_REACHED_HORIZONTAL_M, GOAL_REACHED_VERTICAL_M, RTH_MIN_ALTITUDE_M,
     YAW_RATE_DPS, GIMBAL_RATE_DPS, HEART_DURATION_SEC, MAX_RECENT_ITEMS, DETECTION_STALE_SEC, MAX_PENDING_EVENTS,
-    wrapYawDeg, nedToGps, measureToHome, parseBatteryStartPct, batteryPctAt,
+    MAX_RANGEFINDER_M,
+    wrapYawDeg, nedToGps, heightAboveGroundM, measureToHome, parseBatteryStartPct, batteryPctAt,
     createAutopilot, createLink,
     startHeart, drawOverlay, renderPanel,
   };
