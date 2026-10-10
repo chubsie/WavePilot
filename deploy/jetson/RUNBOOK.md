@@ -128,10 +128,10 @@ BUILD_JOBS=2 docker compose build llama-report
 
 ```bash
 docker compose run --rm --no-deps llama-report --version
-docker compose run --rm --no-deps llama-report --help | grep -E -- '--chat-template-kwargs|--jinja|--api-key|--no-webui'
+docker compose run --rm --no-deps llama-report --help | grep -E -- '--chat-template-kwargs|--jinja|--no-webui'
 ```
 
-**기대 결과:** 빌드는 수십 분 걸릴 수 있다. `--version` 이 `v0.6.0` 계열 버전과 CUDA 디바이스(Orin)를 출력. `--help` grep 에 `--chat-template-kwargs`, `--jinja` 가 반드시 나온다. `--api-key`, `--no-webui` 는 있으면 8단계에서 선택적으로 쓴다.
+**기대 결과:** 빌드는 수십 분 걸릴 수 있다. `--version` 이 `v0.6.0` 계열 버전과 CUDA 디바이스(Orin)를 출력. `--help` grep 에 `--chat-template-kwargs`, `--jinja` 가 반드시 나온다. `--no-webui` 는 있으면 8단계에서 선택적으로 쓴다.
 
 **실패 시:**
 
@@ -247,8 +247,6 @@ cd WavePilot && LLAMA_SERVER_URL=http://<orin-ip>:8080 uv run pytest -m llm
   sudo ufw allow from <mac-ip> to any port 8080 proto tcp
   ```
 
-- 4단계 `--help` 에서 `--api-key` 가 확인되면: 키를 `~/wavepilot/deploy/jetson/.env` 에 `LLAMA_API_KEY=<key>` 로 두고(git 에 넣지 않음 — `.gitignore` 의 `.env`), compose `command` 끝에 `"--api-key", "${LLAMA_API_KEY}"` 를 추가한다. Mac 쪽 클라이언트는 `Authorization: Bearer <key>` 를 보내야 한다.
-
 ---
 
 ## 9. 중지·롤백 (상태 변경)
@@ -288,7 +286,7 @@ L4T / JetPack 버전 (cat /etc/nv_tegra_release, dpkg-query):
 nvcc --version (3단계):
 빌드 성공 여부 / 소요 시간 / BUILD_JOBS / L4T_TAG:
 llama-server --version 출력:
---help grep 결과 (--chat-template-kwargs / --jinja / --api-key / --no-webui):
+--help grep 결과 (--chat-template-kwargs / --jinja / --no-webui):
 /health 코드 — Orin 내부:
 /health 코드 — Mac 에서:
 스모크 응답 content 앞부분:
