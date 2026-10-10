@@ -12,6 +12,7 @@ from modules.decision.interface import (
     EVENT_PERIODIC_CHECK,
     FALLBACK_BAD_RESPONSE,
     FALLBACK_CIRCUIT_OPEN,
+    FALLBACK_INTERNAL_ERROR,
     FALLBACK_LOW_CONFIDENCE,
     FALLBACK_NONE,
     FALLBACK_OUT_OF_MENU,
@@ -332,7 +333,7 @@ def test_fallback_selector_absorbs_unexpected_exceptions(error: Exception):
 
     assert isinstance(result, SelectionResult)
     assert result.source == SOURCE_RULE
-    assert result.fallback_reason == FALLBACK_BAD_RESPONSE
+    assert result.fallback_reason == FALLBACK_INTERNAL_ERROR
 
 
 def test_fallback_selector_does_not_swallow_keyboard_interrupt():
@@ -402,11 +403,12 @@ def test_emergency_hold_when_rule_selector_also_fails():
     primary = StubPrimary(error=D1SelectionError(FALLBACK_TIMEOUT, Latency(50.0, None, 10.0)))
     selector = FallbackSelector(primary, RaisingFallback(), CIRCUIT_OPEN_SEC, clock=FakeClock(), param_defaults=defaults)
 
-    result = selector.select(_build_state(), _build_event())
+    state, event = _build_state(), _build_event()
+    result = selector.select(state, event)
 
     assert result.rule_mode == EMERGENCY_RULE_MODE == "hold"
-    assert result.options == ("hold",)
-    assert result.probabilities == {"hold": 1.0}
+    assert result.options == filter_options(state, event, defaults.approach_stop_distance_m)
+    assert result.probabilities == {option: (1.0 if option == "hold" else 0.0) for option in result.options}
     assert result.confidence == 1.0
     assert result.params == {"duration_sec": 7.5}
     assert set(result.params) == set(PARAM_KEYS_BY_MODE["hold"])
@@ -424,7 +426,7 @@ def test_emergency_hold_uses_default_param_defaults():
     result = selector.select(_build_state(), _build_event())
 
     assert result.params == {"duration_sec": ParamDefaults().hold_duration_sec}
-    assert result.fallback_reason == FALLBACK_BAD_RESPONSE
+    assert result.fallback_reason == FALLBACK_INTERNAL_ERROR
 
 
 # --- Protocol·검증 ---

@@ -24,6 +24,7 @@ FALLBACK_UNAVAILABLE = "unavailable"
 FALLBACK_BAD_RESPONSE = "bad_response"
 FALLBACK_CIRCUIT_OPEN = "circuit_open"
 FALLBACK_SINGLE_OPTION = "single_option"
+FALLBACK_INTERNAL_ERROR = "internal_error"  # 선택기 코드의 예상 밖 예외 — 서버 오작동(bad_response)과 구분한다
 FALLBACK_REASONS = (
     FALLBACK_NONE,
     FALLBACK_TIMEOUT,
@@ -33,6 +34,7 @@ FALLBACK_REASONS = (
     FALLBACK_BAD_RESPONSE,
     FALLBACK_CIRCUIT_OPEN,
     FALLBACK_SINGLE_OPTION,
+    FALLBACK_INTERNAL_ERROR,
 )
 
 # 서버 확률은 반올림하지 않으므로 이 허용오차면 통과한다 (RESEARCH §5 Answer 판정)
