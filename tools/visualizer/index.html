@@ -22,6 +22,30 @@
     position: absolute; left: 16px; bottom: 16px; color: var(--muted); font-size: 12px;
     background: rgba(15,17,21,.7); padding: 6px 10px; border-radius: 6px;
   }
+  #modeBadge {
+    position: absolute; top: 16px; right: 16px; display: flex; align-items: center; gap: 10px;
+    padding: 10px 20px; border-radius: 999px; font-weight: 700; font-size: 20px; letter-spacing: .06em;
+    background: rgba(15,17,21,.75); border: 2px solid var(--border); color: var(--text);
+    backdrop-filter: blur(4px); transition: background .2s, border-color .2s, color .2s;
+  }
+  #modeBadge .pip { width: 14px; height: 14px; border-radius: 50%; background: var(--ok); }
+  #modeBadge.ai {
+    padding: 14px 28px; font-size: 34px; letter-spacing: .1em;
+    background: var(--yaw); border-color: #fff; color: #1a1305;
+    box-shadow: 0 0 0 0 rgba(245,185,66,.7); animation: aiGlow 1.4s ease-out infinite;
+  }
+  #modeBadge.ai .pip { width: 20px; height: 20px; background: #1a1305; animation: pulse 1s ease-in-out infinite; }
+  #aiBanner {
+    position: absolute; left: 0; right: 0; top: 0; height: 6px; background: var(--yaw);
+    display: none; animation: pulse 1s ease-in-out infinite;
+  }
+  #view.ai #aiBanner { display: block; }
+  #view.ai { box-shadow: inset 0 0 0 4px var(--yaw); }
+  @keyframes pulse { 50% { opacity: .35; } }
+  @keyframes aiGlow { 70%, 100% { box-shadow: 0 0 0 22px rgba(245,185,66,0); } }
+  @media (prefers-reduced-motion: reduce) {
+    #modeBadge.ai, #modeBadge.ai .pip, #aiBanner { animation: none; }
+  }
   aside {
     background: var(--panel); border-left: 1px solid var(--border);
     padding: 16px; display: flex; flex-direction: column; gap: 14px; overflow-y: auto;
@@ -60,14 +84,15 @@
 </style>
 </head>
 <body>
-  <div id="view"><div id="hint">Red arms = front of the drone · camera follows from behind</div></div>
+  <div id="view"><div id="aiBanner"></div><div id="modeBadge" role="status" aria-live="polite"><span class="pip"></span><span id="modeBadgeText">MANUAL</span></div><div id="hint">Red arms = front of the drone · camera follows from behind</div></div>
   <aside>
     <div>
       <h1><span id="dot" class="dot"></span>Glove Visualizer</h1>
-      <div id="status">Not connected. Close the Arduino Serial Monitor first.</div>
+      <div id="status">Not connected. For USB, close the Arduino Serial Monitor first.</div>
     </div>
     <div class="buttons">
-      <button id="connect" class="primary">Connect</button>
+      <button id="connect" class="primary">Connect USB</button>
+      <button id="connectBle" class="primary">Connect Bluetooth</button>
       <button id="zero" disabled title="Sends 'c': current hand pose becomes level">Zero pose</button>
       <button id="gyro" disabled title="Sends 'g': re-measures gyro bias, keep the glove still ~1 s">Calibrate gyro</button>
       <button id="info" disabled title="Sends 'i': prints IMU info">IMU info</button>
@@ -77,6 +102,16 @@
       <div class="card pitch"><div class="label">Pitch</div><div class="value" id="vPitch">0.0°</div></div>
       <div class="card yaw"><div class="label">Yaw (integrated)</div><div class="value" id="vYaw">0.0°</div></div>
       <div class="card"><div class="label">Yaw rate · Stream</div><div class="value" id="vRate">0 °/s</div></div>
+      <div class="card" style="grid-column: span 2">
+        <div class="label">Finger bend · raw <span id="vFlexRaw">–</span></div>
+        <div class="value" id="vBend">–</div>
+        <div style="height:8px;background:#11141a;border-radius:4px;margin-top:4px;overflow:hidden"><div id="bendBar" style="height:100%;width:0;background:var(--accent)"></div></div>
+        <div class="buttons" style="margin-top:8px">
+          <button id="flexFlat" disabled title="Hold the finger straight, then click">Set flat</button>
+          <button id="flexBent" disabled title="Bend the finger fully, then click">Set bent</button>
+        </div>
+        <div id="flexCal" style="color:var(--muted);font-size:12px;margin-top:4px"></div>
+      </div>
     </div>
     <fieldset>
       <legend>Axis mapping (fix signs here if the drone moves the wrong way)</legend>
@@ -87,9 +122,10 @@
     </fieldset>
     <fieldset>
       <legend>Flight preview</legend>
-      <label class="chk"><input type="checkbox" id="fly">Fly with tilt</label>
+      <label class="chk"><input type="checkbox" id="fly">Fly (tilt + finger throttle)</label>
+      <button id="mode" title="Thumb button (or M key)">Mode: Manual</button>
       <button id="home" style="padding:4px 10px">Return home</button>
-      <div id="flightInfo" style="color:var(--muted);font-size:12px;margin-top:6px">Tilt forward = fly forward, tilt sideways = strafe, yaw = turn. Zero pose first.</div>
+      <div id="flightInfo" style="color:var(--muted);font-size:12px;margin-top:6px;white-space:pre-line">Tilt = lean the drone, bend = throttle (50% hovers), yaw = turn. Thumb button (or M) switches Manual / AI. Middle finger button (or hold L) flashes the drone LEDs.</div>
     </fieldset>
     <div>
       <canvas id="chart"></canvas>
@@ -138,6 +174,57 @@ function mapped() {
   };
 }
 
+// ---------- Flex sensor: raw ADC -> bend 0..1 using a saved flat/bent calibration ----------
+const FLEX_KEY = 'gloveVizFlex.v1';
+const flex = { raw: null, recent: [], flat: null, bent: null, bend: 0 };
+try { Object.assign(flex, JSON.parse(localStorage.getItem(FLEX_KEY) || '{}')); } catch {}
+const flexReady = () => flex.flat !== null && flex.bent !== null && Math.abs(flex.bent - flex.flat) >= 30;
+
+function flexMean() {   // average of the last ~0.5 s (25 samples)
+  if (flex.recent.length < 10) return null;
+  return flex.recent.reduce((a, b) => a + b, 0) / flex.recent.length;
+}
+function saveFlex() {
+  try { localStorage.setItem(FLEX_KEY, JSON.stringify({ flat: flex.flat, bent: flex.bent })); } catch {}
+}
+function calibrateFlex(which) {
+  const v = flexMean();
+  if (v === null) { log('Flex: no data yet. Is the sensor wired and the glove streaming?'); return; }
+  flex[which] = Math.round(v);
+  saveFlex();
+  if (flexReady()) log(`Flex calibrated: flat=${flex.flat}, bent=${flex.bent}`);
+  else if (flex.flat !== null && flex.bent !== null) log('Flex: flat and bent are too close together. Bend the finger further.');
+}
+$('flexFlat').onclick = () => calibrateFlex('flat');
+$('flexBent').onclick = () => calibrateFlex('bent');
+
+// ---------- Buttons and flight mode ----------
+// Firmware sends a bitmask: bit0 = middle finger (flash LEDs while held), bit1 = thumb (toggle mode).
+const buttons = { mask: 0, middle: false, key: false };
+const mode = { ai: false, aiYaw: 0 };
+function setMode(ai) {
+  mode.ai = ai;
+  if (ai) mode.aiYaw = shown.yaw;
+  $('mode').textContent = ai ? 'Mode: AI (circling)' : 'Mode: Manual';
+  $('modeBadge').classList.toggle('ai', ai);
+  $('view').classList.toggle('ai', ai);
+  $('modeBadgeText').textContent = ai ? 'AI MODE' : 'MANUAL';
+  log(ai ? 'AI mode: hovering in a circle (placeholder)' : 'Manual mode');
+}
+$('mode').onclick = () => setMode(!mode.ai);
+addEventListener('keydown', (e) => {
+  if (e.repeat) return;
+  if (e.key === 'm' || e.key === 'M') setMode(!mode.ai);
+  if (e.key === 'l' || e.key === 'L') buttons.key = true;
+});
+addEventListener('keyup', (e) => { if (e.key === 'l' || e.key === 'L') buttons.key = false; });
+function onButtons(mask) {
+  const pressed = mask & ~buttons.mask;
+  if (pressed & 2) setMode(!mode.ai);          // thumb: toggle on press
+  buttons.middle = !!(mask & 1);               // middle finger: LEDs flash while held
+  buttons.mask = mask;
+}
+
 // ---------- Log ----------
 function log(msg) {
   const el = $('log');
@@ -147,67 +234,118 @@ function log(msg) {
   el.scrollTop = el.scrollHeight;
 }
 
-// ---------- Web Serial ----------
-let port = null, reader = null, writer = null, pipeDone = null;
+// ---------- Link to the glove: USB serial (Web Serial) or Bluetooth LE (Web Bluetooth) ----------
+// Both carry the same text lines. Over BLE the glove acts as a Nordic UART Service device.
+const NUS = {
+  service: '6e400001-b5a3-f393-e0a9-e50e24dcca9e',
+  rx: '6e400002-b5a3-f393-e0a9-e50e24dcca9e',   // PC -> glove (commands)
+  tx: '6e400003-b5a3-f393-e0a9-e50e24dcca9e',   // glove -> PC (notifications)
+};
+let link = null;   // { kind: 'usb' | 'ble', send(text), close() }
+let rxBuf = '';
 
-function setConnected(on) {
+function setConnected(on, kind) {
   $('dot').classList.toggle('on', on);
-  $('connect').textContent = on ? 'Disconnect' : 'Connect';
-  $('zero').disabled = !on;
-  $('gyro').disabled = !on;
-  $('info').disabled = !on;
-  $('status').textContent = on ? 'Connected, waiting for data…' : 'Not connected. Close the Arduino Serial Monitor first.';
+  $('connect').textContent = on ? 'Disconnect' : 'Connect USB';
+  $('connectBle').textContent = on && kind === 'ble' ? 'Disconnect' : 'Connect Bluetooth';
+  $('connectBle').disabled = on && kind === 'usb';
+  $('connect').disabled = on && kind === 'ble';
+  for (const id of ['zero', 'gyro', 'flexFlat', 'flexBent', 'info']) $(id).disabled = !on;
+  $('status').textContent = on
+    ? `Connected over ${kind === 'ble' ? 'Bluetooth' : 'USB'}, waiting for data…`
+    : 'Not connected. For USB, close the Arduino Serial Monitor first.';
 }
 
-async function connect() {
+function feed(text) {   // split incoming text into lines (BLE notifications can cut a line in two)
+  rxBuf += text;
+  let i;
+  while ((i = rxBuf.indexOf('\n')) >= 0) {
+    handleLine(rxBuf.slice(0, i).trim());
+    rxBuf = rxBuf.slice(i + 1);
+  }
+}
+
+async function connectUsb() {
   if (!('serial' in navigator)) { log('Web Serial is not available. Use Chrome or Edge.'); return; }
+  let port, writer, reader, pipeDone;
   try {
     port = await navigator.serial.requestPort();
     await port.open({ baudRate: 115200 });
   } catch (e) {
     log('Could not open port: ' + e.message + '\n(Is the Arduino Serial Monitor still open?)');
-    port = null;
     return;
   }
   writer = port.writable.getWriter();
-  state.lastSeq = null;
-  setConnected(true);
-  readLoop();
-}
-
-async function disconnect() {
-  try { await reader?.cancel(); } catch {}
-  try { await pipeDone; } catch {}
-  try { writer?.releaseLock(); } catch {}
-  try { await port?.close(); } catch {}
-  port = reader = writer = pipeDone = null;
-  setConnected(false);
-}
-
-async function readLoop() {
   const decoder = new TextDecoderStream();
   pipeDone = port.readable.pipeTo(decoder.writable).catch(() => {});
   reader = decoder.readable.getReader();
-  let buf = '';
-  try {
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buf += value;
-      let i;
-      while ((i = buf.indexOf('\n')) >= 0) {
-        handleLine(buf.slice(0, i).trim());
-        buf = buf.slice(i + 1);
+  const me = link = {
+    kind: 'usb', port,
+    send: (t) => writer.write(new TextEncoder().encode(t)),
+    async close() {
+      try { await reader.cancel(); } catch {}
+      try { await pipeDone; } catch {}
+      try { writer.releaseLock(); } catch {}
+      try { await port.close(); } catch {}
+    },
+  };
+  state.lastSeq = null; rxBuf = '';
+  setConnected(true, 'usb');
+  (async () => {
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        feed(value);
       }
-    }
+    } catch (e) { log('Read stopped: ' + e.message); }
+    if (link === me) disconnect();
+  })();
+}
+
+async function connectBle() {
+  if (!navigator.bluetooth) { log('Web Bluetooth is not available. Use Chrome or Edge.'); return; }
+  let device;
+  try {
+    device = await navigator.bluetooth.requestDevice({ filters: [{ services: [NUS.service] }] });
+    $('status').textContent = 'Connecting to ' + (device.name || 'glove') + '…';
+    const server = await device.gatt.connect();
+    const svc = await server.getPrimaryService(NUS.service);
+    const tx = await svc.getCharacteristic(NUS.tx);
+    const rx = await svc.getCharacteristic(NUS.rx);
+    const decoder = new TextDecoder();
+    tx.addEventListener('characteristicvaluechanged', (e) => feed(decoder.decode(e.target.value, { stream: true })));
+    await tx.startNotifications();
+    const me = link = {
+      kind: 'ble',
+      send: (t) => {
+        const data = new TextEncoder().encode(t);
+        return rx.writeValueWithoutResponse ? rx.writeValueWithoutResponse(data) : rx.writeValue(data);
+      },
+      async close() { try { device.gatt.disconnect(); } catch {} },
+    };
+    device.addEventListener('gattserverdisconnected', () => {
+      if (link === me) { log('Bluetooth connection lost.'); link = null; setConnected(false); }
+    });
+    state.lastSeq = null; rxBuf = '';
+    setConnected(true, 'ble');
+    log('Connected to ' + (device.name || 'glove') + ' over Bluetooth.');
   } catch (e) {
-    log('Read stopped: ' + e.message);
+    try { device?.gatt.disconnect(); } catch {}
+    link = null; setConnected(false);
+    if (e.name !== 'NotFoundError') log('Bluetooth connect failed: ' + e.message);   // NotFoundError = user closed the picker
   }
-  if (port) disconnect();
+}
+
+async function disconnect() {
+  const l = link;
+  link = null;
+  try { await l?.close(); } catch {}
+  setConnected(false);
 }
 
 async function send(ch) {
-  try { await writer?.write(new TextEncoder().encode(ch)); } catch (e) { log('Send failed: ' + e.message); }
+  try { await link?.send(ch); } catch (e) { log('Send failed: ' + e.message); }
 }
 
 function handleLine(line) {
@@ -222,6 +360,12 @@ function handleLine(line) {
   state.roll = Number(p[2]);
   state.pitch = Number(p[3]);
   state.yawRate = Number(p[4]);
+  if (p.length >= 8 && Number.isFinite(Number(p[7]))) onButtons(Number(p[7]) | 0);
+  if (p.length >= 6 && Number.isFinite(Number(p[5]))) {
+    flex.raw = Number(p[5]);
+    flex.recent.push(flex.raw);
+    if (flex.recent.length > 25) flex.recent.shift();
+  }
   if (Math.abs(state.yawRate) > YAW_DEADBAND) state.yaw += state.yawRate * steps * SAMPLE_DT;
   state.samples++;
   const m = mapped();
@@ -229,20 +373,24 @@ function handleLine(line) {
   if (history.length > HISTORY) history.shift();
 }
 
-$('connect').onclick = () => (port ? disconnect() : connect());
+$('connect').onclick = () => (link ? disconnect() : connectUsb());
+$('connectBle').onclick = () => (link ? disconnect() : connectBle());
 $('zero').onclick = () => { send('c'); state.yaw = 0; };
 $('gyro').onclick = () => { send('g'); log('Calibrating gyro, keep the glove still…'); };
 $('info').onclick = () => send('i');
 if ('serial' in navigator) {
-  navigator.serial.addEventListener('disconnect', (e) => { if (e.target === port) { log('Device unplugged.'); disconnect(); } });
+  navigator.serial.addEventListener('disconnect', (e) => { if (link?.port === e.target) { log('Device unplugged.'); disconnect(); } });
 } else {
   log('Web Serial is not available in this browser. Open this page in Chrome or Edge.');
 }
+if (!navigator.bluetooth) $('connectBle').title = 'Web Bluetooth is not available in this browser. Use Chrome or Edge.';
 
 setInterval(() => {
   state.hz = state.samples;
   state.samples = 0;
-  if (port) $('status').textContent = state.hz ? `Streaming at ${state.hz} Hz` : 'Connected, no data (check the board is running glove.ino)';
+  if (link) $('status').textContent = state.hz
+    ? `Streaming at ${state.hz} Hz over ${link.kind === 'ble' ? 'Bluetooth' : 'USB'}`
+    : 'Connected, no data (check the board is running glove.ino)';
 }, 1000);
 
 // ---------- 3D scene: a quadcopter that follows the glove ----------
@@ -338,6 +486,7 @@ drone.add(canopy);
 
 // Front is -Z. Front arms red, rear arms grey, so heading is obvious.
 const rotors = [];
+const leds = [];
 const R = 0.95;
 [[-R, -R, 0xff6b6b, 1], [R, -R, 0xff6b6b, -1], [-R, R, 0x8a90a0, -1], [R, R, 0x8a90a0, 1]].forEach(([x, z, color, dir]) => {
   const len = Math.hypot(x, z);
@@ -355,11 +504,20 @@ const R = 0.95;
   disc.position.set(x, 0.15, z);
   drone.add(disc);
 
-  const blade = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.012, 0.07), mat(0xd7dbe5));
+  const blade = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.012, 0.07), mat(0xd7dbe5, { transparent: true }));
   blade.position.set(x, 0.155, z);
   blade.userData.dir = dir;
+  blade.userData.disc = disc;
+  blade.userData.speed = 0;   // 0..1 motor speed, eased toward its target
   drone.add(blade);
   rotors.push(blade);
+
+  // Status LED on the outside of each motor: red at the front, green at the rear
+  const led = new THREE.Mesh(new THREE.SphereGeometry(0.09, 12, 8), new THREE.MeshBasicMaterial({ color: 0x2a2d35 }));
+  led.position.set(x * 1.12, -0.04, z * 1.12);
+  led.userData.on = z < 0 ? 0xff3b3b : 0x3bff6a;
+  drone.add(led);
+  leds.push(led);
 });
 
 function resize() {
@@ -399,18 +557,22 @@ function drawChart() {
   }
 }
 
-// ---------- Flight preview: simple velocity model, like the sim bridge will use ----------
-const HOVER_AGL = 9;          // m above ground (no throttle input yet)
+// ---------- Flight preview: simple physics, like a real quadcopter ----------
+// Thrust acts along the drone's "up" axis. Throttle sets its size (50% = exactly cancels gravity
+// when level), tilt splits it into lift and sideways push. Tilting at low throttle sinks;
+// tilting at high throttle accelerates hard. Drag sets a terminal speed.
+const G = 9.81;
+const HOVER_AGL = 9;          // m above ground at start / for the automatic hover used until the flex is calibrated
 const TILT_DEADBAND = 3;      // deg of tilt ignored, so a resting hand does not drift
-const FULL_TILT = 30;         // deg of tilt for full speed
-const MAX_SPEED = 15;         // m/s
-const flight = { pos: new THREE.Vector3(0, 0, 0), vel: new THREE.Vector3(), alt: HOVER_AGL, terrainAt: null };
+const MAX_THRUST = 2 * G;     // m/s^2 at 100% throttle
+const DRAG_H = 0.7, DRAG_V = 1.2, DRAG_GROUND = 4;   // 1/s
+const HOVER_BAND = 0.04;      // bend 46..54% counts as exactly 50% throttle
+const flight = { pos: new THREE.Vector3(0, 0, 0), vel: new THREE.Vector3(), alt: HOVER_AGL, terrainAt: null, throttle: 0.5, auto: true, onGround: false };
+const tiltEuler = new THREE.Euler(), tiltUp = new THREE.Vector3();
 
-function tiltAxis(deg) {
-  const a = Math.abs(deg);
-  if (a < TILT_DEADBAND) return 0;
-  return Math.sign(deg) * Math.min((a - TILT_DEADBAND) / (FULL_TILT - TILT_DEADBAND), 1);
-}
+const AI_RADIUS = 20, AI_SPEED = 6;   // m, m/s
+const pct = (v) => Math.round(v * 100) + '%';
+const deadband = (deg) => Math.abs(deg) < TILT_DEADBAND ? 0 : deg - Math.sign(deg) * TILT_DEADBAND;
 
 // Home = nearest low, dry spot with an open view ahead (-Z), searched outward from the origin.
 const HOME = (() => {
@@ -429,6 +591,7 @@ const HOME = (() => {
 function goHome() {
   flight.pos.copy(HOME);
   flight.vel.set(0, 0, 0);
+  flight.onGround = false;
   flight.alt = Math.max(terrainHeight(HOME.x, HOME.z), 0) + HOVER_AGL;
   buildTerrain(HOME.x, HOME.z);
   flight.terrainAt = HOME.clone();
@@ -436,6 +599,30 @@ function goHome() {
 }
 $('home').onclick = goHome;
 goHome();
+
+// ---------- Rotors: motor speed follows throttle, with a tilt mix like a flight controller ----------
+const MAX_OMEGA = 60;         // rad/s of blade spin at full motor speed (visual, not real rpm)
+const MIX_GAIN = 0.15;        // motor speed change at full lean (30 deg)
+const motorSpeeds = [0, 0, 0, 0];   // FL, FR, RL, RR for the readout
+function updateRotors(dt, m) {
+  // Lean command: nose down speeds up the rear motors, right side down speeds up the left motors
+  const pitchCmd = Math.max(-1, Math.min(1, deadband(m.pitch) / 30));
+  const rollCmd = Math.max(-1, Math.min(1, deadband(m.roll) / 30));
+  const flash = (buttons.middle || buttons.key) && Math.floor(performance.now() / 120) % 2 === 0;
+  for (const led of leds) led.material.color.setHex(flash ? led.userData.on : 0x2a2d35);
+  rotors.forEach((b, i) => {
+    const front = b.position.z < 0, left = b.position.x < 0;
+    let target = flight.throttle;
+    if (opts.fly || mode.ai) target += MIX_GAIN * (front ? pitchCmd : -pitchCmd) + MIX_GAIN * (left ? rollCmd : -rollCmd);
+    target = Math.max(0, Math.min(1, target));
+    const u = b.userData;
+    u.speed += (target - u.speed) * Math.min(1, dt * 6);        // motors take a moment to spin up/down
+    b.rotation.y += u.dir * u.speed * MAX_OMEGA * dt;
+    b.material.opacity = 1 - 0.75 * u.speed;                     // blades blur out at speed
+    u.disc.material.opacity = 0.04 + 0.26 * u.speed;
+    motorSpeeds[(front ? 0 : 2) + (left ? 0 : 1)] = u.speed;
+  });
+}
 
 // ---------- Render loop ----------
 const D2R = Math.PI / 180;
@@ -450,31 +637,70 @@ function frame() {
   shown.roll += (m.roll - shown.roll) * 0.35;
   shown.pitch += (m.pitch - shown.pitch) * 0.35;
   shown.yaw += (m.yaw - shown.yaw) * 0.35;
+  if (mode.ai) {
+    // Placeholder autopilot: fly a level circle to the right at a fixed radius, banking into the turn
+    mode.aiYaw += (AI_SPEED / AI_RADIUS) / D2R * dt;
+    shown.yaw = mode.aiYaw;
+    shown.roll = Math.atan(AI_SPEED * AI_SPEED / (AI_RADIUS * G)) / D2R;
+    shown.pitch = -5;
+  }
   // +pitch = nose up, +roll = right side down, +yaw = nose right
   drone.rotation.set(shown.pitch * D2R, -shown.yaw * D2R, -shown.roll * D2R, 'YXZ');
-  for (const b of rotors) b.rotation.y += 0.45 * b.userData.dir;
+  updateRotors(dt, m);
 
   // Heading vectors (front of the drone is -Z at yaw 0)
   const psi = shown.yaw * D2R;
   fwd.set(Math.sin(psi), 0, -Math.cos(psi));
   right.set(Math.cos(psi), 0, Math.sin(psi));
 
-  // Nose down (negative pitch) flies forward, right side down (positive roll) strafes right
-  target.set(0, 0, 0);
-  if (opts.fly) {
-    target.addScaledVector(fwd, -tiltAxis(m.pitch) * MAX_SPEED);
-    target.addScaledVector(right, tiltAxis(m.roll) * MAX_SPEED);
-  }
-  flight.vel.lerp(target, Math.min(1, dt * 2.5));
-  flight.pos.addScaledVector(flight.vel, dt);
-
-  // Altitude hold above the terrain, smoothed so it glides over hills
   const ground = Math.max(terrainHeight(flight.pos.x, flight.pos.z), 0);
-  flight.alt += (ground + HOVER_AGL - flight.alt) * Math.min(1, dt * 1.5);
-  flight.alt = Math.max(flight.alt, ground + 2);
+  let thrustAccel = 0;
+  if (mode.ai) {
+    // Constant-speed circle; hold altitude above the terrain
+    flight.vel.set(fwd.x * AI_SPEED, flight.vel.y, fwd.z * AI_SPEED);
+    const target = ground + HOVER_AGL;
+    flight.vel.y = (target - flight.alt) * 1.5;
+    flight.auto = true;
+    flight.throttle = 0.5;
+  } else if (opts.fly) {
+    // Thrust direction from the (dead-banded) tilt: nose down = forward, right side down = right
+    tiltEuler.set(deadband(shown.pitch) * D2R, -shown.yaw * D2R, -deadband(shown.roll) * D2R, 'YXZ');
+    tiltUp.set(0, 1, 0).applyEuler(tiltEuler);
+
+    // Throttle: the finger once calibrated, otherwise an automatic hover so the preview stays flyable
+    flight.auto = !(flexReady() && flex.raw !== null);
+    if (flight.auto) {
+      const agl = flight.alt - ground;
+      flight.throttle = Math.min(1, Math.max(0, 0.5 / Math.max(tiltUp.y, 0.5) + 0.04 * (HOVER_AGL - agl) - 0.1 * flight.vel.y));
+    } else {
+      flight.throttle = Math.abs(flex.bend - 0.5) < HOVER_BAND ? 0.5 : flex.bend;
+    }
+    thrustAccel = flight.throttle * MAX_THRUST;
+
+    flight.vel.x += (tiltUp.x * thrustAccel - DRAG_H * flight.vel.x) * dt;
+    flight.vel.y += (tiltUp.y * thrustAccel - G - DRAG_V * flight.vel.y) * dt;
+    flight.vel.z += (tiltUp.z * thrustAccel - DRAG_H * flight.vel.z) * dt;
+  } else {
+    flight.vel.multiplyScalar(Math.max(0, 1 - 3 * dt));   // parked: coast to a stop and hold
+    flight.throttle = 0.5;
+  }
+  flight.pos.x += flight.vel.x * dt;
+  flight.pos.z += flight.vel.z * dt;
+  if (opts.fly || mode.ai) flight.alt += flight.vel.y * dt;
+
+  // Ground contact: sit on the terrain, no sinking, friction when landed
+  const groundNow = Math.max(terrainHeight(flight.pos.x, flight.pos.z), 0);
+  flight.onGround = flight.alt <= groundNow + 0.3;
+  if (flight.onGround) {
+    flight.alt = groundNow + 0.3;
+    if (flight.vel.y < 0) flight.vel.y = 0;
+    const f = Math.max(0, 1 - DRAG_GROUND * dt);
+    flight.vel.x *= f; flight.vel.z *= f;
+  }
+  flight.alt = Math.min(flight.alt, groundNow + 250);
   drone.position.set(flight.pos.x, flight.alt, flight.pos.z);
-  shadow.position.set(flight.pos.x, ground + 0.15, flight.pos.z);
-  shadow.material.opacity = 0.35 * Math.max(0, 1 - (flight.alt - ground) / 30);
+  shadow.position.set(flight.pos.x, groundNow + 0.15, flight.pos.z);
+  shadow.material.opacity = 0.35 * Math.max(0, 1 - (flight.alt - groundNow) / 30);
 
   // Keep the terrain mesh centred under the drone
   if (Math.hypot(flight.pos.x - flight.terrainAt.x, flight.pos.z - flight.terrainAt.z) > 25) {
@@ -491,14 +717,29 @@ function frame() {
   camera.lookAt(target);
 
   const speed = Math.hypot(flight.vel.x, flight.vel.z);
-  $('flightInfo').textContent = opts.fly
-    ? `Speed ${speed.toFixed(1)} m/s · altitude ${(flight.alt - ground).toFixed(0)} m above ground · ${Math.hypot(flight.pos.x, flight.pos.z).toFixed(0)} m from home`
-    : 'Tilt forward = fly forward, tilt sideways = strafe, yaw = turn. Zero pose first.';
+  $('flightInfo').textContent = (opts.fly || mode.ai)
+    ? `${mode.ai ? 'AI MODE · circling ' + AI_RADIUS + ' m radius\n' : ''}Throttle ${Math.round(flight.throttle * 100)}%${flight.auto ? ' (auto hover, calibrate the flex)' : ''}${flight.onGround ? ' · landed' : ''}
+` +
+      `Speed ${speed.toFixed(1)} m/s · climb ${flight.vel.y >= 0 ? '+' : ''}${flight.vel.y.toFixed(1)} m/s · ${(flight.alt - groundNow).toFixed(0)} m above ground · ${Math.hypot(flight.pos.x - HOME.x, flight.pos.z - HOME.z).toFixed(0)} m from home
+` +
+      `Motors  FL ${pct(motorSpeeds[0])}  FR ${pct(motorSpeeds[1])}  RL ${pct(motorSpeeds[2])}  RR ${pct(motorSpeeds[3])}`
+    : 'Tilt = lean the drone, bend = throttle (50% hovers), yaw = turn. Zero pose and calibrate the flex first.';
 
   $('vRoll').textContent = m.roll.toFixed(1) + '°';
   $('vPitch').textContent = m.pitch.toFixed(1) + '°';
   $('vYaw').textContent = m.yaw.toFixed(0) + '°';
   $('vRate').textContent = `${m.yawRate.toFixed(0)} °/s · ${state.hz} Hz`;
+
+  if (flex.raw !== null && flexReady()) {
+    const target = Math.min(1, Math.max(0, (flex.raw - flex.flat) / (flex.bent - flex.flat)));
+    flex.bend += (target - flex.bend) * 0.3;
+  }
+  $('vFlexRaw').textContent = flex.raw === null ? '–' : flex.raw;
+  $('vBend').textContent = flexReady() && flex.raw !== null ? Math.round(flex.bend * 100) + '%' : '–';
+  $('bendBar').style.width = (flexReady() ? flex.bend * 100 : 0) + '%';
+  $('flexCal').textContent = flexReady()
+    ? `Calibrated: flat ${flex.flat}, bent ${flex.bent}`
+    : 'Not calibrated: hold the finger straight and click Set flat, then bend fully and click Set bent.';
 
   drawChart();
   renderer.render(scene, camera);
