@@ -59,7 +59,6 @@ class LlamaServerBackend:
         "_temperature",
         "_top_p",
         "_request_timeout_sec",
-        "_api_key",
         "_opener",
     )
 
@@ -70,7 +69,6 @@ class LlamaServerBackend:
         temperature: float = 0.0,
         top_p: float = 1.0,
         request_timeout_sec: float = 60.0,
-        api_key: str | None = None,
     ) -> None:
         _validate_base_url(base_url)
         _validate_timeout(request_timeout_sec)
@@ -80,17 +78,14 @@ class LlamaServerBackend:
         self._temperature = temperature
         self._top_p = top_p
         self._request_timeout_sec = request_timeout_sec
-        self._api_key = api_key
         # 빈 프록시 표를 준 opener: llama-server 는 항상 로컬(127.0.0.1) 또는 LAN(Orin)이라 프록시가
         # 필요 없다. 개발 머신의 HTTP_PROXY 가 요청을 가로채 프롬프트가 밖으로 새는 것을 막는다(Pitfall 5(d))
         self._opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
     def __repr__(self) -> str:
-        # api_key 값은 절대 표시하지 않는다(설정 여부만)
-        api_key_label = "<set>" if self._api_key is not None else "None"
         return (
             f"LlamaServerBackend(base_url={self._base_url!r}, model={self._model!r}, "
-            f"request_timeout_sec={self._request_timeout_sec}, api_key={api_key_label})"
+            f"request_timeout_sec={self._request_timeout_sec})"
         )
 
     def is_ready(self) -> bool:
@@ -141,16 +136,12 @@ class LlamaServerBackend:
 
     def _build_request(self, path: str, payload: dict | None) -> urllib.request.Request:
         url = f"{self._base_url}{path}"
-        headers: dict[str, str] = {}
-        if self._api_key is not None:
-            # Orin 쪽 --api-key 대비. 헤더 값은 어떤 메시지에도 넣지 않는다
-            headers["Authorization"] = f"Bearer {self._api_key}"
 
         if payload is None:
-            return urllib.request.Request(url, headers=headers, method="GET")
+            return urllib.request.Request(url, method="GET")
 
-        headers["Content-Type"] = "application/json"
         data = json.dumps(payload).encode("utf-8")
+        headers = {"Content-Type": "application/json"}
         return urllib.request.Request(url, data=data, headers=headers, method="POST")
 
     def _fetch_json(self, request: urllib.request.Request, timeout_sec: float) -> dict:

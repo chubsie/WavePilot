@@ -251,9 +251,9 @@ def test_create_llm_module_builds_llama_server_backend_lazily(monkeypatch: pytes
     fake_module.LlamaServerBackend = RecordingLlamaServerBackend
     monkeypatch.setitem(sys.modules, "llm_module.llama_server_backend", fake_module)
     config = LLMModuleConfig(
-        backend="llama_server", backend_url="http://10.0.0.5:8080", request_timeout_sec=30.0, api_key="k"
+        backend="llama_server", backend_url="http://10.0.0.5:8080", request_timeout_sec=30.0
     )
 
     create_llm_module(config)
 
-    assert created == [{"base_url": "http://10.0.0.5:8080", "request_timeout_sec": 30.0, "api_key": "k"}]
+    assert created == [{"base_url": "http://10.0.0.5:8080", "request_timeout_sec": 30.0}]

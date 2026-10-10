@@ -42,7 +42,6 @@ class LLMModuleConfig:
     backend: str = "fake"
     backend_url: str = DEFAULT_BACKEND_URL
     request_timeout_sec: float = DEFAULT_REQUEST_TIMEOUT_SEC
-    api_key: str | None = None  # 로그·payload 에 넣지 않는다
     max_tracks: int = DEFAULT_MAX_TRACKS
 
     def __post_init__(self) -> None:
@@ -144,7 +143,6 @@ def _create_backend(config: LLMModuleConfig) -> LLMBackend:
     return LlamaServerBackend(
         base_url=config.backend_url,
         request_timeout_sec=config.request_timeout_sec,
-        api_key=config.api_key,
     )
 
 

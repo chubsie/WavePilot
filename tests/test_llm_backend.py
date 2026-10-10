@@ -1,7 +1,7 @@
 """LlamaServerBackend 단위 테스트 — 실서버 없이 표준 http.server 스레드로 llama-server 동작을 재현한다.
 
 요청 본문 모양(OpenAI 중첩 json_schema, thinking 끄기), 오류 매핑(Unavailable/Timeout/Response),
-/health 기반 is_ready, 유한 timeout, api_key 비노출, 프록시 무시를 고정한다(IF-04, AI-SPEC Pitfall 2·4·5).
+/health 기반 is_ready, 유한 timeout, 인증 헤더 없음, 프록시 무시를 고정한다(IF-04, AI-SPEC Pitfall 2·4·5).
 """
 
 import json
@@ -24,7 +24,6 @@ from llm_module.llama_server_backend import (
     LlamaServerBackend,
 )
 
-SECRET_API_KEY = "secret-token"
 TEST_SCHEMA = {
     "type": "object",
     "properties": {"sentences": {"type": "array", "items": {"type": "string"}}},
@@ -230,17 +229,7 @@ def test_request_body_uses_nested_json_schema(fake_llama_server: FakeLlamaServer
     assert "tools" not in body
 
 
-def test_api_key_sends_bearer_header(fake_llama_server: FakeLlamaServer) -> None:
-    fake_llama_server.set_json_response(make_chat_response("{}"))
-    backend = LlamaServerBackend(fake_llama_server.base_url, api_key=SECRET_API_KEY)
-
-    call_complete_json(backend)
-
-    headers = fake_llama_server.received_requests[0]["headers"]
-    assert headers["Authorization"] == f"Bearer {SECRET_API_KEY}"
-
-
-def test_no_api_key_omits_authorization_header(fake_llama_server: FakeLlamaServer) -> None:
+def test_request_has_no_authorization_header(fake_llama_server: FakeLlamaServer) -> None:
     fake_llama_server.set_json_response(make_chat_response("{}"))
     backend = LlamaServerBackend(fake_llama_server.base_url)
 
@@ -434,48 +423,6 @@ def test_trailing_slash_base_url_has_no_double_slash(fake_llama_server: FakeLlam
     call_complete_json(backend)
 
     assert fake_llama_server.received_requests[0]["path"] == "/v1/chat/completions"
-
-
-def test_api_key_never_in_repr_or_errors(fake_llama_server: FakeLlamaServer) -> None:
-    backend = LlamaServerBackend(fake_llama_server.base_url, api_key=SECRET_API_KEY)
-    error_messages: list[str] = []
-    failing_responses = [
-        (503, b"{}"),
-        (500, b"boom"),
-        (400, b"bad"),
-        (200, b"not json"),
-        (200, json.dumps({"choices": []}).encode()),
-    ]
-
-    for status, body in failing_responses:
-        fake_llama_server.set_raw_response(body, status=status)
-        with pytest.raises((LLMResponseError, LLMUnavailableError)) as error_info:
-            call_complete_json(backend)
-        error_messages.append(str(error_info.value))
-
-    assert SECRET_API_KEY not in repr(backend)
-    assert "api_key=<set>" in repr(backend)
-    assert all(SECRET_API_KEY not in message for message in error_messages)
-
-
-def test_api_key_never_in_unavailable_or_timeout_errors(
-    fake_llama_server: FakeLlamaServer,
-) -> None:
-    refused_backend = LlamaServerBackend(
-        f"http://127.0.0.1:{get_closed_port()}", api_key=SECRET_API_KEY
-    )
-    fake_llama_server.should_hang = True
-    hanging_backend = LlamaServerBackend(
-        fake_llama_server.base_url, request_timeout_sec=SHORT_TIMEOUT_SEC, api_key=SECRET_API_KEY
-    )
-
-    with pytest.raises(LLMUnavailableError) as refused_info:
-        call_complete_json(refused_backend)
-    with pytest.raises(LLMTimeoutError) as timeout_info:
-        call_complete_json(hanging_backend)
-
-    assert SECRET_API_KEY not in str(refused_info.value)
-    assert SECRET_API_KEY not in str(timeout_info.value)
 
 
 def test_backend_satisfies_llm_backend_protocol() -> None:
