@@ -130,7 +130,7 @@ def _is_repeated_failure(event: SelectionEvent, rule_mode: str, params: Params) 
 
 
 def _build_probabilities(chosen_key: str, keys: Sequence[str], confidence: float) -> dict[str, float]:
-    # modules.llm_report.decision._build_probabilities 를 복사했다 — import 경계 때문에 import 하지 않는다
+    # llm_report/decision.py 의 _build_probabilities 를 복사했다 — import 경계 때문에 import 하지 않는다
     if len(keys) == 1:
         return {chosen_key: 1.0}
 
