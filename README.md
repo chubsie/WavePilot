@@ -1,6 +1,6 @@
 # WavePilot
 
-A glove controller for drones: hand tilt and rotation, read by an IMU on the back of the hand, fly a quadcopter in the [Colosseum](https://github.com/CodexLabsLLC/Colosseum) simulator (an AirSim fork). Built for the D4D hackathon.
+A glove controller for drones: hand tilt and rotation, read by an IMU on the back of the hand, fly a quadcopter in a built-in 3D flight simulator that runs in the browser. Built for the D4D hackathon.
 
 ## Hardware
 
@@ -68,7 +68,7 @@ At rest, yaw drift measures about 0.1° per 30 s. While the glove is still, the 
 - [x] 3D visualizer with terrain and flight preview
 - [ ] Throttle and arm/land input (flex sensor or buttons)
 - [ ] Wireless link over BLE
-- [ ] Python bridge to Colosseum
+- [ ] Throttle/altitude control in the visualizer's flight model
 
 ## Third-party code
 
