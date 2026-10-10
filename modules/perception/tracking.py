@@ -2,6 +2,7 @@
 
 시계는 frame.timestamp_sec 만 쓴다 — 벽시계를 쓰면 시나리오 재생이 결정적이지 않다.
 반올림은 하지 않는다. 상태 JSON 을 만드는 llm_report 가 표시 정밀도를 정한다.
+상체 색은 최근 창 다수결로 확정한다(D-04) — 확정 뒤에도 창 기준으로 다시 계산하므로 뒤집힐 수 있다.
 """
 
 import logging
@@ -20,12 +21,17 @@ logger = logging.getLogger(__name__)
 LOST_AFTER_SEC = 2.0
 # 최근 10 개 지면 위치의 이동 평균 — 박스 흔들림이 월드 좌표로 그대로 튀는 것을 줄인다
 POSITION_WINDOW = 10
+# 상체 색 다수결 (D-04, ASSUMED — 실측 후 조정): 최근 15 프레임 중 unknown 아닌 표 5개 이상, 1위 비율 60% 이상이면 확정
+COLOR_WINDOW = 15
+COLOR_MIN_VOTES = 5
+COLOR_MIN_RATIO = 0.6
 
 
 @dataclass(slots=True)
 class _TrackState:
     first_seen_sec: float
     recent_positions: deque
+    recent_colors: deque
     last_seen_sec: float = 0.0
     observation_count: int = 0
     confidence_sum: float = 0.0
@@ -34,6 +40,7 @@ class _TrackState:
 
     def record(self, detection: Detection, ground: tuple[float, float], timestamp_sec: float) -> None:
         self.recent_positions.append(ground)
+        self.recent_colors.append(detection.upper_color)
         self.last_seen_sec = timestamp_sec
         self.observation_count += 1
         self.confidence_sum += detection.confidence
@@ -49,6 +56,19 @@ class _TrackState:
             key=lambda class_name: (self.class_votes[class_name], self.class_confidence_sum[class_name]),
         )
 
+    def get_color_summary(self, min_votes: int, min_ratio: float) -> tuple[str | None, float | None, int]:
+        """(확정 색 또는 None, 1위 비율 또는 None, unknown 아닌 표 수). 비율·표수는 확정 여부와 무관하게 채운다."""
+        color_votes = Counter(color for color in self.recent_colors if color is not None)
+        vote_count = sum(color_votes.values())
+        if vote_count == 0:
+            return (None, None, 0)
+
+        # 동점이면 색 이름으로 결정적으로 고른다 — 동점은 비율 <= 0.5 라 어차피 확정되지 않는다
+        top_color = max(color_votes, key=lambda color: (color_votes[color], color))
+        ratio = color_votes[top_color] / vote_count
+        is_confirmed = vote_count >= min_votes and ratio >= min_ratio
+        return (top_color if is_confirmed else None, ratio, vote_count)
+
     def get_mean_position(self) -> tuple[float, float]:
         position_count = len(self.recent_positions)
         north_m = sum(position[0] for position in self.recent_positions) / position_count
@@ -62,10 +82,23 @@ class TrackAggregator:
         camera: CameraIntrinsics,
         lost_after_sec: float = LOST_AFTER_SEC,
         position_window: int = POSITION_WINDOW,
+        color_window: int = COLOR_WINDOW,
+        color_min_votes: int = COLOR_MIN_VOTES,
+        color_min_ratio: float = COLOR_MIN_RATIO,
     ) -> None:
+        if color_window < 1:
+            raise ValueError(f"color_window must be >= 1, got {color_window}")
+        if not 1 <= color_min_votes <= color_window:
+            raise ValueError(f"color_min_votes must be in [1, color_window={color_window}], got {color_min_votes}")
+        if not 0.0 < color_min_ratio <= 1.0:
+            raise ValueError(f"color_min_ratio must be in (0, 1], got {color_min_ratio}")
+
         self._camera = camera
         self._lost_after_sec = lost_after_sec
         self._position_window = position_window
+        self._color_window = color_window
+        self._color_min_votes = color_min_votes
+        self._color_min_ratio = color_min_ratio
         self._states: dict[int, _TrackState] = {}
         self._dropped_untracked_count = 0
         self._dropped_horizon_count = 0
@@ -99,6 +132,9 @@ class TrackAggregator:
         for track_id in sorted(self._states):
             state = self._states[track_id]
             north_m, east_m = state.get_mean_position()
+            upper_color, upper_color_ratio, upper_color_vote_count = state.get_color_summary(
+                self._color_min_votes, self._color_min_ratio
+            )
             tracks.append(
                 Track(
                     track_id=track_id,
@@ -110,6 +146,9 @@ class TrackAggregator:
                     observation_count=state.observation_count,
                     mean_confidence=state.confidence_sum / state.observation_count,
                     is_active=now_sec - state.last_seen_sec <= self._lost_after_sec,
+                    upper_color=upper_color,
+                    upper_color_ratio=upper_color_ratio,
+                    upper_color_vote_count=upper_color_vote_count,
                 )
             )
         return tracks
@@ -120,6 +159,7 @@ class TrackAggregator:
             state = _TrackState(
                 first_seen_sec=timestamp_sec,
                 recent_positions=deque(maxlen=self._position_window),
+                recent_colors=deque(maxlen=self._color_window),
             )
             self._states[track_id] = state
         return state

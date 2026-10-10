@@ -7,13 +7,14 @@ import pytest
 
 from modules.yolo_detection.interface.detection import COCO_CLASS_IDS, Detection, Frame
 from modules.perception.interface.geometry import project_ned_to_pixel
-from modules.perception.tracking import TrackAggregator
+from modules.perception.interface.track import Track
+from modules.perception.tracking import COLOR_MIN_RATIO, COLOR_MIN_VOTES, COLOR_WINDOW, TrackAggregator
 
 BOX_HALF_WIDTH_PX = 10.0
 BOX_HEIGHT_PX = 30.0
 
 
-def make_detection(camera, telemetry, track_id, class_name, north_m, east_m, confidence=0.8):
+def make_detection(camera, telemetry, track_id, class_name, north_m, east_m, confidence=0.8, upper_color=None):
     """지면 점 (north_m, east_m) 에 하단 중앙이 닿는 박스를 만든다."""
     pixel = project_ned_to_pixel((north_m, east_m, 0.0), camera, telemetry)
     assert pixel is not None
@@ -25,6 +26,7 @@ def make_detection(camera, telemetry, track_id, class_name, north_m, east_m, con
         confidence=confidence,
         xyxy=(u - BOX_HALF_WIDTH_PX, v - BOX_HEIGHT_PX, u + BOX_HALF_WIDTH_PX, v),
         track_id=track_id,
+        upper_color=upper_color,
     )
 
 
@@ -153,3 +155,130 @@ def test_tracking_uses_frame_clock_not_wall_clock():
 
     assert "time.time(" not in source
     assert "time.monotonic(" not in source
+
+
+# --- 상체 색 다수결 (D-04) ---
+
+
+def _feed_colors(aggregator, camera, telemetry, colors, track_id=1, start_frame_id=0):
+    for offset, color in enumerate(colors):
+        frame_id = start_frame_id + offset
+        detection = make_detection(camera, telemetry, track_id, "person", 25.0, 3.0, upper_color=color)
+        aggregator.update(make_frame(camera, frame_id, frame_id * 0.1, [detection]), telemetry)
+
+
+def _get_color_fields(aggregator, track_id=1):
+    track = next(track for track in aggregator.snapshot(now_sec=100.0) if track.track_id == track_id)
+    return (track.upper_color, track.upper_color_ratio, track.upper_color_vote_count)
+
+
+def test_color_defaults_match_decision_memo():
+    assert (COLOR_WINDOW, COLOR_MIN_VOTES, COLOR_MIN_RATIO) == (15, 5, 0.6)
+
+
+@pytest.mark.parametrize(
+    "colors, expected",
+    [
+        (["red"] * 5, ("red", 1.0, 5)),
+        (["red"] * 4 + [None] * 6, (None, 1.0, 4)),
+        (["red"] * 3 + ["other"] * 2, ("red", 0.6, 5)),
+        (["red"] * 3 + ["other"] * 3, (None, 0.5, 6)),
+        ([None] * 8, (None, None, 0)),
+    ],
+    ids=["five-red", "four-votes", "ratio-boundary", "tie", "no-votes"],
+)
+def test_color_majority_boundaries(aggregator, default_camera, hover_telemetry, colors, expected):
+    _feed_colors(aggregator, default_camera, hover_telemetry, colors)
+
+    color, ratio, vote_count = _get_color_fields(aggregator)
+
+    assert color == expected[0]
+    assert ratio == (None if expected[1] is None else pytest.approx(expected[1]))
+    assert vote_count == expected[2]
+
+
+def test_color_window_slides_and_confirmed_color_can_flip(aggregator, default_camera, hover_telemetry):
+    _feed_colors(aggregator, default_camera, hover_telemetry, ["other"] * 15)
+    assert _get_color_fields(aggregator) == ("other", 1.0, 15)
+
+    _feed_colors(aggregator, default_camera, hover_telemetry, ["red"] * 15, start_frame_id=15)
+
+    assert _get_color_fields(aggregator) == ("red", 1.0, 15)
+
+
+def test_colors_of_different_tracks_do_not_mix(aggregator, default_camera, hover_telemetry):
+    _feed_colors(aggregator, default_camera, hover_telemetry, ["red"] * 5, track_id=1)
+    _feed_colors(aggregator, default_camera, hover_telemetry, ["other"] * 5, track_id=2, start_frame_id=5)
+
+    assert _get_color_fields(aggregator, 1) == ("red", 1.0, 5)
+    assert _get_color_fields(aggregator, 2) == ("other", 1.0, 5)
+
+
+def test_color_settings_can_be_overridden(default_camera, hover_telemetry):
+    aggregator = TrackAggregator(default_camera, color_window=3, color_min_votes=2, color_min_ratio=1.0)
+
+    _feed_colors(aggregator, default_camera, hover_telemetry, ["other", "red", "red", "red"])
+
+    assert _get_color_fields(aggregator) == ("red", 1.0, 3)
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"color_window": 0},
+        {"color_min_votes": 0},
+        {"color_window": 4, "color_min_votes": 5},
+        {"color_min_ratio": 0.0},
+        {"color_min_ratio": 1.1},
+    ],
+)
+def test_color_settings_are_validated(default_camera, kwargs):
+    with pytest.raises(ValueError):
+        TrackAggregator(default_camera, **kwargs)
+
+
+# --- Track 직렬화: 상체 색 필드 ---
+
+
+def _make_track(**overrides) -> Track:
+    fields = dict(
+        track_id=3, class_name="person", north_m=10.0, east_m=-2.0, first_seen_sec=1.0, last_seen_sec=2.0,
+        observation_count=6, mean_confidence=0.8, is_active=True,
+    )
+    fields.update(overrides)
+    return Track(**fields)
+
+
+def test_track_round_trip_keeps_color_fields():
+    track = _make_track(upper_color="red", upper_color_ratio=0.8, upper_color_vote_count=5)
+
+    assert Track.from_dict(track.to_dict()) == track
+
+
+def test_track_from_old_dict_without_color_keys_uses_defaults():
+    data = _make_track().to_dict()
+    for key in ("upper_color", "upper_color_ratio", "upper_color_vote_count"):
+        del data[key]
+
+    track = Track.from_dict(data)
+
+    assert (track.upper_color, track.upper_color_ratio, track.upper_color_vote_count) == (None, None, 0)
+
+
+@pytest.mark.parametrize(
+    "field, bad_value",
+    [
+        ("upper_color", "blue"),
+        ("upper_color", 1),
+        ("upper_color_ratio", 1.5),
+        ("upper_color_ratio", True),
+        ("upper_color_vote_count", -1),
+        ("upper_color_vote_count", True),
+    ],
+)
+def test_track_from_dict_rejects_bad_color_fields(field, bad_value):
+    data = _make_track().to_dict()
+    data[field] = bad_value
+
+    with pytest.raises(ValueError, match=field):
+        Track.from_dict(data)
