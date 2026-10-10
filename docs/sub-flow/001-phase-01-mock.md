@@ -2,7 +2,7 @@
 
 - 날짜: 2026-10-10
 - 브랜치: feat/phase-01-mock ← feat/llm @ 8fbd4a4
-- 머지: 미머지 — 01-08(Orin 실기 검증)·01-09(Mac 실 LLM 검증) 사용자 checkpoint 대기
+- 머지: 1ff3803 (feat/llm, --no-ff) — 사용자 결정으로 Orin 실기 검증 전에 머지. 01-08·01-09 checkpoint 는 feat/llm 위에서 진행
 
 ## 배경
 
