@@ -1,0 +1,17 @@
+# 검문소 감시: 감시 위치(0,0) 정면 30 m 도로를 승용차 한 대가 서쪽에서 동쪽으로 지나가고,
+# 도로 앞 22 m 지점에 보행자 한 명이 서 있다. E2E 테스트(walking skeleton)가 이 파일을 쓴다.
+name = "checkpoint"
+description = "Single car passes the checkpoint road while one pedestrian stands nearby."
+duration_sec = 40.0
+
+[[objects]]
+id = "veh-1"
+kind = "car"
+size_m = [4.5, 1.8, 1.5]
+waypoints = [ {t = 0.0, north = 30.0, east = -20.0}, {t = 40.0, north = 30.0, east = 20.0} ]
+
+[[objects]]
+id = "ped-1"
+kind = "person"
+size_m = [0.5, 0.5, 1.75]
+waypoints = [ {t = 0.0, north = 22.0, east = 5.0} ]
