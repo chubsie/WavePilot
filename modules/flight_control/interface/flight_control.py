@@ -4,6 +4,7 @@
 - 위치는 로컬 NED [m]. 지면 down = 0 이므로 고도 = -down_m.
 - 자세는 ZYX Euler [deg]: +roll 우측 하강, +pitch 기수 상승, +yaw 북 기준 시계방향.
 - 짐벌 각은 기체(body) 기준 [deg]: gimbal_pitch_deg 아래로 음수, gimbal_yaw_deg 정면 0.
+- height_above_ground_m 은 아래쪽 거리 센서(레인지파인더)의 선택적 AGL [m]: 드론 바로 밑 지면까지 거리, 없으면 None.
 
 명령은 의도적으로 상위 수준 8종만 둔다 — 이착륙·이동·귀환·속도·yaw·짐벌·하트.
 자세·모터 제어는 비행 제어기(ArduPilot 등) 몫이고, LLM 레이어는 명령을 직접 보낼 권한이 없다(Safety by design).
@@ -79,6 +80,9 @@ class Telemetry:
     battery_pct: float
     flight_mode: str
     gps: GpsFix | None = None
+    # 아래쪽 거리 센서(레인지파인더)가 잰 드론~바로 밑 지면 거리 [m], 범위 밖·센서 없음이면 None
+    # 지면 투영 평면 down = down_m + 이 값 (D-09)
+    height_above_ground_m: float | None = None
 
     @property
     def altitude_m(self) -> float:
@@ -98,6 +102,7 @@ class Telemetry:
             "battery_pct": self.battery_pct,
             "flight_mode": self.flight_mode,
             "gps": self.gps.to_dict() if self.gps is not None else None,
+            "height_above_ground_m": self.height_above_ground_m,
         }
 
     @classmethod
@@ -109,6 +114,7 @@ class Telemetry:
             raise ValueError(f"field 'flight_mode' must be one of {FLIGHT_MODES}, got {flight_mode!r}")
 
         gps = _parse_optional_gps(data.get("gps"))
+        height_above_ground_m = _parse_optional_agl(data.get("height_above_ground_m"))
 
         return cls(
             time_sec=_require_number(data, "time_sec"),
@@ -123,6 +129,7 @@ class Telemetry:
             battery_pct=_require_number(data, "battery_pct"),
             flight_mode=flight_mode,
             gps=gps,
+            height_above_ground_m=height_above_ground_m,
         )
 
 
@@ -134,6 +141,18 @@ def _parse_optional_gps(value: object) -> GpsFix | None:
         return GpsFix.from_dict(value)
 
     raise ValueError(f"field 'gps' must be a dict or null, got {value!r}")
+
+
+def _parse_optional_agl(value: object) -> float | None:
+    # 키가 없거나 null 이면 구버전 텔레메트리 또는 범위 밖으로 보고 받아들인다
+    if value is None:
+        return None
+    if not _is_number(value):
+        raise ValueError(f"field 'height_above_ground_m' must be a number or null, got {value!r}")
+    if not math.isfinite(value) or value < 0:
+        raise ValueError(f"field 'height_above_ground_m' must be finite and >= 0, got {value!r}")
+
+    return float(value)
 
 
 @dataclass(frozen=True, slots=True)

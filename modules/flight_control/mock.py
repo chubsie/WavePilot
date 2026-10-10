@@ -7,6 +7,7 @@
 Phase 1 에서는 의도를 기록하는 데 의미가 있으므로 accepted=True 로 둔다(거절 규칙은 v2 실제 FC 몫).
 SetVelocity 는 moving 으로 바꾸고, SetYaw·SetGimbal·FireHeart 는 현재 모드를 유지한 채 기록만 한다.
 텔레메트리 GPS 는 호버 위치를 ned_to_gps 로 바꿔 채운다.
+지면은 평평(down=0)하다고 보고 height_above_ground_m 은 호버 고도로 채운다(D-09).
 """
 
 import logging
@@ -94,6 +95,7 @@ class MockFlightControl:
             battery_pct=battery_pct,
             flight_mode=self._flight_mode,
             gps=ned_to_gps(self._hover_north_m, self._hover_east_m, down_m),
+            height_above_ground_m=self._hover_altitude_m,
         )
 
     def send_command(self, command: Command) -> CommandAck:
