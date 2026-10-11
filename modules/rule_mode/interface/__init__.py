@@ -2,6 +2,7 @@
 
 from modules.rule_mode.interface.rule_mode import (
     DEFAULT_SEARCH_AREA,
+    SAME_TARGET_RADIUS_M,
     ModeParams,
     ModeTick,
     RuleMode,
@@ -12,6 +13,7 @@ from modules.rule_mode.interface.rule_mode import (
 
 __all__ = [
     "DEFAULT_SEARCH_AREA",
+    "SAME_TARGET_RADIUS_M",
     "ModeParams",
     "ModeTick",
     "RuleMode",

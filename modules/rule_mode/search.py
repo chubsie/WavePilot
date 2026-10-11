@@ -7,21 +7,43 @@
 SetYaw(절대 heading)를 보낸다. 각 단계는 yaw 가 목표 SCAN_YAW_TOLERANCE_DEG 이내가 되거나
 SCAN_STEP_TIMEOUT_SEC 가 지나면 다음으로 넘어간다. 한 바퀴를 다 돌면 다음 지점으로 간다.
 
-- success: target_class 의 활성·미하트·색 어긋나지 않은 track 이 FOUND_STREAK_TICKS tick 연속 관측되면 그 track 으로 끝난다 (D-06)
+- success: 같은 표적 후보가 FOUND_STREAK_TICKS tick 연속 관측되면 그 표적의 최신 track 으로 끝난다 (D-06)
   — 이동·스캔 어느 단계에서든 매 tick 확인한다
+  후보는 target_class 의 활성·미하트·색 어긋나지 않은 track 이다. 트래커가 같은 사람에게 새 id 를 자주 주므로
+  연속 판정은 track id 가 아니라 '같은 표적'(지면 위치가 SAME_TARGET_RADIUS_M 이내)으로 이어 붙인다.
+
+후보 확인 호버: 후보가 시야에 들어오면 즉시 회전·이동을 멈추고(스캔 중이면 현재 yaw 로 SetYaw, 이동 중이면 현재 위치로
+GoTo) 제자리에서 확인한다. 후보가 CANDIDATE_LOST_SEC 동안 안 보이면 멈췄던 스캔 단계/지점 이동을 다시 보낸다.
+HOLD_MAX_SEC 안에 확정되지 않으면 그 위치를 이번 수색에서 무시하고 재개한다 (깜빡이는 오탐에 묶이지 않도록).
 - failure: 타깃 없이 모든 지점의 스캔을 마침 (D-07), 또는 명령 거부 (D-04)
 - timeout: 경과 시간 >= timeout_sec (D-07)
 끝난 뒤 step 을 다시 부르면 RuntimeError ("정확히 한 번" 계약).
 """
 
+import logging
 import math
+from dataclasses import dataclass
 
 from modules.decision.interface.state import ModeResult
 from modules.flight_control.interface import Command, FlightControl, GoTo, SetGimbal, SetYaw
-from modules.rule_mode.interface import ModeParams, ModeTick, RuleModeSettings, SearchArea, track_label
+from modules.perception.interface import Track
+from modules.rule_mode.interface import (
+    SAME_TARGET_RADIUS_M,
+    ModeParams,
+    ModeTick,
+    RuleModeSettings,
+    SearchArea,
+    track_label,
+)
+
+logger = logging.getLogger(__name__)
 
 RULE_MODE = "search"
 FOUND_STREAK_TICKS = 5  # D-06 의 N — 10 Hz 에서 0.5 s
+
+# 후보 확인 호버 — 후보가 이만큼 안 보이면 스캔을 재개하고, 이만큼 머물러도 확정되지 않으면 그 위치를 버린다
+CANDIDATE_LOST_SEC = 1.5
+HOLD_MAX_SEC = 5.0
 
 # 지상 표적이 FPV 아래쪽에 들어오도록 내려다본다 — 15 m 고도에서 약 26 m 앞 지면이 화면 가운데
 SCAN_GIMBAL_PITCH_DEG = -30.0
@@ -86,6 +108,18 @@ def get_patrol_length_m(waypoints: tuple[GoTo, ...], start_north_m: float, start
     return length_m
 
 
+@dataclass(slots=True)
+class _Candidate:
+    """같은 표적으로 이어 붙인 후보 — 위치와 track id 는 가장 최근 관측으로 갱신한다."""
+
+    north_m: float
+    east_m: float
+    track_id: int
+    track_seen_sec: float  # 따르는 track 의 last_seen_sec — 새 id 가 옛 id 보다 최신이다
+    seen_tick_sec: float  # 마지막으로 후보 track 이 보인 tick 시각
+    streak: int = 0
+
+
 class SearchMode:
     rule_mode = RULE_MODE
 
@@ -102,8 +136,12 @@ class SearchMode:
         self._timeout_sec = float(timeout_sec)
         self._settings = settings
         self._start_sec: float | None = None
-        self._streak_by_track: dict[int, int] = {}
         self._is_finished = False
+
+        # 후보 확인 — 호버 중이 아니면 _hold_start_sec 가 None
+        self._candidates: list[_Candidate] = []
+        self._ignored_points: list[tuple[float, float]] = []
+        self._hold_start_sec: float | None = None
 
         # 스캔 지점: [시작 위치, 지그재그 웨이포인트...]
         self._scan_points: tuple[GoTo, ...] = ()
@@ -125,12 +163,18 @@ class SearchMode:
                 return self._finish("failure")
 
         # 마감 tick 에 발견한 것도 인정되도록 발견 확인이 timeout 보다 먼저다
-        found_track_id = self._update_streaks(tick)
+        found_track_id = self._update_candidates(tick)
         if found_track_id is not None:
             return self._finish("success", track_label(found_track_id))
 
         if tick.now_sec - self._start_sec >= self._timeout_sec:
             return self._finish("timeout")
+
+        if self._candidates:
+            return self._hold_on_candidate(tick, control)
+
+        if self._hold_start_sec is not None and not self._resume(tick, control):
+            return self._finish("failure")
 
         if self._scan_step_index is None:
             if self._has_arrived(tick) and not self._start_scan(tick, control):
@@ -198,26 +242,118 @@ class SearchMode:
 
         return None
 
-    def _update_streaks(self, tick: ModeTick) -> int | None:
-        candidate_id_list = [
-            track.track_id
+    def _update_candidates(self, tick: ModeTick) -> int | None:
+        """이번 tick 후보 track 을 같은 표적끼리 이어 붙인다. FOUND_STREAK_TICKS 에 닿은 표적의 track id 를 돌려준다."""
+        seen_candidate_ids: set[int] = set()
+        for track in self._get_candidate_tracks(tick):
+            candidate = self._find_same_candidate(track)
+            if candidate is None:
+                candidate = _Candidate(track.north_m, track.east_m, track.track_id, track.last_seen_sec, tick.now_sec)
+                self._candidates.append(candidate)
+
+            # 한 표적에 track 이 여럿(옛 id 가 아직 활성)이어도 streak 은 tick 당 한 번 — 최신 관측 track 을 따른다
+            if id(candidate) not in seen_candidate_ids:
+                seen_candidate_ids.add(id(candidate))
+                candidate.streak += 1
+            if track.last_seen_sec >= candidate.track_seen_sec:
+                candidate.north_m, candidate.east_m = track.north_m, track.east_m
+                candidate.track_id = track.track_id
+                candidate.track_seen_sec = track.last_seen_sec
+
+        # 공백이 한 번이라도 있으면 streak 이 리셋된다 — 후보 자체는 CANDIDATE_LOST_SEC 동안 남겨 호버를 이어 간다
+        for candidate in self._candidates:
+            if id(candidate) in seen_candidate_ids:
+                candidate.seen_tick_sec = tick.now_sec
+            else:
+                candidate.streak = 0
+        self._candidates = [
+            candidate for candidate in self._candidates if tick.now_sec - candidate.seen_tick_sec < CANDIDATE_LOST_SEC
+        ]
+
+        found_list = [candidate for candidate in self._candidates if candidate.streak >= FOUND_STREAK_TICKS]
+        if not found_list:
+            return None
+
+        # 가장 긴 streak, 동률은 가장 작은 track_id
+        return min(found_list, key=lambda candidate: (-candidate.streak, candidate.track_id)).track_id
+
+    def _get_candidate_tracks(self, tick: ModeTick) -> list[Track]:
+        return [
+            track
             for track in tick.tracks
             if track.class_name == self._settings.target_class
             and track.is_active
             and track.track_id not in tick.hearted_track_ids
             and not self._is_color_mismatch(track.upper_color)
+            and not self._is_ignored(track)
         ]
-        # 후보가 아닌 id 는 버린다 — 공백이 한 번이라도 있으면 streak 이 리셋된다
-        self._streak_by_track = {
-            track_id: self._streak_by_track.get(track_id, 0) + 1 for track_id in candidate_id_list
-        }
 
-        found_id_list = [track_id for track_id, streak in self._streak_by_track.items() if streak >= FOUND_STREAK_TICKS]
-        if not found_id_list:
+    def _find_same_candidate(self, track: Track) -> _Candidate | None:
+        for candidate in self._candidates:
+            if candidate.track_id == track.track_id:
+                return candidate
+
+        near_list = [
+            candidate
+            for candidate in self._candidates
+            if _get_distance_m(candidate.north_m, candidate.east_m, track.north_m, track.east_m) <= SAME_TARGET_RADIUS_M
+        ]
+        if not near_list:
             return None
 
-        # 가장 긴 streak, 동률은 가장 작은 track_id
-        return min(found_id_list, key=lambda track_id: (-self._streak_by_track[track_id], track_id))
+        return min(
+            near_list,
+            key=lambda candidate: _get_distance_m(candidate.north_m, candidate.east_m, track.north_m, track.east_m),
+        )
+
+    def _is_ignored(self, track: Track) -> bool:
+        return any(
+            _get_distance_m(north_m, east_m, track.north_m, track.east_m) <= SAME_TARGET_RADIUS_M
+            for north_m, east_m in self._ignored_points
+        )
+
+    def _hold_on_candidate(self, tick: ModeTick, control: FlightControl) -> ModeResult | None:
+        """후보가 보이는 동안 제자리에서 확인한다. 처음 보인 tick 에 회전·이동을 멈춘다."""
+        if self._hold_start_sec is None:
+            self._hold_start_sec = tick.now_sec
+            logger.info("search hold on candidate %s", self._describe_candidates())
+            if not self._send(control, self._get_stop_command(tick)):
+                return self._finish("failure")
+            return None
+
+        if tick.now_sec - self._hold_start_sec < HOLD_MAX_SEC:
+            return None
+
+        # 확정되지 않는 후보(깜빡이는 오탐)는 이번 수색에서 버리고 스캔을 재개한다
+        logger.info("search gave up unconfirmed candidate %s", self._describe_candidates())
+        self._ignored_points.extend((candidate.north_m, candidate.east_m) for candidate in self._candidates)
+        self._candidates = []
+        if not self._resume(tick, control):
+            return self._finish("failure")
+
+        return None
+
+    def _get_stop_command(self, tick: ModeTick) -> Command:
+        telemetry = tick.telemetry
+        if self._scan_step_index is not None:
+            return SetYaw(telemetry.yaw_deg)
+
+        return GoTo(telemetry.north_m, telemetry.east_m, self._settings.search_altitude_m)
+
+    def _resume(self, tick: ModeTick, control: FlightControl) -> bool:
+        """멈췄던 스캔 단계 또는 지점 이동을 다시 보낸다."""
+        self._hold_start_sec = None
+        logger.info("search resumes scan")
+        if self._scan_step_index is not None:
+            return self._send_scan_step(tick, control, self._scan_step_index)
+
+        return self._send(control, self._scan_points[self._point_index])
+
+    def _describe_candidates(self) -> str:
+        return " ".join(
+            f"{track_label(candidate.track_id)}@({candidate.north_m:.1f}, {candidate.east_m:.1f})"
+            for candidate in self._candidates
+        )
 
     # options.py 후보 정의와 같다 — 색을 모르는 track 은 후보로 남긴다
     def _is_color_mismatch(self, upper_color: str | None) -> bool:
@@ -245,6 +381,10 @@ class SearchMode:
         self._is_finished = True
 
         return ModeResult(RULE_MODE, outcome, target_track)
+
+
+def _get_distance_m(north_a_m: float, east_a_m: float, north_b_m: float, east_b_m: float) -> float:
+    return math.hypot(north_a_m - north_b_m, east_a_m - east_b_m)
 
 
 def _wrap_yaw_deg(yaw_deg: float) -> float:

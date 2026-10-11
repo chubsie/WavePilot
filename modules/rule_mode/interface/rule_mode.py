@@ -19,6 +19,9 @@ from modules.yolo_detection.interface import Frame
 # 모든 모드 생성자의 파라미터 타입 — decision/params.py 의 Params 값과 같다
 ModeParams = Mapping[str, str | int | float | None]
 
+# 트래커는 같은 사람에게 0.4~1 s 마다 새 track id 를 준다 — 같은 클래스이고 지면 위치가 이 거리 안이면 같은 표적으로 본다
+SAME_TARGET_RADIUS_M = 3.0
+
 
 def _require_finite(name: str, value: object) -> None:
     # bool 은 int 의 하위 타입이라 따로 막는다
