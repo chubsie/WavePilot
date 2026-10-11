@@ -354,7 +354,6 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         config = SelectorConfig.from_env(os.environ)
-        decision_model = create_decision_model(config)
     except ValueError as error:
         logger.error("invalid selector configuration: %s", error)
         return EXIT_USAGE
@@ -367,6 +366,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         except (ValueError, OSError) as error:
             logger.error("invalid mission file %s: %s", args.mission, error)
             return EXIT_USAGE
+
+    # 임무 파일의 선택기 설정([selector])을 반영한 뒤 선택기를 만든다
+    config = apply_selector_spec(config, spec)
+    try:
+        decision_model = create_decision_model(config)
+    except ValueError as error:
+        logger.error("invalid selector configuration: %s", error)
+        return EXIT_USAGE
 
     try:
         if args.sim == SIM_BROWSER:
@@ -416,6 +423,13 @@ def resolve_target_upper_color(target_color_arg: str | None, spec: MissionSpec |
     if target_color_arg == TARGET_COLOR_NONE:
         return None
     return target_color_arg
+
+
+def apply_selector_spec(config: SelectorConfig, spec: MissionSpec | None) -> SelectorConfig:
+    """임무 파일의 [selector] 설정으로 선택기 설정을 덮는다. 임무 파일이 없으면 그대로다."""
+    if spec is None:
+        return config
+    return dataclasses.replace(config, allow_return_home=spec.allow_return_home)
 
 
 def apply_mission_spec(defaults: ParamDefaults, spec: MissionSpec) -> ParamDefaults:

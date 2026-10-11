@@ -282,7 +282,7 @@ def test_d1_selector_rejects_choice_outside_options():
 
 
 def test_d1_selector_single_option_skips_client(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(d1_selector, "filter_options", lambda state, event, approach_stop_distance_m: ("hold",))
+    monkeypatch.setattr(d1_selector, "filter_options", lambda state, event, approach_stop_distance_m, allow_return_home=True: ("hold",))
     client = StubClient(reply=None)
 
     with pytest.raises(D1SelectionError) as raised:

@@ -55,6 +55,7 @@ class SelectorConfig:
     confidence_threshold: float
     circuit_open_sec: float
     param_defaults: ParamDefaults
+    allow_return_home: bool = True  # 거짓이면 선택기 보기에서 return_home 을 뺀다(임무 파일 [selector]). 환경 변수 없음
 
     def __post_init__(self) -> None:
         if self.kind not in SELECTOR_KINDS:
@@ -87,12 +88,12 @@ class SelectorConfig:
 
 def create_decision_model(config: SelectorConfig) -> DecisionModel:
     """rule → RuleSelector, d1 → FallbackSelector(D1Selector, RuleSelector). 네트워크는 쓰지 않는다."""
-    rule_selector = RuleSelector(config.param_defaults)
+    rule_selector = RuleSelector(config.param_defaults, config.allow_return_home)
     if config.kind == SELECTOR_RULE:
         return rule_selector
 
     client = SystemOneClient(config.d1_url, config.request_timeout_ms / MS_PER_SEC)
-    d1_selector = D1Selector(client, config.param_defaults, config.confidence_threshold)
+    d1_selector = D1Selector(client, config.param_defaults, config.confidence_threshold, config.allow_return_home)
 
     return FallbackSelector(
         primary=d1_selector,

@@ -13,6 +13,7 @@ RuleSelector 는 DecisionModel 구현이다. 단독으로 쓰거나(WAVEPILOT_SE
 | 3    | observe 대상이 있고 가장 가까운 observe 대상 거리 <= OBSERVE_READY_DISTANCE_M                  | observe      |
 | 4    | approach 대상이 있음                                                                          | approach     |
 | 5    | event 가 mode_ended, 직전 모드 search, 결과 failure/timeout (구역을 다 돌았는데 후보 없음)    | return_home  |
+|      | (allow_return_home 이 거짓이면 이 줄을 건너뛰어 6줄 search 로 탐색을 다시 시작한다)            |              |
 | 6    | 그 밖                                                                                         | search       |
 | 마지막 | 위에서 고른 모드가 보기에 없을 때(방어)                                                     | hold         |
 
@@ -48,13 +49,14 @@ SAFE_MODE = "hold"  # 필터가 늘 남기는 모드 — 사다리 끝의 방어
 
 
 class RuleSelector:
-    def __init__(self, defaults: ParamDefaults) -> None:
+    def __init__(self, defaults: ParamDefaults, allow_return_home: bool = True) -> None:
         self._defaults = defaults
+        self._allow_return_home = allow_return_home
 
     def select(self, state: SelectionState, event: SelectionEvent) -> SelectionResult:
         started_at = time.perf_counter()
 
-        options = filter_options(state, event, self._defaults.approach_stop_distance_m)
+        options = filter_options(state, event, self._defaults.approach_stop_distance_m, self._allow_return_home)
         rule_mode = self._choose_mode(state, event, options)
         params = fill_params(rule_mode, state, event, self._defaults)
 
@@ -106,7 +108,8 @@ class RuleSelector:
         if nearest_approach_target is not None:
             yield "approach"
 
-        if _is_search_exhausted(event):
+        # 복귀 선택을 끈 임무는 구역을 다 돌아도 search 로 다시 훑는다 — 강제 복귀는 안전 감시 몫
+        if self._allow_return_home and _is_search_exhausted(event):
             yield "return_home"
         yield "search"
 

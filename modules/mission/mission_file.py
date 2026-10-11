@@ -6,6 +6,8 @@ TOML 모양 (모든 섹션·키 필수 — 선택 키 표시 제외, 모르는 �
                    altitude_m (선택, > 0) — 탐색 고도. 없으면 ParamDefaults.search_altitude_m
     [safety]       battery_check (선택, bool, 기본 true) — false 면 배터리 부족 강제 복귀를 끈다(시뮬 데모용)
     [safety]       geofence_margin_m (>= 0), battery_reserve_pct (0 <= x < 100), max_flight_sec (> 0)
+    [selector]     (선택 섹션) allow_return_home (선택, bool, 기본 true) — false 면 선택기가 return_home 을 고르지 않는다.
+                   안전 감시의 강제 복귀(지오펜스·최대 비행시간·배터리)는 그대로다
 
 복귀 지점 필드는 없다 — RETURN 은 initialize GPS(운용자 위치, NED 원점)로 간다 (D-12).
 탐색 구역은 홈 기준 북·동 미터 사각형이다 (D-13).
@@ -32,7 +34,10 @@ _SECTION_KEYS: dict[str, tuple[str, ...]] = {
 _OPTIONAL_SECTION_KEYS: dict[str, tuple[str, ...]] = {
     "search_area": ("altitude_m",),
     "safety": ("battery_check",),
+    "selector": ("allow_return_home",),
 }
+# 선택 섹션 — 없어도 되는 섹션. 키는 모두 _OPTIONAL_SECTION_KEYS 의 선택 키다
+_OPTIONAL_SECTIONS = ("selector",)
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +54,7 @@ class MissionSpec:
     max_flight_sec: float  # > 0
     search_altitude_m: float | None = None  # > 0, None 이면 기본 탐색 고도
     battery_check: bool = True  # False 면 배터리 강제 복귀를 끈다
+    allow_return_home: bool = True  # False 면 선택기가 return_home 을 고르지 않는다(강제 복귀는 그대로)
 
 
 def parse_mission(data: dict) -> MissionSpec:
@@ -58,6 +64,9 @@ def parse_mission(data: dict) -> MissionSpec:
     _validate_sections(data)
     for section, keys in _SECTION_KEYS.items():
         _validate_section_keys(section, data[section], keys, _OPTIONAL_SECTION_KEYS.get(section, ()))
+    for section in _OPTIONAL_SECTIONS:
+        if section in data:
+            _validate_section_keys(section, data[section], (), _OPTIONAL_SECTION_KEYS[section])
 
     target_class, target_upper_color, action = _read_target(data["target"])
 
@@ -68,6 +77,11 @@ def parse_mission(data: dict) -> MissionSpec:
 
     geofence_margin_m, battery_reserve_pct, max_flight_sec = _read_safety(data["safety"])
     battery_check = _read_optional_bool("safety.battery_check", data["safety"].get("battery_check"), default=True)
+
+    selector = data.get("selector", {})
+    allow_return_home = _read_optional_bool(
+        "selector.allow_return_home", selector.get("allow_return_home"), default=True
+    )
 
     return MissionSpec(
         target_class=target_class,
@@ -82,6 +96,7 @@ def parse_mission(data: dict) -> MissionSpec:
         max_flight_sec=max_flight_sec,
         search_altitude_m=search_altitude_m,
         battery_check=battery_check,
+        allow_return_home=allow_return_home,
     )
 
 
@@ -101,13 +116,17 @@ def load_mission_file(path: str | os.PathLike) -> MissionSpec:
 
 def _validate_sections(data: Mapping) -> None:
     for section in data:
-        if section not in _SECTION_KEYS:
+        if section not in _SECTION_KEYS and section not in _OPTIONAL_SECTIONS:
             raise ValueError(f"field '{section}' is not allowed")
 
     for section in _SECTION_KEYS:
         if section not in data:
             raise ValueError(f"field '{section}' is required")
         if not isinstance(data[section], Mapping):
+            raise ValueError(f"field '{section}' must be a table, got {data[section]!r}")
+
+    for section in _OPTIONAL_SECTIONS:
+        if section in data and not isinstance(data[section], Mapping):
             raise ValueError(f"field '{section}' must be a table, got {data[section]!r}")
 
 

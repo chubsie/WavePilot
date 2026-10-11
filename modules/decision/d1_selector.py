@@ -96,19 +96,26 @@ def _get_elapsed_ms(started_sec: float) -> float:
 
 
 class D1Selector:
-    def __init__(self, client: SystemOneClient, defaults: ParamDefaults, confidence_threshold: float) -> None:
+    def __init__(
+        self,
+        client: SystemOneClient,
+        defaults: ParamDefaults,
+        confidence_threshold: float,
+        allow_return_home: bool = True,
+    ) -> None:
         if not 0.0 <= confidence_threshold <= 1.0:
             raise ValueError(f"confidence_threshold must be in [0, 1], got {confidence_threshold!r}")
 
         self._client = client
         self._defaults = defaults
         self._confidence_threshold = confidence_threshold
+        self._allow_return_home = allow_return_home
 
     def select(self, state: SelectionState, event: SelectionEvent) -> SelectionResult:
         started_sec = time.perf_counter()
 
-        options = filter_options(state, event, self._defaults.approach_stop_distance_m)
-        # filter_options 가 search·hold·return_home 을 늘 남겨 오늘은 도달하지 않는다 — 보기 규칙이 바뀔 때의 가드
+        options = filter_options(state, event, self._defaults.approach_stop_distance_m, self._allow_return_home)
+        # filter_options 가 search·hold 를 늘 남겨 오늘은 도달하지 않는다 — 보기 규칙이 바뀔 때의 가드
         if len(options) < MIN_OPTION_COUNT:
             raise D1SelectionError(FALLBACK_SINGLE_OPTION, None, f"only {options} left after filtering")
 

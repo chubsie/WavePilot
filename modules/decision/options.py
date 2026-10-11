@@ -28,9 +28,10 @@ d1 선택기와 규칙 선택기가 같은 필터를 쓴다(D-04) — 두 선택
 | aim_and_fire | aim_and_fire 대상 중 가장 가까운 것이 조준 가능 거리 안 | 확정 없음, 방금 조준 실패한 track 뿐, 또는 가장 가까운 대상이 조준 가능 거리 밖 | 색을 모르는 사람·먼 사람에게 하트를 보내지 않는다. Phase 4 부터 upper_color 는 track 다수결 색이라, 색 요구 임무에서는 색이 확정되기 전까지 빠진다 |
 | observe      | observe 대상 1개 이상                                 | 후보 없음, 또는 남은 후보가 방금 observe 에 실패한 track 뿐 | 지켜볼 대상이 없다 |
 | hold         | 항상                                                  | 없음                                          | 언제나 안전한 선택 |
-| return_home  | 항상                                                  | 없음                                          | 언제나 안전한 선택. 비상 RETURN 판정은 Phase 5 안전 감시 몫 |
+| return_home  | allow_return_home 이 참                               | allow_return_home 이 거짓(임무 파일 [selector]) | 언제나 안전한 선택. 비상 RETURN 판정은 Phase 5 안전 감시 몫 |
 
-결과 순서는 RULE_MODES 순서이고, 최소 보기는 ("search", "hold", "return_home") 이라 빈 보기가 나오지 않는다.
+결과 순서는 RULE_MODES 순서이고, 최소 보기는 ("search", "hold", "return_home") — allow_return_home 이 거짓이면
+("search", "hold") — 이라 빈 보기가 나오지 않는다. allow_return_home 은 선택기만 막는다 — 안전 감시의 강제 복귀는 그대로다.
 """
 
 import math
@@ -104,7 +105,9 @@ def get_aim_ready_distance_m(approach_stop_distance_m: float) -> float:
     return approach_stop_distance_m + AIM_READY_MARGIN_M
 
 
-def filter_options(state: SelectionState, event: SelectionEvent, approach_stop_distance_m: float) -> tuple[str, ...]:
+def filter_options(
+    state: SelectionState, event: SelectionEvent, approach_stop_distance_m: float, allow_return_home: bool = True
+) -> tuple[str, ...]:
     nearest_aim_target = get_nearest_track(state.drone, get_target_tracks("aim_and_fire", state, event))
     aim_ready_distance_m = get_aim_ready_distance_m(approach_stop_distance_m)
     is_aim_ready = (
@@ -119,7 +122,7 @@ def filter_options(state: SelectionState, event: SelectionEvent, approach_stop_d
         "aim_and_fire": is_aim_ready,
         "observe": bool(get_target_tracks("observe", state, event)),
         "hold": True,
-        "return_home": True,
+        "return_home": allow_return_home,
     }
 
     unknown_modes = [mode for mode in RULE_MODES if mode not in is_allowed_by_mode]
