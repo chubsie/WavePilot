@@ -1,5 +1,5 @@
-// fire_heart 를 화면에서 확실히 보이게 하는 부분 — 하트 빔 펄스 계산 + 메인(1인칭) 화면 위 'FIRE ♥ T48 ×3' 연사 표시.
-// 하트 모양 자체는 world.js 가 3D 스프라이트로 메인 렌더에 그린다.
+// fire_heart 를 화면에서 확실히 보이게 하는 부분 — 하트 빔 펄스 계산 + 드론 시점 인셋 위 'FIRE ♥ T48 ×3' 연사 표시.
+// 하트 모양 자체는 world.js 가 3D 스프라이트로 chase(큰 화면)·드론 시점(인셋) 렌더에 그린다.
 // 이 2D 오버레이도 world.fpvCanvas(YOLO 로 올라가는 JPEG)와 다른 캔버스에만 그린다 — 하트가 YOLO 입력에 섞이면 안 된다.
 // 위쪽은 순수 함수(node 테스트 대상), createHeartOverlay 만 canvas 를 만진다.
 
@@ -92,9 +92,8 @@ export function createHeartOverlay({ canvas, uploadCanvas }) {
   function drawCounter(nowMs) {
     if (!latestShot || nowMs - latestShot.startMs > HEART_SHOT_LABEL_MS) return;
 
-    // 메인 화면 전체를 덮는 캔버스라 인셋 시절(높이의 7%)보다 작게, 상한도 둔다
-    const dpr = window.devicePixelRatio || 1;
-    const fontPx = Math.round(Math.min(32 * dpr, Math.max(10 * dpr, canvas.height * 0.04)));
+    // 작은 드론 시점 인셋 위 캔버스 — 높이의 7%, 최소 10 px
+    const fontPx = Math.max(10, Math.round(canvas.height * 0.07));
     ctx.font = `700 ${fontPx}px system-ui, sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';

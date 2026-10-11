@@ -1,4 +1,4 @@
-// 메인 화면 = 드론 1인칭(world.camera), 작은 창 = chase, YOLO 업로드 = 화면에 없는 오프스크린 16:9 캡처
+// 큰 화면 = chase(드론 보임), 작은 창 = 드론 1인칭(world.camera, 같은 렌더러 scissor), YOLO 업로드 = 화면에 없는 오프스크린 16:9 캡처
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -85,33 +85,35 @@ test('only the main canvas is on the page; the YOLO upload canvas is an offscree
 });
 
 // ---------- 렌더 ----------
-test('main view renders world.camera full-frame at the viewport aspect with the drone hidden', () => {
+const INSET_RECT = [INSET.left, MAIN.height - (INSET.top + INSET.height), INSET.width, INSET.height];
+
+test('main view renders the chase camera full-frame with the drone visible', () => {
   const { world, mainRenderer } = createWorld();
   renderFrames(world, 1);
 
   const mainRender = mainRenderer.renders[0];
-  assert.equal(mainRender.camera, world.camera);
+  assert.equal(mainRender.camera, world.chaseCamera);
   assert.equal(mainRender.scissorTest, false);
   assert.deepEqual(mainRender.viewport, [0, 0, MAIN.width, MAIN.height]);
-  assert.equal(mainRender.aspect, MAIN.width / MAIN.height);
-  assert.equal(mainRender.fov, 58.72, 'same vertical FOV as the Python DEFAULT_CAMERA');
-  assert.equal(mainRender.isDroneVisible, false, 'no self-occlusion');
+  assert.equal(world.chaseCamera.aspect, MAIN.width / MAIN.height);
+  assert.equal(mainRender.isDroneVisible, true, 'the chase view shows the drone');
 });
 
-test('the inset is the chase camera in a scissor rect at #fpv-view, with the drone visible', () => {
+test('the inset is world.camera on the same renderer in a scissor rect at #fpv-view, inset aspect, drone hidden', () => {
   const { world, mainRenderer } = createWorld();
   renderFrames(world, 1);
 
   const insetRender = mainRenderer.renders[1];
-  const insetRect = [INSET.left, MAIN.height - (INSET.top + INSET.height), INSET.width, INSET.height];
-  assert.equal(mainRenderer.renders.length, 2);
-  assert.equal(insetRender.camera, world.chaseCamera);
+  assert.equal(mainRenderer.renders.length, 2, 'chase + drone inset, both on the main renderer');
+  assert.equal(insetRender.camera, world.camera);
   assert.equal(insetRender.scissorTest, true);
-  assert.deepEqual(insetRender.scissor, insetRect);
-  assert.deepEqual(insetRender.viewport, insetRect);
-  assert.equal(insetRender.isDroneVisible, true);
-  assert.equal(world.chaseCamera.aspect, INSET.width / INSET.height);
+  assert.deepEqual(insetRender.scissor, INSET_RECT);
+  assert.deepEqual(insetRender.viewport, INSET_RECT);
+  assert.equal(insetRender.aspect, INSET.width / INSET.height);
+  assert.equal(insetRender.fov, 58.72, 'same vertical FOV as the Python DEFAULT_CAMERA');
+  assert.equal(insetRender.isDroneVisible, false, 'no self-occlusion');
   assert.equal(mainRenderer.scissorTest, false, 'scissor is switched off again for the next frame');
+  assert.deepEqual(mainRenderer.viewport, [0, 0, MAIN.width, MAIN.height]);
 });
 
 test('the YOLO capture uses the same camera at 16:9 with hearts and drone hidden', () => {
@@ -132,20 +134,23 @@ test('the YOLO capture uses the same camera at 16:9 with hearts and drone hidden
   assert.equal(world.drone.visible, true);
 });
 
-test('hearts are visible in the main (drone view) render for manual and aimed fire', () => {
+test('hearts are visible in both the chase main view and the drone inset for manual and aimed fire', () => {
   for (const aim of [{ heartAimActive: false }, { heartAimActive: true }]) {
     const { world, mainRenderer } = createWorld();
     Object.assign(world, aim, { flashHeld: true });
     renderFrames(world, 12, { source: aim.heartAimActive ? 'python' : 'keyboard', roll: 0, pitch: 0, gimbalPitchDeg: -20 });
 
-    const mainRenders = mainRenderer.renders.filter((render) => render.camera === world.camera);
-    assert.ok(mainRenders.every((render) => render.isHeartGroupVisible), 'heart group is on during the drone-view render');
-    assert.ok(mainRenders.at(-1).sprites.length > 3, `a stream of hearts is drawn (${mainRenders.at(-1).sprites.length})`);
+    for (const camera of [world.chaseCamera, world.camera]) {
+      const renders = mainRenderer.renders.filter((render) => render.camera === camera);
+      assert.equal(renders.length, 12);
+      assert.ok(renders.every((render) => render.isHeartGroupVisible), 'heart group is on');
+      assert.ok(renders.at(-1).sprites.length > 3, `a stream of hearts is drawn (${renders.at(-1).sprites.length})`);
+    }
   }
 });
 
 // ---------- 좌표 ----------
-test('capture → main view mapping scales about the centre by the height ratio', () => {
+test('capture → view mapping scales about the centre by the height ratio', () => {
   assert.deepEqual(mapCapturePointToView(320, 180, 640, 360, 1000, 600), { x: 500, y: 300 });
   assert.deepEqual(mapCapturePointToView(0, 0, 640, 360, 1280, 720), { x: 0, y: 0 }, 'same 16:9 → plain scale');
 
@@ -163,7 +168,7 @@ test('capture → main view mapping scales about the centre by the height ratio'
   assert.ok(Math.abs(box.height - 300) < 1e-9);
 });
 
-test('project() puts the boresight at the main view centre and agrees with the YOLO box mapping', () => {
+test('project() puts the boresight at the inset centre and agrees with the YOLO box mapping', () => {
   const { world } = createWorld();
   renderFrames(world, 1);
   const forward = world.camera.getWorldDirection(new T.Vector3());
@@ -172,40 +177,40 @@ test('project() puts the boresight at the main view centre and agrees with the Y
   const offAxis = ahead.clone().addScaledVector(right, 4);
 
   const centre = world.project(ahead.toArray());
-  assert.ok(Math.abs(centre.x - MAIN.width / 2) < 1e-6 && Math.abs(centre.y - MAIN.height / 2) < 1e-6);
+  assert.ok(Math.abs(centre.x - INSET.width / 2) < 1e-6 && Math.abs(centre.y - INSET.height / 2) < 1e-6);
 
   const projected = offAxis.clone().project(world.camera);
   const capturePixel = [(projected.x * .5 + .5) * CAPTURE_WIDTH, (-projected.y * .5 + .5) * CAPTURE_HEIGHT];
-  const expected = mapCapturePointToView(...capturePixel, CAPTURE_WIDTH, CAPTURE_HEIGHT, MAIN.width, MAIN.height);
+  const expected = mapCapturePointToView(...capturePixel, CAPTURE_WIDTH, CAPTURE_HEIGHT, INSET.width, INSET.height);
   const screen = world.project(offAxis.toArray());
   assert.ok(Math.abs(screen.x - expected.x) < 1e-6 && Math.abs(screen.y - expected.y) < 1e-6);
-  assert.ok(screen.x > MAIN.width / 2);
+  assert.ok(screen.x > INSET.width / 2);
 });
 
 // ---------- 페이지 ----------
 const readDemo = (name) => readFileSync(new URL(`../tools/mission_demo/${name}`, import.meta.url), 'utf8');
 
-test('page: boxes, reticle and heart text sit over the main view; the inset is labelled CHASE CAMERA', () => {
+test('page: boxes, reticle and heart text sit inside the DRONE CAMERA inset (#fpv-view)', () => {
   const html = readDemo('index.html');
   const insetStart = html.indexOf('<section class="fpv-inset"');
   const inset = html.slice(insetStart, html.indexOf('</section>', insetStart));
+  const fpvView = inset.slice(inset.indexOf('<div id="fpv-view">'));
 
-  assert.match(inset, /CHASE CAMERA/);
-  assert.match(inset, /<div id="fpv-view"><\/div>/, 'the inset holds nothing but the chase scissor area');
+  assert.match(inset, /DRONE CAMERA/);
   for (const overlay of ['id="detection-overlay"', 'id="heart-overlay"', 'class="reticle"']) {
-    const index = html.indexOf(overlay);
-    assert.ok(index > html.indexOf('id="viewport"') && index < insetStart, `${overlay} is over the main view`);
+    assert.ok(fpvView.includes(overlay), `${overlay} is over the drone-camera inset`);
+    assert.equal(html.indexOf(overlay), html.lastIndexOf(overlay), `${overlay} appears once`);
   }
   assert.match(readDemo('app.js'), /mapCaptureBoxToView\(detection\.xyxy, frame\.image_width, frame\.image_height, view\.clientWidth, view\.clientHeight\)/);
-  assert.match(readDemo('app.js'), /view = \$\("viewport"\)/);
+  assert.match(readDemo('app.js'), /view = \$\("fpv-view"\)/);
 });
 
-test('without an inset container there is no capture renderer and the main view is still the drone camera', () => {
+test('without an inset container there is no capture renderer and the main view is still the chase camera', () => {
   const { world, mainRenderer } = createWorld({ withInset: false });
   world.flashHeld = true;
 
   assert.equal(renderers.length, 1);
   assert.equal(world.fpvCanvas, undefined);
   assert.doesNotThrow(() => renderFrames(world, 3));
-  assert.ok(mainRenderer.renders.every((render) => render.camera === world.camera));
+  assert.ok(mainRenderer.renders.every((render) => render.camera === world.chaseCamera));
 });

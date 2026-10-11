@@ -16,8 +16,8 @@ export function scaleBox(xyxy, imageWidth, imageHeight, viewWidth, viewHeight) {
   return { left: x1 * scaleX, top: y1 * scaleY, width: (x2 - x1) * scaleX, height: (y2 - y1) * scaleY };
 }
 
-// 캡처(16:9 YOLO 입력) 픽셀 → 메인 화면 픽셀. 둘은 같은 카메라·같은 세로 FOV 라 중심 기준 세로 비율 하나로 스케일한다.
-// 메인이 16:9 보다 좁으면 캡처 좌우가 화면 밖(음수·폭 초과)으로 나간다 — 잘라 내지 않는다
+// 캡처(16:9 YOLO 입력) 픽셀 → 드론 시점 화면(인셋) 픽셀. 둘은 같은 카메라·같은 세로 FOV 라 중심 기준 세로 비율 하나로 스케일한다.
+// 화면이 16:9 보다 좁으면 캡처 좌우가 화면 밖(음수·폭 초과)으로 나간다 — 잘라 내지 않는다
 export function mapCapturePointToView(x, y, captureWidth, captureHeight, viewWidth, viewHeight) {
   const scale = viewHeight / captureHeight;
 

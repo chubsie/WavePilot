@@ -1,7 +1,7 @@
 import { resolveMovement, sphereIntersectsAabb } from "./collision.js";
 import { createDrone } from "./drone-model.js";
 import { MainFlightCore, D2R, DRAG_H, DRAG_V } from "./flight-core.js";
-import { HeartBeam, updateStatusLeds, HEART_SPEED, AIMED_HEART_SPEED } from "./hearts.js?v=main-fpv-1";
+import { HeartBeam, updateStatusLeds, HEART_SPEED, AIMED_HEART_SPEED } from "./hearts.js?v=chase-main-1";
 import { getHeartFlightSec } from "./heart-overlay.js";
 import { PEOPLE, createStandingPerson, createWalker } from './population.js';
 import { createCourse, TEST_START } from './test-flight.js?v=slope-15';
@@ -14,16 +14,16 @@ const THREE = window.THREE;
 const URBAN = { sky: 0x768384, fog: 0x65706b, start: [0, 32, 54], heading: 0 };
 const DRONE_RADIUS = .7;
 const BUILDING_SIDE_CLEARANCE = 2;
-// YOLO 로 올리는 오프스크린 캡처 해상도(16:9). 메인 화면과 같은 world.camera·같은 세로 FOV 로 그린다
+// YOLO 로 올리는 오프스크린 캡처 해상도(16:9). 드론 시점 인셋과 같은 world.camera·같은 세로 FOV 로 그린다
 export const CAPTURE_WIDTH = 640, CAPTURE_HEIGHT = 360;
 const CAPTURE_ASPECT = CAPTURE_WIDTH / CAPTURE_HEIGHT;
-// 1인칭 메인 화면의 하트: 이보다 가까우면 숨기고(카메라 관통), FPV_HEART_SHRINK_M 안쪽은 거리에 비례해 작게 그려
-// 화면을 덮지 않으면서 하트 줄기는 보이게 한다. 크기 축소는 메인 렌더 동안만 — chase 인셋은 원래 크기
+// 드론 시점(인셋) 렌더의 하트: 이보다 가까우면 숨기고(카메라 관통), FPV_HEART_SHRINK_M 안쪽은 거리에 비례해 작게 그려
+// 화면을 덮지 않으면서 하트 줄기는 보이게 한다. 크기 축소는 인셋 렌더 동안만 — chase(큰 화면)는 원래 크기
 export const FPV_HEART_NEAR_M = .8, FPV_HEART_SHRINK_M = 4;
 const FPV_HEART_MIN_SCALE = .25;
-// 하트 발사 시작점(기체 중심에서 m) — 1인칭 메인 화면에서 main 의 1.2 m 는 화면을 덮어 조금 앞으로
+// 하트 발사 시작점(기체 중심에서 m) — 드론 시점에서 main 의 1.2 m 는 화면을 덮어 조금 앞으로
 export const FPV_HEART_MUZZLE_M = 1.8;
-// 정답 트랙(fallback) 박스 크기 380/거리 는 높이 169 px 인셋 기준이었다 — 메인 화면 높이에 비례해 키운다
+// 정답 트랙(fallback) 박스 크기 380/거리 는 높이 169 px 인셋 기준이다 — 그리는 화면 높이에 비례해 맞춘다
 const TRACK_BOX_REFERENCE_HEIGHT_PX = 169;
 // Python 명령(source 'python') 추종 — drone_camera.html 과 같은 1차 지연·속도 기반 기울기
 const PYTHON_VELOCITY_LAG_PER_SEC = 3;
@@ -54,7 +54,7 @@ export class DroneWorld {
     this.renderer.outputEncoding = THREE.sRGBEncoding;
     container.appendChild(this.renderer.domElement);
     if (fpvContainer) {
-      // YOLO 업로드 전용 오프스크린 캡처 — 화면에 붙이지 않는다(보이는 1인칭은 메인 렌더러).
+      // YOLO 업로드 전용 오프스크린 캡처 — 화면에 붙이지 않는다(보이는 드론 시점은 메인 렌더러의 인셋 scissor).
       // toBlob 이 마지막 프레임을 읽도록 preserveDrawingBuffer
       this.fpvRenderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
       this.fpvRenderer.setPixelRatio(1);
@@ -68,7 +68,7 @@ export class DroneWorld {
     this.scene = new THREE.Scene();
     this.testCourse=createCourse(THREE);
     this.scene.add(this.testCourse);
-    // FPV = 메인 화면이자 YOLO 입력. Python DEFAULT_CAMERA(수평 90°, 16:9 → 세로 58.72°)와 맞춰 표적 투영이 어긋나지 않고 사람도 덜 작게 잡힌다
+    // FPV = 드론 시점 인셋이자 YOLO 입력. Python DEFAULT_CAMERA(수평 90°, 16:9 → 세로 58.72°)와 맞춰 표적 투영이 어긋나지 않고 사람도 덜 작게 잡힌다
     this.camera = new THREE.PerspectiveCamera(58.72, 1, 0.1, 320);
     this.camera.rotation.order = "YXZ";
     this.chaseCamera = new THREE.PerspectiveCamera(60, 1, .1, 320);
@@ -283,7 +283,7 @@ export class DroneWorld {
     this.heading = -input.yawDeg * D2R;
   }
 
-  // 월드 점 → 메인 화면 픽셀. 카메라는 평소 캡처 종횡비(16:9)라 캡처 픽셀로 투영한 뒤 YOLO 박스와 같은 변환으로 옮긴다
+  // 월드 점 → 드론 시점 인셋(#fpv-view) 픽셀. 카메라는 평소 캡처 종횡비(16:9)라 캡처 픽셀로 투영한 뒤 YOLO 박스와 같은 변환으로 옮긴다
   project(position) {
     const point = new THREE.Vector3(...position);
     const distance = point.distanceTo(this.camera.position);
@@ -291,7 +291,8 @@ export class DroneWorld {
     const forward = new THREE.Vector3(); this.camera.getWorldDirection(forward);
     const visible = point.clone().sub(this.camera.position).dot(forward) > 0 && Math.abs(projected.x) < 1.05 && Math.abs(projected.y) < 1.05;
 
-    const viewWidth = this.container.clientWidth, viewHeight = this.container.clientHeight;
+    const view = this.fpvContainer || this.container;
+    const viewWidth = view.clientWidth, viewHeight = view.clientHeight;
     const screen = mapCapturePointToView((projected.x*.5+.5)*CAPTURE_WIDTH, (-projected.y*.5+.5)*CAPTURE_HEIGHT,
       CAPTURE_WIDTH, CAPTURE_HEIGHT, viewWidth, viewHeight);
     const width = THREE.MathUtils.clamp(380 / distance, 18, 70) * viewHeight / TRACK_BOX_REFERENCE_HEIGHT_PX;
@@ -329,28 +330,43 @@ export class DroneWorld {
     this.chaseReady=true;
     this.chaseCamera.lookAt(this.getChaseLookPoint(aimDirection, delta));
 
-    this.renderMainView();
-    if (this.fpvContainer) this.renderChaseInset();
+    this.renderChaseMain();
+    if (this.fpvContainer) this.renderDroneInset();
     if (this.fpvRenderer) this.renderCapture();
   }
 
-  // 메인 화면 = 드론 1인칭(world.camera, 세로 FOV 그대로 화면 종횡비로). 기체는 자기 가림이라 숨기고,
-  // 하트는 보이게 — 카메라 코앞 것만 숨기고 가까운 것은 작게(fitHeartsToFpv)
-  renderMainView() {
+  // 큰 화면 = 기체를 뒤에서 보는 chase 시점. 기체·하트 모두 원래 크기로 보인다
+  renderChaseMain() {
     const width = this.container.clientWidth, height = this.container.clientHeight;
 
     this.renderer.setScissorTest(false);
     this.renderer.setViewport(0, 0, width, height);
-    this.setCameraAspect(width / (height || 1));
+    this.renderer.render(this.scene, this.chaseCamera);
+  }
+
+  // 작은 창(#fpv-view 자리) = 드론 1인칭(world.camera). 큰 화면과 같은 렌더러의 scissor 영역이라
+  // pixel ratio·그림자·sRGB 가 같다. 세로 FOV 는 그대로 두고 종횡비만 인셋에 맞춘다.
+  // 기체는 자기 가림이라 숨기고, 하트는 보이게 — 카메라 코앞 것만 숨기고 가까운 것은 작게(fitHeartsToFpv)
+  renderDroneInset() {
+    const width = this.container.clientWidth, height = this.container.clientHeight;
+    const base = this.container.getBoundingClientRect(), inset = this.fpvContainer.getBoundingClientRect();
+    const x = inset.left - base.left, y = base.bottom - inset.bottom;
+
+    this.renderer.setScissor(x, y, inset.width, inset.height);
+    this.renderer.setViewport(x, y, inset.width, inset.height);
+    this.renderer.setScissorTest(true);
+    this.setCameraAspect(inset.width / (inset.height || 1));
     this.drone.visible = false;
     const restoreHearts = this.fitHeartsToFpv();
     this.renderer.render(this.scene, this.camera);
     restoreHearts();
     this.drone.visible = true;
     this.setCameraAspect(CAPTURE_ASPECT);   // 평소엔 캡처 종횡비 — project·하트 조준 unproject 가 YOLO 픽셀과 맞는다
+    this.renderer.setScissorTest(false);
+    this.renderer.setViewport(0, 0, width, height);
   }
 
-  // 1인칭 렌더 동안만 근접 하트를 숨기거나 줄인다. 되돌리는 함수를 돌려준다
+  // 드론 시점 렌더 동안만 근접 하트를 숨기거나 줄인다. 되돌리는 함수를 돌려준다
   fitHeartsToFpv() {
     if (!this.heartBeam) return () => {};
 
@@ -366,20 +382,6 @@ export class DroneWorld {
     return () => {
       for (const { sprite, scale } of changed) { sprite.visible = true; sprite.scale.setScalar(scale); }
     };
-  }
-
-  // 작은 창(#fpv-view 자리) = 기체를 뒤에서 보는 chase 시점. 같은 메인 렌더러의 scissor 영역에 그린다
-  renderChaseInset() {
-    const width = this.container.clientWidth, height = this.container.clientHeight;
-    const base = this.container.getBoundingClientRect(), inset = this.fpvContainer.getBoundingClientRect();
-    const x = inset.left - base.left, y = base.bottom - inset.bottom;
-
-    this.renderer.setScissor(x, y, inset.width, inset.height);
-    this.renderer.setViewport(x, y, inset.width, inset.height);
-    this.renderer.setScissorTest(true);
-    this.renderer.render(this.scene, this.chaseCamera);
-    this.renderer.setScissorTest(false);
-    this.renderer.setViewport(0, 0, width, height);
   }
 
   // YOLO 업로드 캡처(오프스크린 16:9) — 기체는 자기 가림, 하트는 YOLO 입력 오염이라 둘 다 숨긴다
@@ -473,7 +475,7 @@ export class DroneWorld {
   resize() {
     const width = this.container.clientWidth || 1, height = this.container.clientHeight || 1;
     this.renderer.setSize(width, height, false);
-    this.chaseCamera.aspect = this.fpvContainer ? this.fpvContainer.clientWidth / (this.fpvContainer.clientHeight || 1) : width / height;
+    this.chaseCamera.aspect = width / height;
     this.chaseCamera.updateProjectionMatrix();
     this.setCameraAspect(CAPTURE_ASPECT);
   }
