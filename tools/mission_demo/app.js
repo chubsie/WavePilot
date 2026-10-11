@@ -5,6 +5,7 @@ import { TestFlight, COURSE } from './test-flight.js';
 import { terrainHeight } from './mountain-course.js';
 import { createYoloLog, createYoloLogView, formatDetectionLabel, getObjectCategory, scaleBox } from './yolo-log.js';
 import { createDecisionLog, createLlmDecisionView, formatAiBadge } from './llm-decisions.js';
+import { createHeartOverlay, extendHeartPulse, isHeartPulseOn } from './heart-overlay.js';
 
 // TODO: 임시 — 장갑 수동(IMU)·산악 코스에서 비행 키를 누르는 동안은 키보드가 우선한다. 장갑 검증 끝나면 false로.
 const ALLOW_KEYBOARD_OVERRIDE = true;
@@ -42,10 +43,9 @@ const testFlight=new TestFlight();
 // AI 모드에서만 Python 비행 명령을 받아 pyAutopilot 이 실행한다(로컬 'auto' 관찰 모드는 받지 않는다).
 const SimLink = window.SimLink;
 const RAD_TO_DEG = 180 / Math.PI;
-const HEART_PULSE_MS = 600;  // fire_heart 한 발 = 기존 하트 빔을 잠깐 켠다
 const DEFAULT_AI_GIMBAL_PITCH_DEG = -20;
 const nowSec = () => performance.now() / 1000;
-let heartPulseUntilMs = 0;
+let heartPulseUntilMs = 0;  // fire_heart 한 발마다 늘어난다 — 이 시각까지 chase 하트 빔이 짐벌 시선으로 나간다
 const YOLO_PANEL_REFRESH_MS = 1000 / 30;
 const YOLO_FPS_WINDOW_MS = 1000;
 const yoloFrameTimes = [];  // 로그에 새로 들어온 YOLO 프레임 시각 — 실측 fps 용
@@ -54,9 +54,13 @@ const yoloView = createYoloLogView($('yolo-log'));
 const decisionLog = createDecisionLog();
 const decisionView = createLlmDecisionView($('decision-list'));
 
+// FPV 하트는 YOLO 업로드 캔버스(world.fpvCanvas)와 다른 2D 오버레이 캔버스에만 그린다
+const heartOverlay = world.fpvCanvas ? createHeartOverlay({ canvas: $('heart-overlay'), uploadCanvas: world.fpvCanvas }) : null;
+
 const pyAutopilot = SimLink ? SimLink.createAutopilot({
   onHeart: (trackId) => {
-    heartPulseUntilMs = performance.now() + HEART_PULSE_MS;
+    heartPulseUntilMs = extendHeartPulse(heartPulseUntilMs, performance.now());
+    heartOverlay?.fire(trackId, performance.now());
     pyAutopilot.recordEvent({ kind: 'heart_shot', track_id: trackId, time_sec: nowSec(), actor_id: null });
   },
 }) : null;
@@ -318,7 +322,9 @@ function frame(now) {
   const input = keyboardOverride ? keyboard.sample()
     : mode==='test'?(glove.link?glove.sample():keyboard.sample()):mode === "auto" ? autopilot.sample(telemetry.position, world.heading, visibleTracks, now)
     : mode === 'ai' ? getAiInput(delta) : mode === "imu" ? glove.sample() : keyboard.sample();
-  world.flashHeld = keyFlash || now < heartPulseUntilMs || (auxHeld && glove.sample().source !== 'imu-stale');
+  const isHeartPulse = isHeartPulseOn(heartPulseUntilMs, now);
+  world.heartAimActive = isHeartPulse;
+  world.flashHeld = keyFlash || isHeartPulse || (auxHeld && glove.sample().source !== 'imu-stale');
   if (world.update(input, delta)) {
     blockedUntil = now + 600;
     if (mode === 'auto') autopilot.notifyBlocked();
@@ -334,6 +340,7 @@ function frame(now) {
   if (yoloFrame) renderYoloBoxes(yoloFrame); else renderTrackBoxes(lastTracks.filter(t => world.canObserve(t.position)));
   // 10 Hz 업로드 스로틀은 sim_link 가 한다. 끊겨 있으면 JPEG 인코딩도 하지 않는다(텔레메트리 POST 가 연결을 되살린다)
   if (link?.state.connected) link.afterRender(delta);
+  heartOverlay?.draw(now);
   renderLinkNotice(now);
   drawSensorChart();
   if(mode==='test'){

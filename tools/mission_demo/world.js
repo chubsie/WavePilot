@@ -16,6 +16,8 @@ const FPV_WIDTH = 640, FPV_HEIGHT = 360;
 // Python 명령(source 'python') 추종 — drone_camera.html 과 같은 1차 지연·속도 기반 기울기
 const PYTHON_VELOCITY_LAG_PER_SEC = 3;
 const PYTHON_TILT_DEG_PER_MPS = 1.5, PYTHON_MAX_TILT_DEG = 10;
+// fire_heart 조준 사격 중 chase 카메라가 짐벌 시선 쪽(표적)으로 고개를 숙인다 — 하트와 표적이 같이 보이게
+const CHASE_AIM_LOOK_M = 10, CHASE_AIM_BLEND_PER_SEC = 4;
 
 // 속도 → 표시용 기체 자세(deg). 앞으로 가면 기수 숙임(-pitch), 오른쪽으로 가면 오른쪽 내림(+roll)
 export function getVelocityTiltDeg(velocity, heading) {
@@ -62,6 +64,7 @@ export class DroneWorld {
     this.rotors = model.rotors;
     this.leds = model.leds;
     this.flashHeld = false;
+    this.heartAimActive = false;   // true = 하트를 기수가 아니라 FPV 시선(짐벌)으로 쏜다(Python fire_heart)
     this.scene.add(this.drone);
     this.heartBeam = new HeartBeam(this.scene);
     this.environment = null;
@@ -289,24 +292,25 @@ export class DroneWorld {
       rotor.userData.disc.material.opacity = .04 + .26 * speed;
     });
     updateStatusLeds(this.leds || []);
-    this.heartBeam?.update(delta, this.drone, this.velocity, this.flashHeld);
+    const aimDirection = this.camera.getWorldDirection(new THREE.Vector3());
+    this.heartBeam?.update(delta, this.drone, this.velocity, this.flashHeld, this.heartAimActive ? { direction: aimDirection } : null);
     // Rigid follow offset: altitude, turning and acceleration never change the distance.
     const followDistance = 4;
     const offset=new THREE.Vector3(Math.sin(this.heading)*followDistance,1.8,Math.cos(this.heading)*followDistance);
     const desired=this.camera.position.clone().add(offset);
     this.chaseCamera.position.copy(desired);
     this.chaseReady=true;
-    this.chaseCamera.lookAt(this.camera.position.clone().add(new THREE.Vector3(-Math.sin(this.heading)*3,0,-Math.cos(this.heading)*3)));
+    this.chaseCamera.lookAt(this.getChaseLookPoint(aimDirection, delta));
     const w=this.container.clientWidth,h=this.container.clientHeight;
     this.renderer.setScissorTest(false);
     this.renderer.setViewport(0,0,w,h);
     this.drone.visible=true;
     this.renderer.render(this.scene,this.chaseCamera);
     if(this.fpvRenderer) {
-      // FPV 는 자기 캔버스에 — 드론 자체는 숨겨 자기 가림이 없게
-      this.drone.visible=false;
+      // FPV 는 자기 캔버스에 — 드론은 자기 가림, 하트는 YOLO 입력 오염이라 둘 다 숨긴다
+      this.setChaseOnlyVisible(false);
       this.fpvRenderer.render(this.scene,this.camera);
-      this.drone.visible=true;
+      this.setChaseOnlyVisible(true);
     } else if(this.fpvContainer) {
       // 전용 렌더러가 없으면(헤드리스 테스트) 예전처럼 메인 캔버스의 scissor 인셋
       const base=this.container.getBoundingClientRect(), pip=this.fpvContainer.getBoundingClientRect();
@@ -315,12 +319,29 @@ export class DroneWorld {
       this.renderer.setViewport(x,y,pip.width,pip.height);
       this.renderer.setScissorTest(true);
       this.renderer.clearDepth();
-      this.drone.visible=false;
+      this.setChaseOnlyVisible(false);
       this.renderer.render(this.scene,this.camera);
-      this.drone.visible=true;
+      this.setChaseOnlyVisible(true);
       this.renderer.setScissorTest(false);
       this.renderer.setViewport(0,0,w,h);
     }
+  }
+
+  // chase 뷰에만 보이는 것(기체·하트 빔). FPV 캔버스는 YOLO 로 올라가므로 여기 든 것은 절대 그리지 않는다
+  setChaseOnlyVisible(isVisible) {
+    this.drone.visible = isVisible;
+    if (this.heartBeam) this.heartBeam.group.visible = isVisible;
+  }
+
+  // 평소엔 기수 3 m 앞(수평), 조준 사격 중엔 짐벌 시선 CHASE_AIM_LOOK_M 앞으로 부드럽게 옮긴다
+  getChaseLookPoint(aimDirection, delta) {
+    const blendStep = Math.min(1, delta * CHASE_AIM_BLEND_PER_SEC);
+    this.chaseAimBlend = THREE.MathUtils.lerp(this.chaseAimBlend ?? 0, this.heartAimActive ? 1 : 0, blendStep);
+
+    const ahead = new THREE.Vector3(-Math.sin(this.heading)*3, 0, -Math.cos(this.heading)*3);
+    const aimed = aimDirection.clone().multiplyScalar(CHASE_AIM_LOOK_M);
+
+    return this.camera.position.clone().add(ahead.lerp(aimed, this.chaseAimBlend));
   }
 
   syncTargets(tracks) {
