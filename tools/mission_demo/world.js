@@ -11,6 +11,8 @@ const THREE = window.THREE;
 const URBAN = { sky: 0x768384, fog: 0x65706b, start: [0, 32, 54], heading: 0 };
 const DRONE_RADIUS = .7;
 const BUILDING_SIDE_CLEARANCE = 2;
+// FPV 전용 캔버스 내부 해상도 — 화면 인셋과 YOLO 로 보내는 JPEG 가 같은 픽셀이다(CSS 로 인셋 크기에 맞춰 축소)
+const FPV_WIDTH = 640, FPV_HEIGHT = 360;
 
 export class DroneWorld {
   constructor(container, onAssetStatus = () => {}, fpvContainer = null) {
@@ -23,6 +25,18 @@ export class DroneWorld {
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.outputEncoding = THREE.sRGBEncoding;
     container.appendChild(this.renderer.domElement);
+    if (fpvContainer) {
+      // toBlob 이 마지막 프레임을 읽도록 preserveDrawingBuffer. 메인 렌더러는 chase 뷰만 그린다
+      this.fpvRenderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+      this.fpvRenderer.setPixelRatio(1);
+      this.fpvRenderer.setSize(FPV_WIDTH, FPV_HEIGHT, false);
+      this.fpvRenderer.shadowMap.enabled = true;
+      this.fpvRenderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      this.fpvRenderer.outputEncoding = THREE.sRGBEncoding;
+      this.fpvCanvas = this.fpvRenderer.domElement;
+      this.fpvCanvas.className = "fpv-canvas";
+      fpvContainer.prepend(this.fpvCanvas);
+    }
 
     this.scene = new THREE.Scene();
     this.testCourse=createCourse(THREE);
@@ -63,6 +77,7 @@ export class DroneWorld {
     const cinematic = quality === "cinematic";
     this.renderer.setPixelRatio(cinematic ? Math.min(window.devicePixelRatio, 1.65) : 1);
     this.renderer.shadowMap.enabled = cinematic;
+    if (this.fpvRenderer) this.fpvRenderer.shadowMap.enabled = cinematic;
     if (this.environment) {
       this.environment.traverse((object) => {
         if (object.userData.detail_high === true || object.name.startsWith("DETAIL_HIGH")) object.visible = cinematic;
@@ -257,7 +272,13 @@ export class DroneWorld {
     this.renderer.setViewport(0,0,w,h);
     this.drone.visible=true;
     this.renderer.render(this.scene,this.chaseCamera);
-    if(this.fpvContainer) {
+    if(this.fpvRenderer) {
+      // FPV 는 자기 캔버스에 — 드론 자체는 숨겨 자기 가림이 없게
+      this.drone.visible=false;
+      this.fpvRenderer.render(this.scene,this.camera);
+      this.drone.visible=true;
+    } else if(this.fpvContainer) {
+      // 전용 렌더러가 없으면(헤드리스 테스트) 예전처럼 메인 캔버스의 scissor 인셋
       const base=this.container.getBoundingClientRect(), pip=this.fpvContainer.getBoundingClientRect();
       const x=pip.left-base.left,y=base.bottom-pip.bottom;
       this.renderer.setScissor(x,y,pip.width,pip.height);
