@@ -160,7 +160,7 @@ def test_aim_and_fire_is_a_rule_mode_and_validates_params():
 def test_missing_params_use_param_defaults():
     driver = _make_driver(params={"target_track": "T3"})
 
-    assert driver.step_many(4) == []
+    assert driver.step_many(1) == []
     assert driver.control.fire_list == []
     driver.step()
     assert driver.control.fire_list == [FireHeart(3)]

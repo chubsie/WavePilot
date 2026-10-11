@@ -46,10 +46,13 @@ class ParamDefaults:
     # 25 m 면 기본 구역 순찰이 517.5 m / 5 m/s = 103.5 s, 스캔 지점(시작 + 웨이포인트 8)당 ~4 s × 9 를 더해
     # ≈ 138 s 로 search_timeout_sec 160 s 안에 끝난다 — 20 m 면 125 s + 스캔 ~44 s 로 넘는다
     search_lane_spacing_m: float = 25.0
-    approach_stop_distance_m: float = 5.0
+    # 8 m 고도에서 수평 8 m(시선 ~11 m)면 FPV 박스 ~45 px 로 조준·하트 사거리에 충분하다. 조준 가능 거리가
+    # stop + AIM_READY_MARGIN_M = 10 m 라 탐색 중 발견(실측 8.6~9.7 m)에서 approach 없이 바로 조준한다
+    approach_stop_distance_m: float = 8.0
     approach_timeout_sec: float = 30.0
-    aim_center_tolerance_ratio: float = 0.05  # 프레임 폭 대비
-    aim_stable_frame_count: int = 5
+    # 프레임 폭·높이 대비. 640x360 에서 가로 ±51 px(±9°)·세로 ±29 px(±5°) — 0.05 는 수렴만 늦췄다
+    aim_center_tolerance_ratio: float = 0.08
+    aim_stable_frame_count: int = 2  # ~10 fps 에서 0.1 s. 5 는 첫 발을 0.3 s 늦췄다
     aim_timeout_sec: float = 15.0
     observe_timeout_sec: float = 10.0
     hold_duration_sec: float = 5.0

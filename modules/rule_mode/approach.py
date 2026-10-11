@@ -28,11 +28,11 @@ from modules.yolo_detection.interface import Detection
 logger = logging.getLogger(__name__)
 
 REESTIMATE_PERIOD_SEC = 1.0
-ARRIVAL_TICK_COUNT = 5
+ARRIVAL_TICK_COUNT = 3  # 0.3 s 연속 — 추정이 흔들려 한 tick 넘침에 뒤집히는 것만 막는다
 LOST_AFTER_SEC = 3.0
 GIMBAL_PITCH_MIN_DEG = -90.0
 GIMBAL_PITCH_MAX_DEG = 0.0
-DEFAULT_STOP_DISTANCE_M = 5.0
+DEFAULT_STOP_DISTANCE_M = 8.0  # decision/params.py ParamDefaults.approach_stop_distance_m 와 같은 값
 DEFAULT_TIMEOUT_SEC = 30.0
 
 _TRACK_LABEL_PATTERN = re.compile(r"T(\d+)")
