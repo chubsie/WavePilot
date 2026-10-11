@@ -428,3 +428,9 @@ def test_gps_motion_during_link_loss_is_not_jump_after_reconnect():
         monitor.check(float(t), _telemetry(float(t), gps=_fix(5.0 * t)), float(t), LinkStatus(False, 0.0))
 
     assert monitor.check(11.0, _telemetry(11.0, gps=_fix(55.0)), 11.0, _connected(11.0)) is None
+
+
+def test_monitor_skips_battery_when_check_disabled():
+    monitor = _monitor(battery_check=False)
+
+    assert monitor.check(1.0, _telemetry(1.0, north=100.0, battery=0.0), 1.0, _connected(1.0)) is None

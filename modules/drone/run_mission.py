@@ -406,6 +406,7 @@ def build_safety_config(spec: MissionSpec, settings: RuleModeSettings, defaults:
         search_area=settings.search_area,
         geofence_margin_m=spec.geofence_margin_m,
         battery_reserve_pct=spec.battery_reserve_pct,
+        battery_check=spec.battery_check,
         max_flight_sec=spec.max_flight_sec,
         home_north_m=defaults.home_north_m,
         home_east_m=defaults.home_east_m,

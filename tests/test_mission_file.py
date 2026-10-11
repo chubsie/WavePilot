@@ -348,3 +348,22 @@ def test_search_altitude_rejects_non_positive_or_non_number(bad_value):
 
     with pytest.raises(ValueError, match="search_area.altitude_m"):
         parse_mission(data)
+
+
+# --- 선택 키 safety.battery_check ---
+
+
+def test_battery_check_defaults_to_true_and_reads_false():
+    assert parse_mission(_valid_mission_dict()).battery_check is True
+
+    data = _valid_mission_dict()
+    data["safety"]["battery_check"] = False
+    assert parse_mission(data).battery_check is False
+
+
+def test_battery_check_must_be_bool():
+    data = _valid_mission_dict()
+    data["safety"]["battery_check"] = "no"
+
+    with pytest.raises(ValueError, match="safety.battery_check"):
+        parse_mission(data)

@@ -22,4 +22,5 @@ altitude_m = 8.0            # m, 15 m 에선 FPV 의 사람이 ~17 px 라 YOLO �
 [safety]
 geofence_margin_m = 20.0    # m, 구역 밖 허용 폭
 battery_reserve_pct = 15.0  # %, 이 아래면 복귀
+battery_check = false       # 데모: 배터리 부족 강제 복귀를 끈다(시뮬 배터리가 오래 연 탭에서 0 으로 들어오는 문제)
 max_flight_sec = 300.0      # s, 데모 길이

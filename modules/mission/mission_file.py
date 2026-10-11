@@ -4,6 +4,7 @@ TOML 모양 (모든 섹션·키 필수 — 선택 키 표시 제외, 모르는 �
     [target]       class, upper_color ("red" | "any"), action ("heart")
     [search_area]  north_m, east_m — 각각 [min, max], min < max
                    altitude_m (선택, > 0) — 탐색 고도. 없으면 ParamDefaults.search_altitude_m
+    [safety]       battery_check (선택, bool, 기본 true) — false 면 배터리 부족 강제 복귀를 끈다(시뮬 데모용)
     [safety]       geofence_margin_m (>= 0), battery_reserve_pct (0 <= x < 100), max_flight_sec (> 0)
 
 복귀 지점 필드는 없다 — RETURN 은 initialize GPS(운용자 위치, NED 원점)로 간다 (D-12).
@@ -30,6 +31,7 @@ _SECTION_KEYS: dict[str, tuple[str, ...]] = {
 # 선택 키 — 없어도 되지만 있으면 검증한다. 맵마다 탐지 가능한 고도가 달라 탐색 고도는 파일에서 바꿀 수 있게 둔다
 _OPTIONAL_SECTION_KEYS: dict[str, tuple[str, ...]] = {
     "search_area": ("altitude_m",),
+    "safety": ("battery_check",),
 }
 
 
@@ -46,6 +48,7 @@ class MissionSpec:
     battery_reserve_pct: float  # 0 <= x < 100
     max_flight_sec: float  # > 0
     search_altitude_m: float | None = None  # > 0, None 이면 기본 탐색 고도
+    battery_check: bool = True  # False 면 배터리 강제 복귀를 끈다
 
 
 def parse_mission(data: dict) -> MissionSpec:
@@ -64,6 +67,7 @@ def parse_mission(data: dict) -> MissionSpec:
     search_altitude_m = _read_optional_altitude("search_area.altitude_m", search_area.get("altitude_m"))
 
     geofence_margin_m, battery_reserve_pct, max_flight_sec = _read_safety(data["safety"])
+    battery_check = _read_optional_bool("safety.battery_check", data["safety"].get("battery_check"), default=True)
 
     return MissionSpec(
         target_class=target_class,
@@ -77,6 +81,7 @@ def parse_mission(data: dict) -> MissionSpec:
         battery_reserve_pct=battery_reserve_pct,
         max_flight_sec=max_flight_sec,
         search_altitude_m=search_altitude_m,
+        battery_check=battery_check,
     )
 
 
@@ -162,6 +167,14 @@ def _read_safety(safety: Mapping) -> tuple[float, float, float]:
         raise ValueError(f"field 'safety.max_flight_sec' must be > 0, got {max_flight_sec!r}")
 
     return geofence_margin_m, battery_reserve_pct, max_flight_sec
+
+
+def _read_optional_bool(name: str, value: object, default: bool) -> bool:
+    if value is None:
+        return default
+    if not isinstance(value, bool):
+        raise ValueError(f"field '{name}' must be a bool, got {value!r}")
+    return value
 
 
 def _read_optional_altitude(name: str, value: object) -> float | None:
