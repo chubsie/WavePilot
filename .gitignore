@@ -11,6 +11,13 @@ PythonClient-*/
 .venv/
 __pycache__/
 *.pyc
+.pytest_cache/
+.env
+models/
+*.gguf
+*.pt
+*.engine
+*.onnx
 
 # Build output
 build/
@@ -21,3 +28,16 @@ build/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/
+
+# Drone camera recordings (tools/visualizer/serve_camera.py)
+recordings/
+
+# Mission structured logs (modules/mission/mission_log.py, run_mission --log-dir)
+logs/
+
+# Local agent workspaces and visual brainstorming artifacts
+/.worktrees/
+/.superpowers/

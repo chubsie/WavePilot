@@ -1,0 +1,47 @@
+# 빨강 없음: 아무도 쏘지 않고 탐색을 마친 뒤 복귀하는지 본다.
+
+name = "no_red"
+description = "빨강 셔츠 0명, 다른 색 셔츠 3명, 차 2대"
+mission = "missions/compare.toml"
+battery_pct = 100.0
+
+[[actors]]
+id = "blue_1"
+model = "soldier"
+north_m = 15.0
+east_m = 2.0
+heading_deg = 0.0
+shirt = "other"
+shirt_rgb = [31, 79, 208]
+
+[[actors]]
+id = "green_1"
+model = "soldier"
+north_m = 22.0
+east_m = -7.0
+heading_deg = 120.0
+shirt = "other"
+shirt_rgb = [40, 150, 60]
+
+[[actors]]
+id = "gray_1"
+model = "soldier"
+north_m = 30.0
+east_m = 6.0
+heading_deg = 270.0
+shirt = "other"
+shirt_rgb = [128, 128, 128]
+
+[[actors]]
+id = "car_1"
+model = "car"
+north_m = 18.0
+east_m = 10.0
+heading_deg = 60.0
+
+[[actors]]
+id = "car_2"
+model = "car"
+north_m = 33.0
+east_m = -10.0
+heading_deg = -30.0

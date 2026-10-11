@@ -1,0 +1,292 @@
+{
+  "schema_version": 1,
+  "time_sec": 40.0,
+  "drone": {
+    "position_ned_m": {
+      "north": 0.0,
+      "east": 0.0,
+      "down": -40.0
+    },
+    "altitude_m": 40.0,
+    "attitude_deg": {
+      "roll": 0.0,
+      "pitch": 0.0,
+      "yaw": 0.0
+    },
+    "gimbal_deg": {
+      "pitch": -55.0,
+      "yaw": 0.0
+    },
+    "battery_pct": 97.5,
+    "flight_mode": "hover"
+  },
+  "tracks": [
+    {
+      "track_id": "T1",
+      "class": "person",
+      "position_ned_m": {
+        "north": 12.5,
+        "east": -18.0
+      },
+      "first_seen_sec": 0.5,
+      "last_seen_sec": 39.9,
+      "observation_count": 31,
+      "mean_confidence": 0.61,
+      "is_active": true
+    },
+    {
+      "track_id": "T2",
+      "class": "truck",
+      "position_ned_m": {
+        "north": 15.0,
+        "east": -16.0
+      },
+      "first_seen_sec": 1.0,
+      "last_seen_sec": 39.9,
+      "observation_count": 32,
+      "mean_confidence": 0.63,
+      "is_active": true
+    },
+    {
+      "track_id": "T3",
+      "class": "bus",
+      "position_ned_m": {
+        "north": 17.5,
+        "east": -14.0
+      },
+      "first_seen_sec": 1.5,
+      "last_seen_sec": 39.9,
+      "observation_count": 33,
+      "mean_confidence": 0.65,
+      "is_active": true
+    },
+    {
+      "track_id": "T4",
+      "class": "car",
+      "position_ned_m": {
+        "north": 20.0,
+        "east": -12.0
+      },
+      "first_seen_sec": 2.0,
+      "last_seen_sec": 39.9,
+      "observation_count": 34,
+      "mean_confidence": 0.66,
+      "is_active": true
+    },
+    {
+      "track_id": "T5",
+      "class": "person",
+      "position_ned_m": {
+        "north": 22.5,
+        "east": -10.0
+      },
+      "first_seen_sec": 2.5,
+      "last_seen_sec": 39.9,
+      "observation_count": 35,
+      "mean_confidence": 0.67,
+      "is_active": true
+    },
+    {
+      "track_id": "T6",
+      "class": "truck",
+      "position_ned_m": {
+        "north": 25.0,
+        "east": -8.0
+      },
+      "first_seen_sec": 3.0,
+      "last_seen_sec": 39.9,
+      "observation_count": 36,
+      "mean_confidence": 0.69,
+      "is_active": true
+    },
+    {
+      "track_id": "T7",
+      "class": "bus",
+      "position_ned_m": {
+        "north": 27.5,
+        "east": -6.0
+      },
+      "first_seen_sec": 3.5,
+      "last_seen_sec": 39.9,
+      "observation_count": 37,
+      "mean_confidence": 0.7,
+      "is_active": true
+    },
+    {
+      "track_id": "T8",
+      "class": "car",
+      "position_ned_m": {
+        "north": 30.0,
+        "east": -4.0
+      },
+      "first_seen_sec": 4.0,
+      "last_seen_sec": 39.9,
+      "observation_count": 38,
+      "mean_confidence": 0.72,
+      "is_active": true
+    },
+    {
+      "track_id": "T9",
+      "class": "person",
+      "position_ned_m": {
+        "north": 32.5,
+        "east": -2.0
+      },
+      "first_seen_sec": 4.5,
+      "last_seen_sec": 39.9,
+      "observation_count": 39,
+      "mean_confidence": 0.73,
+      "is_active": true
+    },
+    {
+      "track_id": "T10",
+      "class": "truck",
+      "position_ned_m": {
+        "north": 35.0,
+        "east": 0.0
+      },
+      "first_seen_sec": 5.0,
+      "last_seen_sec": 39.9,
+      "observation_count": 40,
+      "mean_confidence": 0.75,
+      "is_active": true
+    },
+    {
+      "track_id": "T11",
+      "class": "bus",
+      "position_ned_m": {
+        "north": 37.5,
+        "east": 2.0
+      },
+      "first_seen_sec": 5.5,
+      "last_seen_sec": 39.9,
+      "observation_count": 41,
+      "mean_confidence": 0.76,
+      "is_active": true
+    },
+    {
+      "track_id": "T12",
+      "class": "car",
+      "position_ned_m": {
+        "north": 40.0,
+        "east": 4.0
+      },
+      "first_seen_sec": 6.0,
+      "last_seen_sec": 39.9,
+      "observation_count": 42,
+      "mean_confidence": 0.78,
+      "is_active": true
+    },
+    {
+      "track_id": "T13",
+      "class": "person",
+      "position_ned_m": {
+        "north": 42.5,
+        "east": 6.0
+      },
+      "first_seen_sec": 6.5,
+      "last_seen_sec": 39.9,
+      "observation_count": 43,
+      "mean_confidence": 0.79,
+      "is_active": true
+    },
+    {
+      "track_id": "T14",
+      "class": "truck",
+      "position_ned_m": {
+        "north": 45.0,
+        "east": 8.0
+      },
+      "first_seen_sec": 7.0,
+      "last_seen_sec": 39.9,
+      "observation_count": 44,
+      "mean_confidence": 0.81,
+      "is_active": true
+    },
+    {
+      "track_id": "T15",
+      "class": "bus",
+      "position_ned_m": {
+        "north": 47.5,
+        "east": 10.0
+      },
+      "first_seen_sec": 7.5,
+      "last_seen_sec": 39.9,
+      "observation_count": 45,
+      "mean_confidence": 0.82,
+      "is_active": true
+    },
+    {
+      "track_id": "T16",
+      "class": "car",
+      "position_ned_m": {
+        "north": 50.0,
+        "east": 12.0
+      },
+      "first_seen_sec": 8.0,
+      "last_seen_sec": 39.9,
+      "observation_count": 46,
+      "mean_confidence": 0.84,
+      "is_active": true
+    },
+    {
+      "track_id": "T17",
+      "class": "person",
+      "position_ned_m": {
+        "north": 52.5,
+        "east": 14.0
+      },
+      "first_seen_sec": 8.5,
+      "last_seen_sec": 39.9,
+      "observation_count": 47,
+      "mean_confidence": 0.85,
+      "is_active": true
+    },
+    {
+      "track_id": "T18",
+      "class": "truck",
+      "position_ned_m": {
+        "north": 55.0,
+        "east": 16.0
+      },
+      "first_seen_sec": 9.0,
+      "last_seen_sec": 39.9,
+      "observation_count": 48,
+      "mean_confidence": 0.87,
+      "is_active": true
+    },
+    {
+      "track_id": "T19",
+      "class": "bus",
+      "position_ned_m": {
+        "north": 57.5,
+        "east": 18.0
+      },
+      "first_seen_sec": 9.5,
+      "last_seen_sec": 39.9,
+      "observation_count": 49,
+      "mean_confidence": 0.89,
+      "is_active": true
+    },
+    {
+      "track_id": "T20",
+      "class": "car",
+      "position_ned_m": {
+        "north": 60.0,
+        "east": 20.0
+      },
+      "first_seen_sec": 10.0,
+      "last_seen_sec": 39.9,
+      "observation_count": 50,
+      "mean_confidence": 0.9,
+      "is_active": true
+    }
+  ],
+  "counts_by_class": {
+    "bus": 5,
+    "car": 5,
+    "person": 5,
+    "truck": 5
+  },
+  "omitted_track_count": 3
+}

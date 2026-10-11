@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "time_sec": 18.0,
+  "drone": {
+    "position_ned_m": {
+      "north": 0.0,
+      "east": 0.0,
+      "down": -40.0
+    },
+    "altitude_m": 40.0,
+    "attitude_deg": {
+      "roll": 0.0,
+      "pitch": 0.0,
+      "yaw": 0.0
+    },
+    "gimbal_deg": {
+      "pitch": -55.0,
+      "yaw": 0.0
+    },
+    "battery_pct": 97.5,
+    "flight_mode": "hover"
+  },
+  "tracks": [
+    {
+      "track_id": "T4",
+      "class": "car",
+      "position_ned_m": {
+        "north": 31.0,
+        "east": 5.2
+      },
+      "first_seen_sec": 2.0,
+      "last_seen_sec": 17.9,
+      "observation_count": 160,
+      "mean_confidence": 0.82,
+      "is_active": true
+    },
+    {
+      "track_id": "T9",
+      "class": "car",
+      "position_ned_m": {
+        "north": 31.6,
+        "east": 5.6
+      },
+      "first_seen_sec": 10.3,
+      "last_seen_sec": 17.9,
+      "observation_count": 75,
+      "mean_confidence": 0.64,
+      "is_active": true
+    }
+  ],
+  "counts_by_class": {
+    "car": 2
+  },
+  "omitted_track_count": 0
+}

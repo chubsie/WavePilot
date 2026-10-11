@@ -1,0 +1,29 @@
+# mission_demo 도시 맵용 임무: 중앙 도로를 따라 북남으로 훑으며 person 에게 heart 를 보낸다.
+# 실행 예: uv run --group yolo python -m modules.drone.run_mission --sim browser --mission missions/urban_demo.toml
+#          페이지: http://127.0.0.1:8766/mission_demo/ (AI 모드로 전환)
+#
+# 좌표 근거 (tools/mission_demo/world.js):
+# - 페이지 NED: north = -world.z, east = world.x. 원점 = 세계 원점(중앙 도로 위)이고 복귀도 여기로 간다 (D-12).
+# - 맵 경계는 x·z 모두 ±68 m. 시작 위치는 world (0, 32, 54) = north -54, east 0 (도로 남쪽 끝).
+# - 중앙 도로는 east ≈ 0 을 따라 북남으로 뻗는다. 길모퉁이 보행자가 east ±10.5 에 있어 건물 충돌을 피하려고
+#   탐색 east 범위는 도로 폭 안(±6)으로 둔다.
+# - 지오펜스 = 탐색 구역 + margin 20 → north ±65, east ±26 — 맵 경계 ±68 안이고 시작 위치(north -54)도 안이다.
+
+[target]
+class = "person"
+upper_color = "red"         # 빨간 옷 사람에게만 하트를 퍼붓는다(맵에 빨간 옷 보행자 T-21 이 있다)
+action = "heart"
+
+[search_area]
+north_m = [-45.0, 45.0]     # [min, max] m, 맵 경계 ±68 안
+east_m = [-6.0, 6.0]        # [min, max] m, 중앙 도로 폭 안
+altitude_m = 8.0            # m, 15 m 에선 FPV 의 사람이 ~17 px 라 YOLO 가 못 잡는다(8 m 에서 ~40 px)
+
+[safety]
+geofence_margin_m = 20.0    # m, 구역 밖 허용 폭
+battery_reserve_pct = 15.0  # %, 이 아래면 복귀
+battery_check = false       # 데모: 배터리 부족 강제 복귀를 끈다(시뮬 배터리가 오래 연 탭에서 0 으로 들어오는 문제)
+max_flight_sec = 300.0      # s, 데모 길이
+
+[selector]
+allow_return_home = false   # 데모: 선택기는 복귀를 고르지 않는다(탐색 실패 시 search 재시작). 안전 감시 강제 복귀는 그대로

@@ -1,0 +1,25 @@
+[project]
+name = "wavepilot-llm"
+version = "0.1.0"
+description = "LLM overwatch drone: interfaces, mocks, LLM module"
+requires-python = ">=3.12,<3.13"
+dependencies = []
+
+[dependency-groups]
+dev = ["pytest>=9"]
+yolo = ["ultralytics>=8.3", "lap>=0.5.12"]
+compare = ["playwright>=1.47"]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = [
+    "llm: needs a running llama-server (set LLAMA_SERVER_URL)",
+    "e2e: spawns operator and drone processes",
+    "yolo: needs ultralytics + yolo11n weights (network on first run)",
+    "d1: needs a running d1-3B llama-server (set D1_SERVER_URL)",
+]
+addopts = "-m 'not llm and not e2e and not yolo and not d1'"
