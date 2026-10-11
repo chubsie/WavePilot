@@ -13,7 +13,10 @@ export function createHeartTexture() {
   gradient.addColorStop(0, '#ff9ec4'); gradient.addColorStop(1, '#e8174f');
   ctx.fillStyle = gradient; ctx.fill();
   ctx.lineWidth = 4; ctx.strokeStyle = '#fff'; ctx.stroke();
-  return new THREE.CanvasTexture(canvas);
+  const texture = new THREE.CanvasTexture(canvas);
+  // The renderer outputs sRGB; without this the main-branch pinks wash out.
+  texture.encoding = THREE.sRGBEncoding;
+  return texture;
 }
 
 export class HeartBeam {
