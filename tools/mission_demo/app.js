@@ -3,6 +3,9 @@ import { AnalysisEngine } from "./analysis.js";
 import { DroneWorld } from "./world.js";
 import { TestFlight, COURSE } from './test-flight.js';
 
+// TODO: 임시 — 장갑 수동(IMU)·산악 코스에서 비행 키를 누르는 동안은 키보드가 우선한다. 장갑 검증 끝나면 false로.
+const ALLOW_KEYBOARD_OVERRIDE = true;
+
 const $ = (id) => document.getElementById(id);
 const startedAt = performance.now();
 let mode = "keyboard";
@@ -165,7 +168,10 @@ function frame(now) {
   lastTracks = mode==='test'?[]:analysis.tracks((now-startedAt)/1000);
   world.syncTargets(lastTracks);
   const visibleTracks = lastTracks.filter(t => world.canObserve(t.position));
-  const input = mode==='test'?(glove.link?glove.sample():keyboard.sample()):mode === "auto" ? autopilot.sample(telemetry.position, world.heading, visibleTracks, now)
+  // AI/AUTO keep their original path; keys there already hand control back via onTakeover.
+  const keyboardOverride = ALLOW_KEYBOARD_OVERRIDE && keyboard.isActive() && (mode === 'imu' || mode === 'test');
+  const input = keyboardOverride ? keyboard.sample()
+    : mode==='test'?(glove.link?glove.sample():keyboard.sample()):mode === "auto" ? autopilot.sample(telemetry.position, world.heading, visibleTracks, now)
     : mode === 'ai' ? {...glove.mapped(),source:'ai'} : mode === "imu" ? glove.sample() : keyboard.sample();
   world.flashHeld = keyFlash || (auxHeld && glove.sample().source !== 'imu-stale');
   if (world.update(input, delta)) {
@@ -242,10 +248,10 @@ for(const id of ['invRoll','invPitch','invYaw','swapRP']) {
 }
 window.addEventListener('keydown',event=>{
   if(event.target.matches('input,textarea,select') || event.repeat) return;
-  if(event.key.toLowerCase()==='m') toggleMainMode();
-  if(event.key.toLowerCase()==='l') keyFlash=true;
+  if(event.code==='KeyM') toggleMainMode();
+  if(event.code==='KeyL') keyFlash=true;
 });
-window.addEventListener('keyup',event=>{if(event.key.toLowerCase()==='l') keyFlash=false;});
+window.addEventListener('keyup',event=>{if(event.code==='KeyL') keyFlash=false;});
 window.addEventListener('blur',()=>{keyFlash=false;});
 setInterval(()=>{glove.hz=glove.packetCount;glove.packetCount=0;},1000);
 $("reset-flight").addEventListener("click", () => { if(mode==='test'){startTest();return;}world.reset(); autopilot.reset(); blockedUntil = 0; });

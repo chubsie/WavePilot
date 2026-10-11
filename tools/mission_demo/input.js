@@ -4,14 +4,21 @@ export class KeyboardInput {
   constructor(onTakeover = () => {}) {
     this.keys = new Set();
     this.onTakeover = onTakeover;
+    // event.code is the physical key, so WASD still works while a Korean IME is active (event.key would be 'ㅈ').
+    const keyOf = (event) => event.code?.startsWith("Key") ? event.code.slice(3).toLowerCase() : event.key.toLowerCase();
     window.addEventListener("keydown", (event) => {
-      if (["w", "a", "s", "d", "q", "e", "r", "f"].includes(event.key.toLowerCase())) {
-        this.keys.add(event.key.toLowerCase());
+      const key = keyOf(event);
+      if (["w", "a", "s", "d", "q", "e", "r", "f"].includes(key)) {
+        this.keys.add(key);
         this.onTakeover();
       }
     });
-    window.addEventListener("keyup", (event) => this.keys.delete(event.key.toLowerCase()));
+    window.addEventListener("keyup", (event) => this.keys.delete(keyOf(event)));
     window.addEventListener("blur", () => this.keys.clear());
+  }
+
+  isActive() {
+    return this.keys.size > 0;
   }
 
   sample() {
