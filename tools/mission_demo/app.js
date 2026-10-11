@@ -1,6 +1,7 @@
 import { KeyboardInput, GloveInput, AutoPilotInput } from "./input.js";
 import { AnalysisEngine } from "./analysis.js";
 import { DroneWorld } from "./world.js";
+import { TestFlight, COURSE } from './test-flight.js';
 
 const $ = (id) => document.getElementById(id);
 const startedAt = performance.now();
@@ -30,13 +31,34 @@ const glove = new GloveInput({
 });
 const autopilot = new AutoPilotInput();
 const analysis = new AnalysisEngine(renderReportState);
+const testFlight=new TestFlight();
+
+function startTest(){
+  if(world.loading)return;
+  world.setTraining(true);
+  autopilot.reset();blockedUntil=0;testFlight.start();setMode('test');
+  clearTimeout(analysis.timer);analysis.pending=false;initialReportRequested=false;
+  $('report-content').textContent='Mountain course · Manual flight';
+}
 
 function setMode(next) {
+  if(mode==='test' && next!=='test'){
+    world.setTraining(false);
+    clearTimeout(analysis.timer);analysis.pending=false;initialReportRequested=false;
+    $('report-content').textContent='Checking camera view';
+  }
   if (next !== mode) autopilot.resetObservation();
   mode = next;
-  document.querySelector('.compact-flex').hidden = mode === 'ai' || mode === 'auto';
-  for (const id of ['flex-bent', 'flex-flat']) $(id).hidden = mode === 'ai' || mode === 'auto';
-  $('flight-mode-text').textContent = mode === 'ai' ? 'AI · CIRCLE' : mode === 'auto' ? 'AUTO · OBSERVE' : 'MANUAL';
+  world.testCourse.visible=mode==='test';
+  $('test-hud').hidden=mode!=='test';
+  for(const id of ['normal-tab','participate-tab']){
+    const selected=(id==='participate-tab')===(mode==='test');
+    $(id).setAttribute('aria-selected',String(selected));$(id).tabIndex=selected?0:-1;
+  }
+  $('mode-screen').setAttribute('aria-labelledby',mode==='test'?'participate-tab':'normal-tab');
+  document.querySelector('.compact-flex').hidden = ['ai','auto'].includes(mode);
+  for (const id of ['flex-bent', 'flex-flat']) $(id).hidden = ['ai','auto'].includes(mode);
+  $('flight-mode-text').textContent = mode==='test'?'MANUAL':mode === 'ai' ? 'AI · CIRCLE' : mode === 'auto' ? 'AUTO · OBSERVE' : 'MANUAL';
   $('flight-mode-badge').classList.toggle('automatic',mode==='ai'||mode==='auto');
   $('observation-toggle').textContent=mode==='auto'?'Manual control':'Start observation';
   $('main-mode-toggle').textContent=mode==='ai'?'Mode: AI (circling)':'Mode: Manual';
@@ -45,7 +67,7 @@ function setMode(next) {
   $("flight-hint").textContent = '';
 }
 
-function toggleMainMode() { setMode(mode === 'ai' ? (glove.link?'imu':'keyboard') : 'ai'); }
+function toggleMainMode() { if(mode!=='test')setMode(mode === 'ai' ? (glove.link?'imu':'keyboard') : 'ai'); }
 
 function connectionNotice(message) {
   $('glove-status').textContent=message;
@@ -62,7 +84,7 @@ function renderTracks(tracks, visibleTracks) {
     list.innerHTML = tracks.map((track, index) => `
     <article class="detection-card" style="animation-delay:${index*55}ms">
       <span class="detection-id">${track.id}</span>
-      <div class="detection-main"><b>${track.kind==='PERSON'?'Person':'Vehicle'}</b><span></span></div>
+      <div class="detection-main"><b>${track.clothing?`${track.clothing} · Person`:track.kind==='PERSON'?'Person':'Vehicle'}</b><span></span></div>
       <div class="detection-side"><b></b><small>DISTANCE</small></div>
     </article>`).join("");
   }
@@ -83,7 +105,7 @@ function renderTracks(tracks, visibleTracks) {
       box.innerHTML = `<span class="target-label"></span><span class="target-distance"></span>`; overlay.appendChild(box);
     }
     box.style.cssText = `left:${screen.x-screen.width/2}px;top:${screen.y-screen.height/2}px;width:${screen.width}px;height:${screen.height}px`;
-    box.querySelector(".target-label").textContent = `${track.id} / ${track.kind} ${track.confidence}`;
+    box.querySelector(".target-label").textContent = `${track.id} / ${track.clothing?track.clothing.toUpperCase():track.kind} ${track.confidence}`;
     box.querySelector(".target-distance").textContent = `${screen.distance.toFixed(1)} M`;
   });
   overlay.querySelectorAll(".target-box").forEach((box) => { if (!visibleIds.has(box.dataset.track)) box.remove(); });
@@ -140,10 +162,10 @@ function drawSensorChart() {
 function frame(now) {
   const delta = Math.min((now-lastFrame)/1000, .05); lastFrame = now;
   const telemetry = world.telemetry();
-  lastTracks = analysis.tracks((now-startedAt)/1000);
+  lastTracks = mode==='test'?[]:analysis.tracks((now-startedAt)/1000);
   world.syncTargets(lastTracks);
   const visibleTracks = lastTracks.filter(t => world.canObserve(t.position));
-  const input = mode === "auto" ? autopilot.sample(telemetry.position, world.heading, visibleTracks, now)
+  const input = mode==='test'?(glove.link?glove.sample():keyboard.sample()):mode === "auto" ? autopilot.sample(telemetry.position, world.heading, visibleTracks, now)
     : mode === 'ai' ? {...glove.mapped(),source:'ai'} : mode === "imu" ? glove.sample() : keyboard.sample();
   world.flashHeld = keyFlash || (auxHeld && glove.sample().source !== 'imu-stale');
   if (world.update(input, delta)) {
@@ -164,6 +186,19 @@ function frame(now) {
   reportContext={altitude:current.altitude,speed:current.speed,mode:$('flight-mode-text').textContent};
   renderTracks(reportTracks, reportTracks);
   drawSensorChart();
+  if(mode==='test'){
+    testFlight.update(world.camera.position.toArray(),now);
+    const seconds=testFlight.elapsed;
+    const time=`${String(Math.floor(seconds/60)).padStart(2,'0')}:${(seconds%60).toFixed(1).padStart(4,'0')}`;
+    $('test-state').textContent=testFlight.state==='FLYING'?`NEXT RING ${testFlight.index+1} / 10`:testFlight.state==='READY'?'PASS RING 1 TO START':testFlight.state;
+    $('test-score').textContent=`${testFlight.passed.size} / ${COURSE.length}`;
+    $('test-time').textContent=time;
+    $('test-result').textContent=testFlight.state==='COMPLETE'?`SUCCESS · ${COURSE.length} rings in ${time}`:'';
+    for(const ring of world.testCourse.children){
+      const color=testFlight.passed.has(ring.userData.index)?0x627346:ring.userData.index===testFlight.index?0xc9ef58:0xe7b94d;
+      ring.material.color.setHex(color);ring.material.emissive.setHex(color);
+    }
+  }
   const seconds = Math.floor((now-startedAt)/1000);
   if (seconds >= 2) { analysis.requestReport(reportTracks, !initialReportRequested, reportContext); initialReportRequested = true; }
   requestAnimationFrame(frame);
@@ -188,7 +223,7 @@ async function connectGlove(kind) {
   if (glove.link?.kind === kind) { await glove.disconnect(); return; }
   connecting = true;
   connectionNotice('');
-  try { await glove.connect(kind); setMode('imu'); }
+  try { await glove.connect(kind); if(mode!=='test')setMode('imu'); }
   catch (error) {
     connectionNotice(error.name === 'NotFoundError' ? '' : `Connection failed: ${error.message}`);
   } finally { connecting = false; }
@@ -213,7 +248,16 @@ window.addEventListener('keydown',event=>{
 window.addEventListener('keyup',event=>{if(event.key.toLowerCase()==='l') keyFlash=false;});
 window.addEventListener('blur',()=>{keyFlash=false;});
 setInterval(()=>{glove.hz=glove.packetCount;glove.packetCount=0;},1000);
-$("reset-flight").addEventListener("click", () => { world.reset(); autopilot.reset(); blockedUntil = 0; });
+$("reset-flight").addEventListener("click", () => { if(mode==='test'){startTest();return;}world.reset(); autopilot.reset(); blockedUntil = 0; });
+$('normal-tab').addEventListener('click',()=>{if(mode==='test')setMode(glove.link?'imu':'keyboard');});
+$('participate-tab').addEventListener('click',()=>{if(mode!=='test')startTest();});
+document.querySelector('.experience-tabs').addEventListener('keydown',event=>{
+  if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;
+  event.preventDefault();
+  const id=event.key==='Home'?'normal-tab':event.key==='End'?'participate-tab':event.target.id==='normal-tab'?'participate-tab':'normal-tab';
+  $(id).click();$(id).focus();
+});
+$('test-restart').addEventListener('click',startTest);
 
 world.setQuality("cinematic");
 await world.loadEnvironment();

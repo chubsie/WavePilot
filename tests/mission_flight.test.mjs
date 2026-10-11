@@ -6,6 +6,8 @@ import { resolveMovement, sphereIntersectsAabb } from '../tools/mission_demo/col
 import { AutoPilotInput, GloveInput } from '../tools/mission_demo/input.js';
 import { AnalysisEngine } from '../tools/mission_demo/analysis.js';
 import { PEOPLE } from '../tools/mission_demo/population.js';
+import { TestFlight, COURSE, NORMALS, TEST_START } from '../tools/mission_demo/test-flight.js';
+import { terrainHeight } from '../tools/mission_demo/mountain-course.js';
 const require = createRequire(import.meta.url);
 const T = require('../tools/visualizer/three.min.js');
 globalThis.window = { THREE: T };
@@ -85,7 +87,7 @@ test('added people use matching scene and tracking positions and remain stationa
   world.environment.add(body);
   world.addPeople();
   const engine=new AnalysisEngine(()=>{}), tracks=engine.tracks(0);
-  for(const person of PEOPLE) {
+  for(const person of PEOPLE.filter(person=>!person.route)) {
     const model=world.environment.getObjectByName(`Person_${person.id}`);
     assert.equal(model.children.length,1);
     assert.deepEqual(model.position.toArray(),person.feet);
@@ -95,6 +97,21 @@ test('added people use matching scene and tracking positions and remain stationa
   }
   world.syncTargets(tracks);
   assert.equal(world.environment.getObjectByName('Person_T-11').position.y,20.66);
+});
+
+test('red and blue walkers move on clear routes with separate clothing and matching reports',()=>{
+  const engine=new AnalysisEngine(()=>{}),boxes=urbanBoxes();
+  for(const person of PEOPLE.filter(p=>p.route)){
+    const first=engine.tracks(0).find(t=>t.id===person.id);
+    const later=engine.tracks(10).find(t=>t.id===person.id);
+    assert.notDeepEqual(first.position,later.position);
+    assert.equal(later.clothing,person.clothing);
+    for(let time=0;time<100;time+=.5){
+      const t=engine.tracks(time).find(t=>t.id===person.id);
+      assert.ok(!boxes.some(box=>sphereIntersectsAabb(t.position,.4,box)),`walker ${person.id} intersects a wall`);
+    }
+    assert.ok(engine.buildReport([later]).some(line=>line.text.includes(`in ${person.clothing.toLowerCase()} · Walking`)));
+  }
 });
 
 test('IMU 50% throttle hovers; full throttle accelerates upward with main gravity and drag', () => {
@@ -312,4 +329,29 @@ test('urban AUTO completes a loop without collision against actual GLB proxies a
     assert.equal(world.update(input, 1 / 60), false, `blocked at frame ${frame}, waypoint ${pilot.index}`);
   }
   assert.equal(visited.size,pilot.route.length);
+});
+
+test('manual mountain course scores rotated rings in order and freezes the completed timer',()=>{
+  const challenge=new TestFlight();
+  challenge.update(TEST_START,5000);assert.equal(challenge.elapsed,0);
+  for(let i=0;i<COURSE.length;i++){
+    const c=COURSE[i],n=NORMALS[i];
+    challenge.previous=c.map((v,j)=>v-n[j]*2);
+    challenge.update(c.map((v,j)=>v+n[j]*2),10000+i*1000);
+    assert.equal(challenge.passed.size,i+1);
+  }
+  assert.equal(challenge.state,'COMPLETE');assert.equal(challenge.elapsed,9);
+  challenge.update(TEST_START,999999);assert.equal(challenge.elapsed,9);
+  challenge.start();assert.equal(challenge.index,0);assert.equal(challenge.elapsed,0);
+});
+
+test('mountain training stays still without input and terrain stops low flight into hills',()=>{
+  const world=flightWorld();world.training=true;world.reset();
+  const rest={source:'keyboard',roll:0,pitch:0,yaw:0,throttle:0};
+  for(let i=0;i<120;i++)world.update(rest,1/60);
+  assert.deepEqual(world.camera.position.toArray(),TEST_START);
+  const hit=resolveMovement(TEST_START,[100,0,0],.7,[],2,terrainHeight);
+  assert.equal(hit.blocked,true);
+  assert.ok(hit.position[1]>=terrainHeight(hit.position[0],hit.position[2])+.7-1e-6);
+  for(const ring of COURSE)assert.ok(ring[1]-4>terrainHeight(ring[0],ring[2]));
 });
