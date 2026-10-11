@@ -95,6 +95,14 @@ python3 -m http.server 8000
 
 Then open `http://localhost:8000/tools/mission_demo/` in Chrome or Edge. Use **WASD** to move, **Q/E** to turn and **R/F** to change altitude. `AUTO` patrols the street, approaches a visible track after one second of stable identification, and observes from about 14 m horizontal distance. Occlusion or lost detection stops movement immediately; collision stops the approach. Any manual key input returns control to the keyboard. Reset restores a verified clear spawn and restarts the patrol route.
 
+To drive the page with the real Python YOLO pipeline (no operator console needed), run from the repository root:
+
+```bash
+uv run --group yolo python -m modules.drone.run_scenario --sim browser --operator browser --backend fake --report-interval-sec 3
+```
+
+Then open `http://127.0.0.1:8766/mission_demo/`. The simulator server serves `tools/mission_demo` there, runs YOLO (`models/yolo11n.pt`) on the page's frames and returns detections, state and LLM reports through `/sim/telemetry`. `--report-interval-sec 3` keeps reports frequent enough for the demo.
+
 The glove behavior is ported from chubsie/main, including the `5e5c255` heart-beam update (flight behavior from `56d963d`); `tools/visualizer/index.html` and the glove firmware preserve the fetched main implementation. Click **USB 연결** for Web Serial or **Bluetooth 연결** for Nordic UART Bluetooth. Clicking `IMU` while disconnected also requests the USB picker. The original `G,seq,roll,pitch,yaw_rate,flex0,flex1,buttons` stream drives the visible drone and flight physics:
 
 - Yaw integrates sequence gaps at 0.02 s/sample (capped at 50 steps, backwards/reset sequence contributes zero), with the original 1°/s deadband. The integrated angle drives heading; attitude smooths by 0.35 each frame. Physical roll/pitch are not capped at 30°.
