@@ -53,7 +53,8 @@ export class DroneWorld {
     this.scene = new THREE.Scene();
     this.testCourse=createCourse(THREE);
     this.scene.add(this.testCourse);
-    this.camera = new THREE.PerspectiveCamera(68, 1, 0.1, 320);
+    // FPV = YOLO 입력. Python DEFAULT_CAMERA(수평 90°, 16:9 → 세로 58.72°)와 맞춰 표적 투영이 어긋나지 않고 사람도 덜 작게 잡힌다
+    this.camera = new THREE.PerspectiveCamera(58.72, 1, 0.1, 320);
     this.camera.rotation.order = "YXZ";
     this.chaseCamera = new THREE.PerspectiveCamera(60, 1, .1, 320);
     const model = createDrone();
