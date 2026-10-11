@@ -219,14 +219,15 @@ function updateYoloPanel() {
   if (!link) return;
   if (mode !== 'test') {
     for (const frame of link.state.detectionLog) {
-      if (yoloLog.addFrame(frame, frame.latency_ms)) yoloFrameTimes.push(performance.now());
+      if (yoloLog.addFrame(frame, frame.latency_ms, performance.now())) yoloFrameTimes.push(performance.now());
     }
   }
   while (yoloFrameTimes.length && performance.now() - yoloFrameTimes[0] > YOLO_FPS_WINDOW_MS) yoloFrameTimes.shift();
   $("yolo-fps").textContent = String(yoloFrameTimes.length);
   const pipeline = link.state.pipeline || {};
-  yoloLog.addState(pipeline.state);
-  yoloLog.addReport(pipeline.report);
+  yoloLog.addState(pipeline.state, performance.now());
+  yoloLog.addReport(pipeline.report, performance.now());
+  yoloLog.prune(performance.now());
   yoloView.render(yoloLog.entries);
 }
 

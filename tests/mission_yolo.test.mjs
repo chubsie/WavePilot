@@ -105,3 +105,17 @@ test('object category gives each class its own FPV box color key', () => {
   assert.equal(getObjectCategory('VEHICLE'), 'car', 'fallback vehicle tracks use the car color');
   assert.equal(getObjectCategory('traffic light'), 'object');
 });
+
+test('every log entry expires after its TTL and stale frames are not re-added', () => {
+  const log = createYoloLog({ ttlMs: 1000 });
+  const frameAt = (id, sec) => ({ ...frameOf(id, [person]), timestamp_sec: sec });
+  log.addFrame(frameAt(1, 0), 10, 0);
+  log.addState({ seq: 1, payload: statePayload }, 500);
+  log.addReport({ seq: 1, payload: reportPayload }, 900);
+  log.prune(1200);
+  assert.deepEqual(log.entries.map((entry) => entry.key), ['report-1', 'state-1'], 'frame expired first');
+  assert.equal(log.addFrame(frameAt(1, 0), 10, 1200), null, 'expired frame resent by the server stays out');
+  log.prune(2000);
+  assert.deepEqual(log.entries, [], 'state and report expire too');
+  assert.equal(log.addState({ seq: 1, payload: statePayload }, 2000), null, 'same seq is not logged again after expiry');
+});

@@ -1,7 +1,8 @@
 // YOLO log: 브라우저 프레임 → Python YOLO 탐지 → state JSON → 보고 문장 흐름을 오른쪽 패널에 보여준다.
 // 위쪽은 순수 함수(node 테스트 대상), 아래 createYoloLogView 만 DOM 을 만진다. 서버 문자열은 textContent 로만 넣는다.
 
-export const MAX_LOG_ENTRIES = 150;  // 30 fps 로 약 5 초치
+export const MAX_LOG_ENTRIES = 150;  // TTL 안에서도 폭주하지 않게 거는 상한
+export const LOG_TTL_MS = 10000;     // 모든 로그 항목(FRAME·STATE·REPORT)은 10 초 뒤 사라진다
 
 // ---------- 포맷 ----------
 const hasTrackId = (detection) => detection.track_id !== null && detection.track_id !== undefined;
@@ -81,33 +82,42 @@ export function reportSentences(payload) {
 }
 
 // ---------- 로그 모델 (최신이 앞) ----------
-export function createYoloLog({ maxEntries = MAX_LOG_ENTRIES } = {}) {
+export function createYoloLog({ maxEntries = MAX_LOG_ENTRIES, ttlMs = LOG_TTL_MS } = {}) {
   const entries = [];
   const seenFrameIds = new Set();
   let lastStateSeq = null, lastReportSeq = null;
 
-  function push(entry) {
-    entries.unshift(entry);
-    while (entries.length > maxEntries) {
-      const dropped = entries.pop();
-      if (dropped.kind === 'frame') seenFrameIds.delete(dropped.frame.frame_id);
-    }
-    return entry;
+  function dropOldest() {
+    const dropped = entries.pop();
+    if (dropped.kind === 'frame') seenFrameIds.delete(dropped.frame.frame_id);
   }
 
-  // YOLO 가 낸 프레임마다 한 줄 — 폴링마다 최근 결과가 겹쳐 오므로 frame_id 로만 중복을 거른다
-  function addFrame(frame, latencyMs) {
+  function push(entry, nowMs) {
+    entries.unshift({ ...entry, atMs: nowMs });
+    while (entries.length > maxEntries) dropOldest();
+    return entries[0];
+  }
+
+  // 최신이 앞이므로 뒤에서부터 TTL 지난 항목을 버린다
+  function prune(nowMs) {
+    while (entries.length && nowMs - entries[entries.length - 1].atMs > ttlMs) dropOldest();
+  }
+
+  // YOLO 가 낸 프레임마다 한 줄 — 폴링마다 최근 결과가 겹쳐 오므로 frame_id 로 중복을 거른다.
+  // timestamp_sec 은 페이지가 보낸 performance.now() 초라, TTL 이 지난 옛 프레임은 다시 들이지 않는다
+  function addFrame(frame, latencyMs, nowMs) {
     if (!frame || seenFrameIds.has(frame.frame_id)) return null;
+    if (Number.isFinite(frame.timestamp_sec) && nowMs - frame.timestamp_sec * 1000 > ttlMs) return null;
 
     seenFrameIds.add(frame.frame_id);
     return push({
       kind: 'frame', key: `frame-${frame.frame_id}`, seq: frame.seq, frame,
       header: formatFrameHeader(frame, latencyMs),
       lines: (frame.detections || []).map(formatDetectionLine),
-    });
+    }, nowMs);
   }
 
-  function addState(pipelineState) {
+  function addState(pipelineState, nowMs) {
     if (!pipelineState || !pipelineState.payload || pipelineState.seq === lastStateSeq) return null;
     lastStateSeq = pipelineState.seq;
     const state = pipelineState.payload;
@@ -116,10 +126,10 @@ export function createYoloLog({ maxEntries = MAX_LOG_ENTRIES } = {}) {
       header: summarizeState(state),
       lines: (state.tracks || []).map(formatTrackLine),
       json: JSON.stringify(state, null, 2),
-    });
+    }, nowMs);
   }
 
-  function addReport(pipelineReport) {
+  function addReport(pipelineReport, nowMs) {
     if (!pipelineReport || !pipelineReport.payload || pipelineReport.seq === lastReportSeq) return null;
     lastReportSeq = pipelineReport.seq;
     const payload = pipelineReport.payload;
@@ -128,10 +138,10 @@ export function createYoloLog({ maxEntries = MAX_LOG_ENTRIES } = {}) {
       header: formatReportHeader(payload),
       sentences: reportSentences(payload),
       error: payload.report_error ? String(payload.report_error) : null,
-    });
+    }, nowMs);
   }
 
-  return { entries, addFrame, addState, addReport };
+  return { entries, addFrame, addState, addReport, prune };
 }
 
 // ---------- DOM ----------

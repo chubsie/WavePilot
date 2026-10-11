@@ -12,7 +12,13 @@ import pytest
 from modules.comm.interface import CommLink, Message
 from modules.drone import run_scenario
 from modules.flight_control.interface import Telemetry
-from modules.simulation.browser.bridge import DETECTION_LOG_SIZE, BrowserFrame, SimBridge
+from modules.simulation.browser.bridge import (
+    DETECTION_LOG_SIZE,
+    DETECTION_LOG_TTL_SEC,
+    PIPELINE_MESSAGE_TTL_SEC,
+    BrowserFrame,
+    SimBridge,
+)
 from modules.simulation.browser.comm_link import BridgeCommLink
 from modules.simulation.browser.detection_source import BrowserDetectionSource
 from modules.simulation.browser.server import start_sim_server
@@ -267,6 +273,20 @@ def test_pipeline_messages_returns_copies() -> None:
     bridge.pipeline_messages()["state"]["seq"] = 99
 
     assert bridge.pipeline_messages()["state"] == {"seq": 1}
+
+
+def test_detection_log_and_pipeline_messages_expire_after_ttl() -> None:
+    now_sec = [100.0]
+    bridge = SimBridge(clock=lambda: now_sec[0])
+    bridge.publish_detections({"frame_id": 1, "detections": []}, 9.0, seq=5)
+    bridge.publish_pipeline_message("state", {"seq": 1})
+
+    now_sec[0] += DETECTION_LOG_TTL_SEC + 0.1
+    assert bridge.recent_detections() == []
+    assert bridge.pipeline_messages()["state"] == {"seq": 1}
+
+    now_sec[0] += PIPELINE_MESSAGE_TTL_SEC
+    assert bridge.pipeline_messages() == {"state": None, "report": None}
 
 
 # --- A4 run_scenario --operator ---
