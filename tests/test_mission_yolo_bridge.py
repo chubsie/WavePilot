@@ -12,7 +12,13 @@ import pytest
 from modules.comm.interface import CommLink, Message
 from modules.drone import run_scenario
 from modules.flight_control.interface import Telemetry
-from modules.simulation.browser.bridge import BrowserFrame, SimBridge
+from modules.simulation.browser.bridge import (
+    DETECTION_LOG_SIZE,
+    DETECTION_LOG_TTL_SEC,
+    PIPELINE_MESSAGE_TTL_SEC,
+    BrowserFrame,
+    SimBridge,
+)
 from modules.simulation.browser.comm_link import BridgeCommLink
 from modules.simulation.browser.detection_source import BrowserDetectionSource
 from modules.simulation.browser.server import start_sim_server
@@ -176,6 +182,28 @@ def test_detections_without_seq_are_sent_unchanged(sim_server) -> None:
     assert response["detections"] == detections
 
 
+def test_detection_log_carries_every_recent_yolo_frame_oldest_first(sim_server) -> None:
+    bridge, port = sim_server
+    for frame_id in range(DETECTION_LOG_SIZE + 5):
+        bridge.publish_detections({"frame_id": frame_id, "detections": []}, 8.0 + frame_id, seq=100 + frame_id)
+
+    log = post_telemetry(port)["detection_log"]
+
+    assert [entry["frame_id"] for entry in log] == list(range(5, DETECTION_LOG_SIZE + 5))
+    assert log[-1]["seq"] == 100 + DETECTION_LOG_SIZE + 4
+    assert log[-1]["latency_ms"] == 8.0 + DETECTION_LOG_SIZE + 4
+
+
+def test_static_files_are_not_heuristically_cached(sim_server) -> None:
+    _, port = sim_server
+
+    _, static_headers, _ = request(port, "GET", "/mission_demo/app.js")
+    _, api_headers, _ = request(port, "POST", "/sim/telemetry", body=json.dumps(_make_telemetry_post()).encode(), headers={"Content-Type": "application/json"})
+
+    assert static_headers["cache-control"] == "no-cache"
+    assert api_headers["cache-control"] == "no-store"
+
+
 # --- A3 BridgeCommLink → pipeline 필드 ---
 
 
@@ -188,8 +216,8 @@ def test_telemetry_response_has_empty_pipeline_before_any_message(sim_server) ->
 
     response = post_telemetry(port)
 
-    assert response["pipeline"] == {"state": None, "report": None}
-    assert set(response) == {"commands", "detections", "status", "mission", "pipeline"}
+    assert response["pipeline"] == {"state": None, "report": None, "selection": None, "mode_end": None}
+    assert set(response) == {"commands", "detections", "status", "mission", "pipeline", "detection_log"}
     assert set(response["status"]) == {"frame_fps", "yolo_latency_ms"}
 
 
@@ -205,6 +233,8 @@ def test_bridge_comm_link_sends_latest_state_and_report_to_page(sim_server) -> N
     assert response["pipeline"] == {
         "state": {"seq": 2, "sent_at": SENT_AT, "payload": {"kind": "state"}},
         "report": {"seq": 3, "sent_at": SENT_AT, "payload": {"kind": "report"}},
+        "selection": None,
+        "mode_end": None,
     }
 
 
@@ -214,7 +244,7 @@ def test_bridge_comm_link_drops_telemetry_messages() -> None:
 
     link.send(_make_message("telemetry"))
 
-    assert bridge.pipeline_messages() == {"state": None, "report": None}
+    assert bridge.pipeline_messages() == {"state": None, "report": None, "selection": None, "mode_end": None}
 
 
 def test_bridge_comm_link_receive_never_blocks_and_status_follows_bridge(sim_server) -> None:
@@ -245,6 +275,20 @@ def test_pipeline_messages_returns_copies() -> None:
     bridge.pipeline_messages()["state"]["seq"] = 99
 
     assert bridge.pipeline_messages()["state"] == {"seq": 1}
+
+
+def test_detection_log_and_pipeline_messages_expire_after_ttl() -> None:
+    now_sec = [100.0]
+    bridge = SimBridge(clock=lambda: now_sec[0])
+    bridge.publish_detections({"frame_id": 1, "detections": []}, 9.0, seq=5)
+    bridge.publish_pipeline_message("state", {"seq": 1})
+
+    now_sec[0] += DETECTION_LOG_TTL_SEC + 0.1
+    assert bridge.recent_detections() == []
+    assert bridge.pipeline_messages()["state"] == {"seq": 1}
+
+    now_sec[0] += PIPELINE_MESSAGE_TTL_SEC
+    assert bridge.pipeline_messages() == {"state": None, "report": None, "selection": None, "mode_end": None}
 
 
 # --- A4 run_scenario --operator ---

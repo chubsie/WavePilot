@@ -90,7 +90,7 @@ test('added people use matching scene and tracking positions and remain stationa
   const engine=new AnalysisEngine(()=>{}), tracks=engine.tracks(0);
   for(const person of PEOPLE.filter(person=>!person.route)) {
     const model=world.environment.getObjectByName(`Person_${person.id}`);
-    assert.equal(model.children.length,1);
+    assert.ok(model.children.length>1, 'static people are procedural humanoids, not the GLB Person_T03 clone');
     assert.deepEqual(model.position.toArray(),person.feet);
     const track=tracks.find(t=>t.id===person.id);
     assert.equal(track.position[1],person.feet[1]+1.7);

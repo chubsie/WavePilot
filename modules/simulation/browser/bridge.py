@@ -6,6 +6,7 @@
 - 명령은 큐에 쌓였다가 drain 한 번에 한 번만 배달된다(id 는 1 부터 단조 증가).
 - heart_shot 이벤트(발마다 맞은 배우, Phase 6 D-10)는 recent_events 와 별도 큐 — drain 한 번에 한 번만 나온다.
 - 파이프라인 state·report 는 종류별 최신 한 칸 — --operator browser 일 때 페이지가 /sim/telemetry 로 읽는다.
+- 선택기 selection·mode_end 도 같은 칸 방식 — run_mission --sim browser 가 넣고 mission_demo LLM Decisions 패널이 읽는다.
 
 페이로드 검증(Telemetry.from_dict, 크기 상한)은 HTTP 서버(02-02) 몫이다 — bridge 는 타입이 맞는 객체만 받는다.
 모든 상태는 Condition 하나(내부 Lock)로 보호하므로 서버 스레드·파이프라인 스레드가 동시에 불러도 된다.
@@ -25,7 +26,10 @@ RECENT_EVENT_LIMIT = 50
 HEART_SHOT_EVENT = "heart_shot"
 HEART_SHOT_LIMIT = 1000
 FRAME_FPS_WINDOW_SEC = 1.0
-PIPELINE_MESSAGE_KINDS = ("state", "report")
+PIPELINE_MESSAGE_KINDS = ("state", "report", "selection", "mode_end")
+DETECTION_LOG_SIZE = 30  # 페이지 폴링 한 번 사이에 YOLO 가 낸 결과를 빠짐없이 넘길 만큼
+DETECTION_LOG_TTL_SEC = 2.0  # 전달용 버퍼라 짧게 — YOLO 가 멈추면 옛 결과를 계속 보내지 않는다
+PIPELINE_MESSAGE_TTL_SEC = 10.0  # 보고 주기(기본 8 s)보다 조금 길게 — 파이프라인이 멈추면 state·report 도 사라진다
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,9 +66,10 @@ class SimBridge:
 
         self._detections: dict | None = None
         self._detections_seq: int | None = None
+        self._detection_log: deque[tuple[float, dict]] = deque(maxlen=DETECTION_LOG_SIZE)  # (발행 시각, 결과)
         self._yolo_latency_ms: float | None = None
 
-        self._pipeline_messages: dict[str, dict | None] = dict.fromkeys(PIPELINE_MESSAGE_KINDS)
+        self._pipeline_messages: dict[str, tuple[float, dict] | None] = dict.fromkeys(PIPELINE_MESSAGE_KINDS)  # (발행 시각, 항목)
 
     # --- 브라우저 → Python: 텔레메트리·AI 모드·이벤트 ---
 
@@ -213,6 +218,7 @@ class SimBridge:
             self._detections = frame_dict
             self._detections_seq = seq
             self._yolo_latency_ms = latency_ms
+            self._detection_log.append((self._clock(), {**frame_dict, "seq": seq, "latency_ms": latency_ms}))
 
     def latest_detections(self) -> dict | None:
         with self._condition:
@@ -225,21 +231,32 @@ class SimBridge:
                 return self._detections
             return {**self._detections, "seq": self._detections_seq}
 
+    def recent_detections(self) -> list[dict]:
+        """TTL 안의 최근 YOLO 결과(오래된 것부터) — 페이지가 frame_id 로 중복을 걸러 프레임마다 로그를 남긴다."""
+        with self._condition:
+            oldest_sec = self._clock() - DETECTION_LOG_TTL_SEC
+            return [dict(entry) for published_at_sec, entry in self._detection_log if published_at_sec >= oldest_sec]
+
     # --- Python → 브라우저: 파이프라인 state·report (운용자 콘솔 대신 페이지가 받는다) ---
 
     def publish_pipeline_message(self, kind: str, entry: dict) -> None:
-        """kind 별 최신 한 칸만 둔다 — 페이지는 10 Hz 폴링이라 지난 값은 필요 없다."""
+        """kind 별 최신 한 칸만 둔다 — 페이지는 폴링마다 최신값만 본다."""
         if kind not in PIPELINE_MESSAGE_KINDS:
             raise ValueError(f"kind must be one of {PIPELINE_MESSAGE_KINDS}, got {kind!r}")
         if not isinstance(entry, dict):
             raise TypeError(f"entry must be a dict, got {type(entry).__name__}")
 
         with self._condition:
-            self._pipeline_messages[kind] = dict(entry)
+            self._pipeline_messages[kind] = (self._clock(), dict(entry))
 
     def pipeline_messages(self) -> dict[str, dict | None]:
+        """kind 별 최신 항목. TTL 이 지났으면 None."""
         with self._condition:
-            return {kind: None if entry is None else dict(entry) for kind, entry in self._pipeline_messages.items()}
+            oldest_sec = self._clock() - PIPELINE_MESSAGE_TTL_SEC
+            return {
+                kind: None if stored is None or stored[0] < oldest_sec else dict(stored[1])
+                for kind, stored in self._pipeline_messages.items()
+            }
 
     def status(self) -> dict:
         with self._condition:

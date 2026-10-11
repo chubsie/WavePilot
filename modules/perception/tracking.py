@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 
 from modules.yolo_detection.interface.detection import Detection, Frame
 from modules.flight_control.interface.flight_control import Telemetry
-from modules.perception.interface.geometry import CameraIntrinsics
+from modules.perception.interface.geometry import CameraIntrinsics, get_frame_camera
 from modules.perception.interface.track import Track
 from modules.perception.projection import ground_anchor, pixel_to_ground
 
@@ -41,7 +41,9 @@ class _TrackState:
     def record(self, detection: Detection, ground: tuple[float, float], timestamp_sec: float) -> None:
         self.recent_positions.append(ground)
         self.recent_colors.append(detection.upper_color)
-        self.last_seen_sec = timestamp_sec
+        # 프레임이 늦게(더 이른 timestamp 로) 도착할 수 있다 — 관측은 버리지 않고 구간만 넓혀 first <= last 를 지킨다
+        self.first_seen_sec = min(self.first_seen_sec, timestamp_sec)
+        self.last_seen_sec = max(self.last_seen_sec, timestamp_sec)
         self.observation_count += 1
         self.confidence_sum += detection.confidence
 
@@ -112,13 +114,16 @@ class TrackAggregator:
         return self._dropped_horizon_count
 
     def update(self, frame: Frame, telemetry: Telemetry) -> None:
+        # xyxy 는 프레임 픽셀이다 — 프레임이 보정 해상도와 다르면(브라우저 640x360) 같은 화각으로 스케일한다
+        camera = get_frame_camera(self._camera, frame.image_width, frame.image_height)
+
         for detection in frame.detections:
             if detection.track_id is None:
                 self._dropped_untracked_count += 1
                 continue
 
             anchor_u, anchor_v = ground_anchor(detection.xyxy)
-            ground = pixel_to_ground(anchor_u, anchor_v, self._camera, telemetry)
+            ground = pixel_to_ground(anchor_u, anchor_v, camera, telemetry)
             if ground is None:
                 self._handle_horizon_drop(detection, frame)
                 continue
@@ -158,6 +163,7 @@ class TrackAggregator:
         if state is None:
             state = _TrackState(
                 first_seen_sec=timestamp_sec,
+                last_seen_sec=timestamp_sec,
                 recent_positions=deque(maxlen=self._position_window),
                 recent_colors=deque(maxlen=self._color_window),
             )

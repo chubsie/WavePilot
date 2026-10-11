@@ -60,6 +60,7 @@ class SafetyConfig:
     search_area: SearchArea
     geofence_margin_m: float = 20.0
     battery_reserve_pct: float = 15.0
+    battery_check: bool = True  # False 면 battery 사유로 복귀하지 않는다(시뮬 데모 전용 — 실기체는 켠다)
     max_flight_sec: float = 300.0
     home_north_m: float = 0.0
     home_east_m: float = 0.0
@@ -283,7 +284,7 @@ class SafetyMonitor:
             config.return_speed_mps,
             config.landing_time_sec,
         )
-        if telemetry.battery_pct <= required_pct:
+        if config.battery_check and telemetry.battery_pct <= required_pct:
             return SafetyVerdict(
                 REASON_BATTERY,
                 f"battery={telemetry.battery_pct:.1f} required={required_pct:.1f} drain={self._drain_pct_per_sec:.3f}",

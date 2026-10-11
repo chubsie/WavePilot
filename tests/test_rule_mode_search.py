@@ -4,15 +4,24 @@ import pytest
 
 from modules.decision.interface.state import ModeResult
 from modules.decision.params import ParamDefaults
-from modules.flight_control.interface import GoTo, TakeOff
+from modules.flight_control.interface import CommandAck, GoTo, SetGimbal, SetYaw, TakeOff
 from modules.perception.interface import Track
 from modules.rule_mode.interface import ModeTick, RuleMode, RuleModeSettings, SearchArea
-from modules.rule_mode.search import FOUND_STREAK_TICKS, SearchMode, build_zigzag_waypoints, get_patrol_length_m
+from modules.rule_mode.search import (
+    FOUND_STREAK_TICKS,
+    SCAN_GIMBAL_PITCH_DEG,
+    SCAN_STEP_COUNT,
+    SCAN_STEP_TIMEOUT_SEC,
+    SearchMode,
+    build_zigzag_waypoints,
+    get_patrol_length_m,
+)
 from modules.simulation.kinematic_flight import KinematicFlightControl
 
 TICK_SEC = 0.1
 DEFAULT_AREA = SearchArea(20.0, 120.0, -50.0, 50.0)
-PARAMS = {"timeout_sec": 120.0}
+PARAMS = {"timeout_sec": ParamDefaults().search_timeout_sec}
+HOME_POINT = GoTo(0.0, 0.0, 15.0)
 
 
 def _make_track(track_id: int, class_name: str = "person", is_active: bool = True) -> Track:
@@ -70,6 +79,25 @@ def _make_flight() -> KinematicFlightControl:
 
 def _get_goto_list(flight: KinematicFlightControl) -> list[GoTo]:
     return [command for _, command in flight.commands_received if isinstance(command, GoTo)]
+
+
+def _get_yaw_list(flight: KinematicFlightControl) -> list[float]:
+    return [command.yaw_deg for _, command in flight.commands_received if isinstance(command, SetYaw)]
+
+
+def _get_gimbal_list(flight: KinematicFlightControl) -> list[SetGimbal]:
+    return [command for _, command in flight.commands_received if isinstance(command, SetGimbal)]
+
+
+class _FrozenYawFlight(KinematicFlightControl):
+    """SetYaw 를 수락만 하고 돌지 않는 기체 — 스캔 단계 타임아웃 경로를 본다."""
+
+    def send_command(self, command) -> CommandAck:
+        if isinstance(command, SetYaw) and not self.reject_commands:
+            self._commands_received.append((self.now_sec, command))
+            return CommandAck(True, "frozen yaw")
+
+        return super().send_command(command)
 
 
 # --- build_zigzag_waypoints ---
@@ -175,11 +203,78 @@ def test_exhausting_area_without_target_fails_within_timeout():
     flight = _make_flight()
     mode = SearchMode(PARAMS, RuleModeSettings())
 
-    result, _, elapsed_sec = _run(mode, flight)
+    result, _, elapsed_sec = _run(mode, flight, max_ticks=2000)
 
+    scan_point_list = [HOME_POINT, *build_zigzag_waypoints(DEFAULT_AREA, 15.0, 25.0, 0.0, 0.0)]
     assert result == ModeResult("search", "failure", None)
-    assert _get_goto_list(flight) == list(build_zigzag_waypoints(DEFAULT_AREA, 15.0, 25.0, 0.0, 0.0))
-    assert elapsed_sec < 120.0
+    assert _get_goto_list(flight) == scan_point_list
+    assert len(_get_yaw_list(flight)) == SCAN_STEP_COUNT * len(scan_point_list)
+    assert elapsed_sec < ParamDefaults().search_timeout_sec
+
+
+def test_first_scan_hovers_at_current_position_and_turns_full_circle():
+    flight = _make_flight()
+    mode = SearchMode(PARAMS, RuleModeSettings())
+
+    # 첫 지점 스캔이 끝나 다음 지점으로 GoTo 가 나갈 때까지
+    for _ in range(100):
+        assert mode.step(_make_tick(flight), flight) is None
+        if len(_get_goto_list(flight)) == 2:
+            break
+        flight.advance(TICK_SEC)
+
+    assert _get_goto_list(flight)[0] == HOME_POINT
+    assert _get_gimbal_list(flight) == [SetGimbal(SCAN_GIMBAL_PITCH_DEG, 0.0)]
+    assert _get_yaw_list(flight) == [90.0, 180.0, -90.0, 0.0]
+    assert len(_get_goto_list(flight)) == 2
+
+
+def test_scan_starts_from_current_yaw_and_wraps():
+    flight = KinematicFlightControl(start_altitude_m=15.0, start_yaw_deg=135.0)
+    mode = SearchMode(PARAMS, RuleModeSettings())
+
+    for _ in range(100):
+        mode.step(_make_tick(flight), flight)
+        if len(_get_goto_list(flight)) == 2:
+            break
+        flight.advance(TICK_SEC)
+
+    assert _get_yaw_list(flight) == [-135.0, -45.0, 45.0, 135.0]
+
+
+def test_scan_step_times_out_when_yaw_does_not_move():
+    flight = _FrozenYawFlight(start_altitude_m=15.0)
+    mode = SearchMode(PARAMS, RuleModeSettings())
+
+    for _ in range(300):
+        mode.step(_make_tick(flight), flight)
+        if len(_get_goto_list(flight)) == 2:
+            break
+        flight.advance(TICK_SEC)
+
+    yaw_time_list = [time_sec for time_sec, command in flight.commands_received if isinstance(command, SetYaw)]
+    next_goto_sec = flight.commands_received[-1][0]
+    assert len(yaw_time_list) == SCAN_STEP_COUNT
+    step_sec_list = [later - earlier for earlier, later in zip(yaw_time_list, [*yaw_time_list[1:], next_goto_sec])]
+    # 0.1 s 누적 오차로 경계 tick 이 하나 밀릴 수 있다
+    assert all(
+        SCAN_STEP_TIMEOUT_SEC - 1e-6 <= step_sec <= SCAN_STEP_TIMEOUT_SEC + TICK_SEC + 1e-6
+        for step_sec in step_sec_list[:-1]
+    )
+    # 마지막 목표는 스캔 시작 heading 이라 돌지 않은 기체는 이미 도착해 있다
+    assert step_sec_list[-1] == pytest.approx(TICK_SEC)
+
+
+def test_target_seen_while_scanning_succeeds():
+    flight = _make_flight()
+    mode = SearchMode(PARAMS, RuleModeSettings())
+
+    # tick 2 는 첫 지점 스캔 한가운데 — 아직 다음 지점으로 출발하기 전
+    result, tick_index, _ = _run(mode, flight, tracks_at=lambda i: (_make_track(7),) if i >= 2 else ())
+
+    assert result == ModeResult("search", "success", "T7")
+    assert tick_index == 2 + FOUND_STREAK_TICKS - 1
+    assert _get_goto_list(flight) == [HOME_POINT]
 
 
 def test_target_seen_for_streak_succeeds_on_fifth_observation():
@@ -243,25 +338,40 @@ def test_rejected_first_command_fails_on_first_tick():
     assert tick_index == 0
 
 
-def test_rejected_later_command_fails():
+def test_rejected_scan_yaw_fails():
     flight = _make_flight()
     mode = SearchMode(PARAMS, RuleModeSettings())
     assert mode.step(_make_tick(flight), flight) is None
-    first_waypoint = build_zigzag_waypoints(DEFAULT_AREA, 15.0, 25.0, 0.0, 0.0)[0]
 
-    # 첫 웨이포인트 도착 직전까지 비행한 뒤 거부를 켠다
+    # 첫 SetYaw 이후 거부를 켜면 다음 스캔 단계 SetYaw 가 거부된다
+    flight.reject_commands = True
     result = None
-    for _ in range(1500):
-        telemetry = flight.get_telemetry()
-        if math.hypot(telemetry.north_m - first_waypoint.north_m, telemetry.east_m - first_waypoint.east_m) < 3.0:
-            flight.reject_commands = True
+    for _ in range(100):
         flight.advance(TICK_SEC)
         result = mode.step(_make_tick(flight), flight)
         if result is not None:
             break
 
     assert result == ModeResult("search", "failure", None)
-    assert len(_get_goto_list(flight)) == 1
+    assert len(_get_yaw_list(flight)) == 1
+
+
+def test_rejected_goto_to_next_point_fails():
+    flight = _make_flight()
+    mode = SearchMode(PARAMS, RuleModeSettings())
+
+    # 마지막 스캔 단계(4번째 SetYaw)가 나간 뒤 거부를 켠다 — 다음 지점 GoTo 가 거부된다
+    result = None
+    for _ in range(300):
+        result = mode.step(_make_tick(flight), flight)
+        if result is not None:
+            break
+        if len(_get_yaw_list(flight)) == SCAN_STEP_COUNT:
+            flight.reject_commands = True
+        flight.advance(TICK_SEC)
+
+    assert result == ModeResult("search", "failure", None)
+    assert _get_goto_list(flight) == [HOME_POINT]
 
 
 def test_step_after_finish_raises():

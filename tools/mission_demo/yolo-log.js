@@ -1,8 +1,8 @@
 // YOLO log: 브라우저 프레임 → Python YOLO 탐지 → state JSON → 보고 문장 흐름을 오른쪽 패널에 보여준다.
 // 위쪽은 순수 함수(node 테스트 대상), 아래 createYoloLogView 만 DOM 을 만진다. 서버 문자열은 textContent 로만 넣는다.
 
-export const MAX_LOG_ENTRIES = 30;
-export const FRAME_LOG_INTERVAL_MS = 1000;
+export const MAX_LOG_ENTRIES = 150;  // TTL 안에서도 폭주하지 않게 거는 상한
+export const LOG_TTL_MS = 10000;     // 모든 로그 항목(FRAME·STATE·REPORT)은 10 초 뒤 사라진다
 
 // ---------- 포맷 ----------
 const hasTrackId = (detection) => detection.track_id !== null && detection.track_id !== undefined;
@@ -16,9 +16,17 @@ export function scaleBox(xyxy, imageWidth, imageHeight, viewWidth, viewHeight) {
   return { left: x1 * scaleX, top: y1 * scaleY, width: (x2 - x1) * scaleX, height: (y2 - y1) * scaleY };
 }
 
+// FPV 박스 색 키 — 클래스마다 색을 조금씩 다르게. fallback 트랙의 VEHICLE 은 car 색, 모르는 클래스는 object
+const COLORED_CLASS_NAMES = new Set(['person', 'car', 'bus', 'truck']);
+export function getObjectCategory(className) {
+  const name = String(className).toLowerCase();
+  if (name === 'vehicle') return 'car';
+  return COLORED_CLASS_NAMES.has(name) ? name : 'object';
+}
+
+// FPV 네임 태그는 객체와 신뢰도만 — 트랙 번호·박스 좌표는 YOLO log 에 있다
 export function formatDetectionLabel(detection) {
-  const id = hasTrackId(detection) ? ` #${detection.track_id}` : '';
-  return `${String(detection.class_name)}${id} ${Math.round(Number(detection.confidence) * 100)}%`;
+  return `${String(detection.class_name).toLowerCase()} ${Math.round(Number(detection.confidence) * 100)}%`;
 }
 
 export function formatDetectionLine(detection) {
@@ -74,37 +82,42 @@ export function reportSentences(payload) {
 }
 
 // ---------- 로그 모델 (최신이 앞) ----------
-export function createYoloLog({ maxEntries = MAX_LOG_ENTRIES, frameIntervalMs = FRAME_LOG_INTERVAL_MS } = {}) {
+export function createYoloLog({ maxEntries = MAX_LOG_ENTRIES, ttlMs = LOG_TTL_MS } = {}) {
   const entries = [];
   const seenFrameIds = new Set();
-  let lastFrame = { atMs: -Infinity, signature: null };
   let lastStateSeq = null, lastReportSeq = null;
 
-  function push(entry) {
-    entries.unshift(entry);
-    while (entries.length > maxEntries) {
-      const dropped = entries.pop();
-      if (dropped.kind === 'frame') seenFrameIds.delete(dropped.frame.frame_id);
-    }
-    return entry;
+  function dropOldest() {
+    const dropped = entries.pop();
+    if (dropped.kind === 'frame') seenFrameIds.delete(dropped.frame.frame_id);
   }
 
-  // 같은 frame_id 는 한 번만, 그리고 탐지 내용이 바뀌었거나 frameIntervalMs 가 지났을 때만 남긴다
+  function push(entry, nowMs) {
+    entries.unshift({ ...entry, atMs: nowMs });
+    while (entries.length > maxEntries) dropOldest();
+    return entries[0];
+  }
+
+  // 최신이 앞이므로 뒤에서부터 TTL 지난 항목을 버린다
+  function prune(nowMs) {
+    while (entries.length && nowMs - entries[entries.length - 1].atMs > ttlMs) dropOldest();
+  }
+
+  // YOLO 가 낸 프레임마다 한 줄 — 폴링마다 최근 결과가 겹쳐 오므로 frame_id 로 중복을 거른다.
+  // timestamp_sec 은 페이지가 보낸 performance.now() 초라, TTL 이 지난 옛 프레임은 다시 들이지 않는다
   function addFrame(frame, latencyMs, nowMs) {
     if (!frame || seenFrameIds.has(frame.frame_id)) return null;
-    const signature = detectionSignature(frame);
-    if (signature === lastFrame.signature && nowMs - lastFrame.atMs < frameIntervalMs) return null;
+    if (Number.isFinite(frame.timestamp_sec) && nowMs - frame.timestamp_sec * 1000 > ttlMs) return null;
 
     seenFrameIds.add(frame.frame_id);
-    lastFrame = { atMs: nowMs, signature };
     return push({
       kind: 'frame', key: `frame-${frame.frame_id}`, seq: frame.seq, frame,
       header: formatFrameHeader(frame, latencyMs),
       lines: (frame.detections || []).map(formatDetectionLine),
-    });
+    }, nowMs);
   }
 
-  function addState(pipelineState) {
+  function addState(pipelineState, nowMs) {
     if (!pipelineState || !pipelineState.payload || pipelineState.seq === lastStateSeq) return null;
     lastStateSeq = pipelineState.seq;
     const state = pipelineState.payload;
@@ -113,10 +126,10 @@ export function createYoloLog({ maxEntries = MAX_LOG_ENTRIES, frameIntervalMs = 
       header: summarizeState(state),
       lines: (state.tracks || []).map(formatTrackLine),
       json: JSON.stringify(state, null, 2),
-    });
+    }, nowMs);
   }
 
-  function addReport(pipelineReport) {
+  function addReport(pipelineReport, nowMs) {
     if (!pipelineReport || !pipelineReport.payload || pipelineReport.seq === lastReportSeq) return null;
     lastReportSeq = pipelineReport.seq;
     const payload = pipelineReport.payload;
@@ -125,10 +138,10 @@ export function createYoloLog({ maxEntries = MAX_LOG_ENTRIES, frameIntervalMs = 
       header: formatReportHeader(payload),
       sentences: reportSentences(payload),
       error: payload.report_error ? String(payload.report_error) : null,
-    });
+    }, nowMs);
   }
 
-  return { entries, addFrame, addState, addReport };
+  return { entries, addFrame, addState, addReport, prune };
 }
 
 // ---------- DOM ----------

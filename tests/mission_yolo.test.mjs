@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  scaleBox, formatDetectionLabel, formatDetectionLine, formatFrameHeader, detectionSignature,
+  scaleBox, getObjectCategory, formatDetectionLabel, formatDetectionLine, formatFrameHeader, detectionSignature,
   summarizeState, formatTrackLine, formatReportHeader, reportSentences, createYoloLog,
 } from '../tools/mission_demo/yolo-log.js';
 
@@ -15,8 +15,9 @@ test('scaleBox maps source-image pixels onto the view size', () => {
 });
 
 test('detection label and log line formats', () => {
-  assert.equal(formatDetectionLabel(person), 'person #3 87%');
+  assert.equal(formatDetectionLabel(person), 'person 87%');
   assert.equal(formatDetectionLabel(car), 'car 50%');
+  assert.equal(formatDetectionLabel({ class_name: 'VEHICLE', confidence: .91 }), 'vehicle 91%');
   assert.equal(formatDetectionLine(person), 'person #3 0.87 [64,36,128,108] red');
   assert.equal(formatDetectionLine(car), 'car 0.50 [0,0,10,10]');
 });
@@ -65,16 +66,15 @@ test('report header and sentences', () => {
   assert.deepEqual(reportSentences({ ...reportPayload, report: null }), []);
 });
 
-test('log keeps newest first, drops duplicate frame ids and throttles unchanged detections', () => {
-  const log = createYoloLog({ maxEntries: 30, frameIntervalMs: 1000 });
-  assert.ok(log.addFrame(frameOf(1, [person]), 40, 0));
-  assert.equal(log.addFrame(frameOf(1, [person]), 40, 5000), null, 'same frame_id is never added twice');
-  assert.equal(log.addFrame(frameOf(2, [person]), 40, 500), null, 'unchanged detections within 1 s are skipped');
-  assert.ok(log.addFrame(frameOf(3, [person, car]), 40, 600), 'changed detections are added at once');
-  assert.ok(log.addFrame(frameOf(4, [person, car]), 40, 1700), 'unchanged detections after 1 s are added');
-  assert.equal(log.addFrame(null, 40, 9000), null);
-  assert.deepEqual(log.entries.map((entry) => entry.key), ['frame-4', 'frame-3', 'frame-1']);
-  assert.deepEqual(log.entries[1].lines, ['person #3 0.87 [64,36,128,108] red', 'car 0.50 [0,0,10,10]']);
+test('log keeps every YOLO frame newest first and drops duplicate frame ids', () => {
+  const log = createYoloLog({ maxEntries: 30 });
+  assert.ok(log.addFrame(frameOf(1, [person]), 40));
+  assert.equal(log.addFrame(frameOf(1, [person]), 40), null, 'same frame_id is never added twice');
+  assert.ok(log.addFrame(frameOf(2, [person]), 40), 'unchanged detections are still logged every frame');
+  assert.ok(log.addFrame(frameOf(3, [person, car]), 40));
+  assert.equal(log.addFrame(null, 40), null);
+  assert.deepEqual(log.entries.map((entry) => entry.key), ['frame-3', 'frame-2', 'frame-1']);
+  assert.deepEqual(log.entries[0].lines, ['person #3 0.87 [64,36,128,108] red', 'car 0.50 [0,0,10,10]']);
 });
 
 test('state and report entries are added once per seq', () => {
@@ -93,9 +93,29 @@ test('state and report entries are added once per seq', () => {
 });
 
 test('log is capped and a dropped frame id may be logged again', () => {
-  const log = createYoloLog({ maxEntries: 3, frameIntervalMs: 0 });
-  for (let id = 1; id <= 5; id++) log.addFrame(frameOf(id, id % 2 ? [person] : [car]), 10, id);
+  const log = createYoloLog({ maxEntries: 3 });
+  for (let id = 1; id <= 5; id++) log.addFrame(frameOf(id, id % 2 ? [person] : [car]), 10);
   assert.deepEqual(log.entries.map((entry) => entry.key), ['frame-5', 'frame-4', 'frame-3']);
-  assert.ok(log.addFrame(frameOf(1, [car]), 10, 99));
+  assert.ok(log.addFrame(frameOf(1, [car]), 10));
   assert.equal(log.entries.length, 3);
+});
+
+test('object category gives each class its own FPV box color key', () => {
+  for (const name of ['person', 'car', 'bus', 'truck']) assert.equal(getObjectCategory(name), name);
+  assert.equal(getObjectCategory('VEHICLE'), 'car', 'fallback vehicle tracks use the car color');
+  assert.equal(getObjectCategory('traffic light'), 'object');
+});
+
+test('every log entry expires after its TTL and stale frames are not re-added', () => {
+  const log = createYoloLog({ ttlMs: 1000 });
+  const frameAt = (id, sec) => ({ ...frameOf(id, [person]), timestamp_sec: sec });
+  log.addFrame(frameAt(1, 0), 10, 0);
+  log.addState({ seq: 1, payload: statePayload }, 500);
+  log.addReport({ seq: 1, payload: reportPayload }, 900);
+  log.prune(1200);
+  assert.deepEqual(log.entries.map((entry) => entry.key), ['report-1', 'state-1'], 'frame expired first');
+  assert.equal(log.addFrame(frameAt(1, 0), 10, 1200), null, 'expired frame resent by the server stays out');
+  log.prune(2000);
+  assert.deepEqual(log.entries, [], 'state and report expire too');
+  assert.equal(log.addState({ seq: 1, payload: statePayload }, 2000), null, 'same seq is not logged again after expiry');
 });

@@ -345,7 +345,7 @@
 
   // ---------- 와이어 프로토콜 클라이언트 ----------
   function createLink(options) {
-    const { canvas, getTelemetry, isAiMode, isOperatorLinkUp, onCommand, takeEvents, onPaired, log } = options;
+    const { canvas, getTelemetry, isAiMode, isOperatorLinkUp, onCommand, takeEvents, onPaired, log, frameHz = FRAME_HZ, telemetryHz = TELEMETRY_HZ } = options;
     // 운용자 링크 heartbeat — 옵션이 없으면 늘 연결(Phase 5 D-01)
     const readOperatorLink = isOperatorLinkUp || (() => true);
     const nowSec = () => performance.now() / 1000;
@@ -362,6 +362,7 @@
       discardedCount: 0,
       mission: null,
       pipeline: null,   // {state, report} — Python 이 YOLO 결과로 만든 state JSON·보고(없으면 null)
+      detectionLog: [], // 최근 YOLO 결과 전부(오래된 것부터, latency_ms 포함) — 폴링 사이 프레임도 빠짐없이
     };
 
     function refreshConnected() {
@@ -407,6 +408,7 @@
       // Python 이 임무 상태를 안 보내면 지난 값을 지운다(D-02)
       state.mission = body.mission && typeof body.mission === 'object' ? body.mission : null;
       state.pipeline = body.pipeline && typeof body.pipeline === 'object' ? body.pipeline : null;
+      state.detectionLog = Array.isArray(body.detection_log) ? body.detection_log : [];
       handleCommands(body.commands);
     }
 
@@ -444,11 +446,11 @@
         log('Open via python -m modules.simulation.browser.server');
         return;
       }
-      setInterval(postTelemetry, 1000 / TELEMETRY_HZ);
+      setInterval(postTelemetry, 1000 / telemetryHz);
     }
 
-    // --- 프레임: 10 Hz, 최대 MAX_PENDING_FRAMES 개 in-flight, 넘치면 버린다(D-12) ---
-    const frameIntervalSec = 1 / FRAME_HZ;
+    // --- 프레임: 기본 10 Hz(frameHz 로 바꿈), 최대 MAX_PENDING_FRAMES 개 in-flight, 넘치면 버린다(D-12) ---
+    const frameIntervalSec = 1 / frameHz;
     let sinceLastFrameSec = 0;
     let pendingFrames = 0;
     let seq = 0;

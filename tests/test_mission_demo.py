@@ -14,8 +14,7 @@ def test_demo_shell_contract():
         "connect-ble",
         "zero-imu",
         "observation-toggle",
-        "detection-list",
-        "report-content",
+        "decision-list",
     )
     for element_id in required_ids:
         assert f'id="{element_id}"' in html

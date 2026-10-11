@@ -3,19 +3,18 @@ import { AnalysisEngine } from "./analysis.js";
 import { DroneWorld } from "./world.js?v=yaw-steering-1";
 import { TestFlight, COURSE } from './test-flight.js?v=slope-15';
 import { terrainHeight } from './mountain-course.js?v=slope-15';
-import { createYoloLog, createYoloLogView, createTrackChip, detectionSignature, formatDetectionLabel, reportSentences, scaleBox } from './yolo-log.js';
+import { createYoloLog, createYoloLogView, formatDetectionLabel, getObjectCategory, scaleBox } from './yolo-log.js';
+import { createDecisionLog, createLlmDecisionView, formatAiBadge } from './llm-decisions.js';
 
 // TODO: 임시 — 장갑 수동(IMU)·산악 코스에서 비행 키를 누르는 동안은 키보드가 우선한다. 장갑 검증 끝나면 false로.
 const ALLOW_KEYBOARD_OVERRIDE = true;
 
 const $ = (id) => document.getElementById(id);
 const startedAt = performance.now();
+let batteryStartedAt = performance.now();  // AI 임무를 켤 때마다 다시 채운다 — 탭을 오래 열어 두면 0% 로 시작해 즉시 강제 복귀했다
 let mode = "keyboard";
 let lastFrame = performance.now();
 let lastTracks = [];
-let reportTracks = [];
-let reportContext = {};
-let initialReportRequested = false;
 let blockedUntil = 0;
 let auxHeld = false, keyFlash = false;
 
@@ -35,28 +34,62 @@ const glove = new GloveInput({
   onLog: (line) => { const log=$('glove-log'); log.textContent=(log.textContent+'\n'+line).split('\n').slice(-80).join('\n'); log.scrollTop=log.scrollHeight; },
 });
 const autopilot = new AutoPilotInput();
-const analysis = new AnalysisEngine(renderReportState);
+const analysis = new AnalysisEngine(() => {});  // 정답 트랙 fallback 만 쓴다 — Scene report 섹션은 없앴다
 const testFlight=new TestFlight();
 
-// ---------- Python YOLO 링크 (sim_link.js) ----------
-// FPV 캔버스(world.fpvCanvas)를 10 Hz JPEG 로 올리고, 응답의 detections·pipeline 을 패널에 보여준다.
-// Python 은 이 데모의 비행을 조종하지 않는다 — 명령은 모두 거절한다.
+// ---------- Python 링크 (sim_link.js) ----------
+// FPV 캔버스(world.fpvCanvas)를 JPEG 로 올리고, 응답의 detections·pipeline 을 패널에 보여준다.
+// AI 모드에서만 Python 비행 명령을 받아 pyAutopilot 이 실행한다(로컬 'auto' 관찰 모드는 받지 않는다).
 const SimLink = window.SimLink;
 const RAD_TO_DEG = 180 / Math.PI;
-const YOLO_PANEL_REFRESH_MS = 200;
+const HEART_PULSE_MS = 600;  // fire_heart 한 발 = 기존 하트 빔을 잠깐 켠다
+const DEFAULT_AI_GIMBAL_PITCH_DEG = -20;
+const nowSec = () => performance.now() / 1000;
+let heartPulseUntilMs = 0;
+const YOLO_PANEL_REFRESH_MS = 1000 / 30;
+const YOLO_FPS_WINDOW_MS = 1000;
+const yoloFrameTimes = [];  // 로그에 새로 들어온 YOLO 프레임 시각 — 실측 fps 용
 const yoloLog = createYoloLog();
 const yoloView = createYoloLogView($('yolo-log'));
-let shownReportSeq = null;
+const decisionLog = createDecisionLog();
+const decisionView = createLlmDecisionView($('decision-list'));
+
+const pyAutopilot = SimLink ? SimLink.createAutopilot({
+  onHeart: (trackId) => {
+    heartPulseUntilMs = performance.now() + HEART_PULSE_MS;
+    pyAutopilot.recordEvent({ kind: 'heart_shot', track_id: trackId, time_sec: nowSec(), actor_id: null });
+  },
+}) : null;
+
+// 좌표: north=-z, east=x, down=-y, yaw = 북 기준 시계방향 deg (getSimTelemetry 와 같은 규약)
+function getPose() {
+  const flight = world.telemetry(), position = flight.position;
+  return {
+    northM: -position.z, eastM: position.x, downM: -position.y,
+    yawDeg: SimLink.wrapYawDeg(flight.heading), onGround: Boolean(flight.onGround),
+  };
+}
+
+// AI 모드 입력 — Python 명령을 따르는 속도·기수·짐벌. 링크 스크립트가 없으면 제자리 정지
+function getAiInput(delta) {
+  if (!pyAutopilot) {
+    return { source: 'python', velNorthMps: 0, velEastMps: 0, velDownMps: 0, yawDeg: world.telemetry().heading, gimbalPitchDeg: DEFAULT_AI_GIMBAL_PITCH_DEG };
+  }
+  const command = pyAutopilot.step(delta, nowSec(), getPose());
+  return { source: 'python', ...command, gimbalPitchDeg: pyAutopilot.gimbal.pitchDeg };
+}
 
 // 좌표: world x→east, -z→north, y→up(down=-y). 카메라 기울기는 짐벌(-90..0°)로, 남는 기수 들림만 body pitch 로 보낸다
 function getSimTelemetry() {
   const flight = world.telemetry(), position = flight.position;
   const northM = -position.z, eastM = position.x, downM = -position.y;
+  const isPythonFlying = mode === 'ai' && pyAutopilot;
   const cameraPitchDeg = world.camera.rotation.x * RAD_TO_DEG;
-  const gimbalPitchDeg = Math.min(0, Math.max(-90, cameraPitchDeg));
+  const gimbalPitchDeg = isPythonFlying ? pyAutopilot.gimbal.pitchDeg : Math.min(0, Math.max(-90, cameraPitchDeg));
   const groundM = world.training ? terrainHeight(position.x, position.z) : 0;
-  const timeSec = performance.now() / 1000;
+  const timeSec = nowSec();
   const isMoving = flight.speed > .5 || Math.abs(flight.climb) > .5;
+  const manualFlightMode = flight.onGround ? 'grounded' : isMoving ? 'moving' : 'hover';
 
   return {
     time_sec: timeSec,
@@ -65,9 +98,9 @@ function getSimTelemetry() {
     pitch_deg: cameraPitchDeg - gimbalPitchDeg,
     yaw_deg: SimLink.wrapYawDeg(flight.heading),
     gimbal_pitch_deg: gimbalPitchDeg,
-    gimbal_yaw_deg: 0,
-    battery_pct: SimLink.batteryPctAt(100, (performance.now() - startedAt) / 1000),
-    flight_mode: flight.onGround ? 'grounded' : isMoving ? 'moving' : 'hover',
+    gimbal_yaw_deg: isPythonFlying ? pyAutopilot.gimbal.yawDeg : 0,
+    battery_pct: SimLink.batteryPctAt(100, (performance.now() - batteryStartedAt) / 1000),
+    flight_mode: isPythonFlying ? pyAutopilot.flightMode : manualFlightMode,
     gps: SimLink.nedToGps(northM, eastM, downM),
     height_above_ground_m: SimLink.heightAboveGroundM(position.y, groundM),
   };
@@ -76,9 +109,11 @@ function getSimTelemetry() {
 const link = SimLink && world.fpvCanvas ? SimLink.createLink({
   canvas: world.fpvCanvas,
   getTelemetry: getSimTelemetry,
-  isAiMode: () => mode === 'ai' || mode === 'auto',
-  onCommand: () => false,
-  takeEvents: () => [],
+  isAiMode: () => mode === 'ai',
+  onCommand: (command) => pyAutopilot.apply(command, nowSec()),
+  takeEvents: () => pyAutopilot.takeEvents(),
+  // 업로드 상한을 렌더 속도로 열어 두고 in-flight 2 장 제한을 역압으로 쓴다 — YOLO 는 자기 처리 속도 그대로 돈다
+  frameHz: 60, telemetryHz: 60,  // 결과 폴링도 같이 열어 FPV 박스가 YOLO 속도대로 갱신되게
   log: (line) => console.info('[sim-link]', line),
 }) : null;
 link?.start();
@@ -89,26 +124,20 @@ function getFreshDetections() {
   return ageSec < SimLink.DETECTION_STALE_SEC ? link.state.detections : null;
 }
 
-function getPipelineReport() {
-  if (!link || !link.state.connected || mode === 'test') return null;
-  return link.state.pipeline?.report?.payload ? link.state.pipeline.report : null;
-}
-
 function startTest(){
   if(world.loading)return;
   world.setTraining(true);
   autopilot.reset();blockedUntil=0;testFlight.start();setMode('test');
-  clearTimeout(analysis.timer);analysis.pending=false;initialReportRequested=false;
-  $('report-content').textContent='Mountain course · Manual flight';
 }
 
 function setMode(next) {
   if(mode==='test' && next!=='test'){
     world.setTraining(false);
-    clearTimeout(analysis.timer);analysis.pending=false;initialReportRequested=false;
-    $('report-content').textContent='Checking camera view';
   }
   if (next !== mode) autopilot.resetObservation();
+  if (next === 'ai' && mode !== 'ai') batteryStartedAt = performance.now();
+  if (pyAutopilot && next === 'ai' && mode !== 'ai') pyAutopilot.enterAi(getPose());  // 명령이 올 때까지 제자리 유지
+  if (pyAutopilot && next !== 'ai' && mode === 'ai') pyAutopilot.cancel();          // 남은 명령이 나중에 되살아나지 않게
   mode = next;
   world.testCourse.visible=mode==='test';
   $('test-hud').hidden=mode!=='test';
@@ -119,13 +148,19 @@ function setMode(next) {
   $('mode-screen').setAttribute('aria-labelledby',mode==='test'?'participate-tab':'normal-tab');
   document.querySelector('.compact-flex').hidden = ['ai','auto'].includes(mode);
   for (const id of ['flex-bent', 'flex-flat']) $(id).hidden = ['ai','auto'].includes(mode);
-  $('flight-mode-text').textContent = mode==='test'?'MANUAL':mode === 'ai' ? 'AI · CIRCLE' : mode === 'auto' ? 'AUTO · OBSERVE' : 'MANUAL';
+  renderFlightModeBadge();
   $('flight-mode-badge').classList.toggle('automatic',mode==='ai'||mode==='auto');
   $('observation-toggle').textContent=mode==='auto'?'Manual control':'Start observation';
-  $('main-mode-toggle').textContent=mode==='ai'?'Mode: AI (circling)':'Mode: Manual';
+  $('main-mode-toggle').textContent=mode==='ai'?'Mode: AI (Python)':'Mode: Manual';
   $('main-mode-toggle').classList.toggle('active',mode==='ai');
   document.querySelectorAll("[data-mode]").forEach((button) => button.classList.toggle("active", button.dataset.mode === mode));
   $("flight-hint").textContent = '';
+}
+
+// AI 배지는 Python 이 지금 돌리는 rule mode 를 보여 준다 — 링크 상태가 바뀌므로 패널 갱신 때도 다시 그린다
+function renderFlightModeBadge() {
+  const text = mode === 'ai' ? formatAiBadge(link?.state.mission) : mode === 'auto' ? 'AUTO · OBSERVE' : 'MANUAL';
+  if ($('flight-mode-text').textContent !== text) $('flight-mode-text').textContent = text;
 }
 
 function toggleMainMode() { if(mode!=='test')setMode(mode === 'ai' ? (glove.link?'imu':'keyboard') : 'ai'); }
@@ -136,24 +171,8 @@ function connectionNotice(message) {
 }
 
 
-function renderTracks(tracks, visibleTracks) {
-  $("track-count").textContent = String(tracks.length).padStart(2, "0");
-  const list = $("detection-list");
-  const trackKey = tracks.map(track => track.id).join(",");
-  if (list.dataset.tracks !== trackKey) {
-    list.dataset.tracks = trackKey;
-    list.innerHTML = tracks.map((track, index) => `
-    <article class="detection-card" style="animation-delay:${index*55}ms">
-      <span class="detection-id">${track.id}</span>
-      <div class="detection-main"><b>${track.clothing?`${track.clothing} · Person`:track.kind==='PERSON'?'Person':'Vehicle'}</b><span></span></div>
-      <div class="detection-side"><b></b><small>DISTANCE</small></div>
-    </article>`).join("");
-  }
-  tracks.forEach((track, index) => {
-    list.children[index].querySelector(".detection-side b").textContent = `${track.distance.toFixed(1)}m`;
-    list.children[index].querySelector(".detection-main span").textContent = `${track.screenSide} of frame`;
-  });
-
+// 정답 트랙(fallback)으로 FPV 박스를 그린다
+function renderTrackBoxes(visibleTracks) {
   const overlay = $("detection-overlay");
   const visibleIds = new Set();
   visibleTracks.forEach((track) => {
@@ -161,9 +180,10 @@ function renderTracks(tracks, visibleTracks) {
     if (!screen.visible) return;
     visibleIds.add(track.id);
     const box = upsertTargetBox(overlay, track.id);
+    box.dataset.kind = getObjectCategory(track.kind);
     box.style.cssText = `left:${screen.x-screen.width/2}px;top:${screen.y-screen.height/2}px;width:${screen.width}px;height:${screen.height}px`;
-    box.querySelector(".target-label").textContent = `${track.id} / ${track.clothing?track.clothing.toUpperCase():track.kind} ${track.confidence}`;
-    box.querySelector(".target-distance").textContent = `${screen.distance.toFixed(1)} M`;
+    box.querySelector(".target-label").textContent = formatDetectionLabel({ class_name: track.kind, confidence: track.confidence / 100 });
+    box.querySelector(".target-distance").textContent = "";
   });
   overlay.querySelectorAll(".target-box").forEach((box) => { if (!visibleIds.has(box.dataset.track)) box.remove(); });
 }
@@ -177,37 +197,16 @@ function upsertTargetBox(overlay, key) {
   return box;
 }
 
-// YOLO 결과로 목록·FPV 박스를 그린다. 서버 문자열은 textContent 로만
-function renderYoloDetections(frame) {
+// YOLO 결과로 FPV 박스를 그린다. 서버 문자열은 textContent 로만
+function renderYoloBoxes(frame) {
   const detections = frame.detections || [];
-  $("track-count").textContent = String(detections.length).padStart(2, "0");
-
-  const list = $("detection-list");
-  const listKey = `yolo:${detectionSignature(frame)}`;
-  if (list.dataset.tracks !== listKey) {
-    list.dataset.tracks = listKey;
-    list.replaceChildren(...detections.map((_, index) => {
-      const card = document.createElement("article");
-      card.className = "detection-card"; card.style.animationDelay = `${index*55}ms`;
-      card.innerHTML = `<span class="detection-id"></span><div class="detection-main"><b></b><span></span></div><div class="detection-side"><b></b><small>CONFIDENCE</small></div>`;
-      return card;
-    }));
-  }
-  detections.forEach((detection, index) => {
-    const card = list.children[index], ratio = (Number(detection.xyxy[0]) + Number(detection.xyxy[2])) / 2 / frame.image_width;
-    const hasTrack = detection.track_id !== null && detection.track_id !== undefined;
-    card.querySelector(".detection-id").textContent = hasTrack ? `#${detection.track_id}` : "—";
-    card.querySelector(".detection-main b").textContent = `${detection.class_name}${detection.upper_color ? ` · ${detection.upper_color}` : ""}`;
-    card.querySelector(".detection-main span").textContent = `${ratio<.35?'Left':ratio>.65?'Right':'Center'} of frame`;
-    card.querySelector(".detection-side b").textContent = `${Math.round(Number(detection.confidence)*100)}%`;
-  });
-
   const overlay = $("detection-overlay"), view = $("fpv-view");
   const boxKeys = new Set();
   detections.forEach((detection, index) => {
     const key = `yolo-${index}`, box = upsertTargetBox(overlay, key);
     const rect = scaleBox(detection.xyxy, frame.image_width, frame.image_height, view.clientWidth, view.clientHeight);
     boxKeys.add(key);
+    box.dataset.kind = getObjectCategory(detection.class_name);
     box.style.cssText = `left:${rect.left}px;top:${rect.top}px;width:${rect.width}px;height:${rect.height}px`;
     box.querySelector(".target-label").textContent = formatDetectionLabel(detection);
     box.querySelector(".target-distance").textContent = "";
@@ -215,68 +214,31 @@ function renderYoloDetections(frame) {
   overlay.querySelectorAll(".target-box").forEach((box) => { if (!boxKeys.has(box.dataset.track)) box.remove(); });
 }
 
-function renderDetectionSource(frame) {
-  const latency = link?.state.yoloLatencyMs;
-  $("detection-source").textContent = frame ? `YOLO LIVE · ${Number.isFinite(latency) ? Math.round(latency) : '–'} ms` : "ORIN DEMO (fallback)";
-  $("detection-source").classList.toggle("live", Boolean(frame));
-}
-
-function createReportLine(cite, text, index) {
-  const line = document.createElement("div");
-  line.className = "report-line"; line.style.animationDelay = `${index*85}ms`;
-  const citeSpan = document.createElement("span"), textSpan = document.createElement("span");
-  citeSpan.className = "cite";
-  if (typeof cite === "string") citeSpan.textContent = cite; else citeSpan.append(...cite);
-  textSpan.textContent = text;
-  line.append(citeSpan, textSpan);
-  return line;
-}
-
-// Python 보고(state JSON → LLM 문장)가 있으면 Scene report 를 그 문장으로 바꾼다
-function renderPipelineReport(pipelineReport) {
-  if (pipelineReport.seq === shownReportSeq) return;
-  shownReportSeq = pipelineReport.seq;
-  const payload = pipelineReport.payload, decision = payload.decision || {};
-  const lines = reportSentences(payload).map((sentence, index) => createReportLine(
-    sentence.trackIds.length ? sentence.trackIds.map(createTrackChip) : sentence.kind.slice(0, 3).toUpperCase(), sentence.text, index));
-  if (payload.report_error) lines.push(createReportLine("ERR", `Report error: ${payload.report_error}`, lines.length));
-  if (!lines.length) lines.push(createReportLine("—", String(decision.reason ?? "No report sentences"), 0));
-
-  $("report-content").replaceChildren(...lines);
-  $("report-time").textContent = `t=${Number(payload.time_sec ?? 0).toFixed(1)}s · YOLO pipeline`;
-  $("report-state").textContent = decision.verdict ? String(decision.verdict).toUpperCase() : "Report";
-  $("report-grounding").textContent = payload.report?.is_grounded ? "YOLO · Grounded" : "YOLO";
-}
-
 function updateYoloPanel() {
   if (!link) return;
-  const frame = getFreshDetections();
-  if (frame) yoloLog.addFrame(frame, link.state.yoloLatencyMs, performance.now());
-  const pipeline = link.state.pipeline || {};
-  yoloLog.addState(pipeline.state);
-  yoloLog.addReport(pipeline.report);
-  yoloView.render(yoloLog.entries);
-  $("yolo-log-count").textContent = String(yoloLog.entries.length).padStart(2, "0");
-
-  const report = getPipelineReport();
-  if (report) renderPipelineReport(report);
-  else if (shownReportSeq !== null) {
-    // 보고가 끊기면 브라우저 보고로 즉시 되돌린다
-    shownReportSeq = null; initialReportRequested = false;
-    $("report-grounding").textContent = "Simulation";
+  if (mode !== 'test') {
+    for (const frame of link.state.detectionLog) {
+      if (yoloLog.addFrame(frame, frame.latency_ms, performance.now())) yoloFrameTimes.push(performance.now());
+    }
   }
+  while (yoloFrameTimes.length && performance.now() - yoloFrameTimes[0] > YOLO_FPS_WINDOW_MS) yoloFrameTimes.shift();
+  $("yolo-fps").textContent = String(yoloFrameTimes.length);
+  const pipeline = link.state.pipeline || {};
+  yoloLog.addState(pipeline.state, performance.now());
+  yoloLog.addReport(pipeline.report, performance.now());
+  yoloLog.prune(performance.now());
+  yoloView.render(yoloLog.entries);
+  updateDecisionPanel(pipeline);
 }
 
-function renderReportState(state) {
-  if (state.status === "loading") {
-    $("analysis-cooldown").textContent = "WORKING";
-    return;
-  }
-  $("analysis-cooldown").textContent = "AUTO UPDATE";
-  if (getPipelineReport()) return;   // Python 보고가 우선 — 브라우저 보고는 fallback
-  $("report-time").textContent = `${state.generatedAt.toLocaleTimeString("en-GB", { hour12:false })} captured`;
-  $("report-state").textContent = "Camera snapshot";
-  $("report-content").innerHTML = state.lines.map((line, index) => `<div class="report-line" style="animation-delay:${index*85}ms"><span class="cite">${line.ids.join("+")}</span><span>${line.text}</span></div>`).join("");
+function updateDecisionPanel(pipeline) {
+  decisionLog.addSelection(pipeline.selection, performance.now());
+  decisionLog.addModeEnd(pipeline.mode_end, performance.now());
+  decisionLog.prune(performance.now());
+  decisionView.render(decisionLog.entries);
+  const runningMode = link.state.mission?.running_mode;
+  $('decision-running-mode').textContent = runningMode ? String(runningMode).toUpperCase() : '–';
+  renderFlightModeBadge();
 }
 
 function updateTelemetry() {
@@ -327,8 +289,8 @@ function frame(now) {
   // AUTO 자율 접근은 3D 위치가 필요해 YOLO 박스가 아니라 정답 트랙(visibleTracks)을 계속 쓴다
   const input = keyboardOverride ? keyboard.sample()
     : mode==='test'?(glove.link?glove.sample():keyboard.sample()):mode === "auto" ? autopilot.sample(telemetry.position, world.heading, visibleTracks, now)
-    : mode === 'ai' ? {...glove.mapped(),source:'ai'} : mode === "imu" ? glove.sample() : keyboard.sample();
-  world.flashHeld = keyFlash || (auxHeld && glove.sample().source !== 'imu-stale');
+    : mode === 'ai' ? getAiInput(delta) : mode === "imu" ? glove.sample() : keyboard.sample();
+  world.flashHeld = keyFlash || now < heartPulseUntilMs || (auxHeld && glove.sample().source !== 'imu-stale');
   if (world.update(input, delta)) {
     blockedUntil = now + 600;
     if (mode === 'auto') autopilot.notifyBlocked();
@@ -339,15 +301,9 @@ function frame(now) {
   }
   $("obstacle-warning").classList.toggle("show", now < blockedUntil);
   glove.advanceFrame(); // Main also updates flex after this frame's physics.
-  reportTracks = lastTracks.filter(t=>world.canObserve(t.position)).map(track=>{
-    const screen=world.project(track.position), ratio=screen.x/$('fpv-view').clientWidth;
-    return {...track,distance:screen.distance,screenSide:ratio<.35?'Left':ratio>.65?'Right':'Center'};
-  });
-  const current=updateTelemetry();
-  reportContext={altitude:current.altitude,speed:current.speed,mode:$('flight-mode-text').textContent};
+  updateTelemetry();
   const yoloFrame = getFreshDetections();
-  if (yoloFrame) renderYoloDetections(yoloFrame); else renderTracks(reportTracks, reportTracks);
-  renderDetectionSource(yoloFrame);
+  if (yoloFrame) renderYoloBoxes(yoloFrame); else renderTrackBoxes(lastTracks.filter(t => world.canObserve(t.position)));
   // 10 Hz 업로드 스로틀은 sim_link 가 한다. 끊겨 있으면 JPEG 인코딩도 하지 않는다(텔레메트리 POST 가 연결을 되살린다)
   if (link?.state.connected) link.afterRender(delta);
   drawSensorChart();
@@ -364,8 +320,6 @@ function frame(now) {
       ring.material.color.setHex(color);ring.material.emissive.setHex(color);
     }
   }
-  const seconds = Math.floor((now-startedAt)/1000);
-  if (seconds >= 2) { analysis.requestReport(reportTracks, !initialReportRequested, reportContext); initialReportRequested = true; }
   requestAnimationFrame(frame);
 }
 
@@ -395,6 +349,7 @@ async function connectGlove(kind) {
 }
 $('observation-toggle').addEventListener('click',()=>setMode(mode==='auto'?(glove.link?'imu':'keyboard'):'auto'));
  $('main-mode-toggle').addEventListener('click',toggleMainMode);
+$('flight-mode-badge').addEventListener('click',toggleMainMode);  // 우상단 MANUAL 배지를 눌러 Manual / AI 전환
 $("connect-ble").addEventListener("click", () => connectGlove('ble'));
 $("flex-flat").addEventListener("click", () => { $("flight-hint").textContent = glove.calibrateFlex("flat") ? "FLAT saved" : "Waiting for flex samples"; });
 $("flex-bent").addEventListener("click", () => { $("flight-hint").textContent = glove.calibrateFlex("bent") ? "BENT saved" : "Waiting for flex samples"; });
@@ -414,7 +369,11 @@ window.addEventListener('keyup',event=>{if(event.code==='KeyL') keyFlash=false;}
 window.addEventListener('blur',()=>{keyFlash=false;});
 setInterval(()=>{glove.hz=glove.packetCount;glove.packetCount=0;},1000);
 setInterval(updateYoloPanel, YOLO_PANEL_REFRESH_MS);
-$("reset-flight").addEventListener("click", () => { if(mode==='test'){startTest();return;}world.reset(); autopilot.reset(); blockedUntil = 0; });
+$("reset-flight").addEventListener("click", () => {
+  if(mode==='test'){startTest();return;}
+  world.reset(); autopilot.reset(); blockedUntil = 0;
+  if (mode === 'ai' && pyAutopilot) pyAutopilot.enterAi(getPose());  // 리셋 위치에서 다시 제자리 유지
+});
 $('normal-tab').addEventListener('click',()=>{if(mode==='test')setMode(glove.link?'imu':'keyboard');});
 $('participate-tab').addEventListener('click',()=>{if(mode!=='test')startTest();});
 document.querySelector('.experience-tabs').addEventListener('keydown',event=>{

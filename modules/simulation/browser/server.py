@@ -74,6 +74,12 @@ class SimRequestHandler(SimpleHTTPRequestHandler):
         else:
             super().do_GET()
 
+    def end_headers(self) -> None:
+        # 데모 파일을 고친 뒤 새로고침만으로 반영되게 한다 — 브라우저가 옛 app.js 를 휴리스틱 캐시로 쓰지 않게
+        if self.command == "GET" and not self.path.startswith("/sim/"):  # /sim/* 응답은 _send_json 이 no-store 를 붙인다
+            self.send_header("Cache-Control", "no-cache")
+        super().end_headers()
+
     def translate_path(self, path: str) -> str:
         """정규화한 경로가 STATIC_MOUNTS 접두사로 시작하면 그 디렉터리를 루트로 삼는다.
 
@@ -184,6 +190,7 @@ class SimRequestHandler(SimpleHTTPRequestHandler):
             "status": bridge.status(),
             "mission": bridge.mission_status(),
             "pipeline": bridge.pipeline_messages(),
+            "detection_log": bridge.recent_detections(),
         }
         self._send_json(response)
 

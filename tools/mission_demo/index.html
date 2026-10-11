@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#080b09">
   <title>WavePilot — Field Command</title>
-  <link rel="stylesheet" href="styles.css?v=yolo-slope-15">
+  <link rel="stylesheet" href="styles.css?v=llm-steering-3">
 </head>
 <body>
   <header class="command-bar">
@@ -69,7 +69,7 @@
               <button id="observation-toggle" class="utility-button">Start observation</button>
               <button id="reset-flight" class="utility-button">Reset position</button>
             </div>
-            <p>Thumb / M: Manual ↔ Circle<br>Middle tap: Zero · Hold 0.5s: Hearts<br>L: Hearts</p>
+            <p>Thumb / M: Manual ↔ AI<br>Middle tap: Zero · Hold 0.5s: Hearts<br>L: Hearts</p>
             <output id="flight-details"></output>
             <canvas id="sensor-chart" aria-label="Last 500 sensor samples"></canvas>
             <p class="chart-legend"><span>Roll</span><span>Pitch</span><span>Yaw rate</span></p>
@@ -77,7 +77,7 @@
           </div>
         </details>
       </section>
-      <div id="flight-mode-badge" class="flight-mode-badge" role="status"><i></i><span id="flight-mode-text">MANUAL</span></div>
+      <button id="flight-mode-badge" class="flight-mode-badge" type="button" title="Click (or M) to switch Manual / AI"><i></i><span id="flight-mode-text" aria-live="polite">MANUAL</span></button>
       <section id="test-hud" class="test-hud" aria-label="Manual mountain course" hidden>
         <small id="test-state">PASS RING 1 TO START</small>
         <div><b id="test-score">0 / 10</b><time id="test-time">00:00.0</time></div>
@@ -102,35 +102,19 @@
       <section class="panel-section yolo-log-section">
         <header class="section-heading">
           <div><h2>YOLO log</h2></div>
-          <div class="metric"><b id="yolo-log-count">00</b><small>ENTRIES</small></div>
+          <div class="metric"><b id="yolo-fps">0</b><small>YOLO FPS</small></div>
         </header>
         <div id="yolo-log" class="yolo-log" aria-live="off"></div>
       </section>
 
-      <section class="panel-section detections-section">
+      <section class="panel-section decisions-section">
         <header class="section-heading">
-          <div><h1>Visible targets</h1><span id="detection-source" class="source-badge">ORIN DEMO (fallback)</span></div>
-          <div class="metric"><b id="track-count">0</b><small>TARGETS</small></div>
+          <div><h1>LLM Decisions</h1></div>
+          <div class="metric"><b id="decision-running-mode">–</b><small>RUNNING MODE</small></div>
         </header>
-        <div id="detection-list" class="detection-list" aria-live="polite"></div>
+        <div id="decision-list" class="decision-list" aria-live="polite"></div>
       </section>
 
-      <section class="panel-section report-section">
-        <header class="section-heading">
-          <div><h2>Scene report</h2></div>
-          <span id="report-grounding" class="grounded">Simulation</span>
-        </header>
-        <div class="report-meta">
-          <span id="report-time">Waiting</span>
-          <span id="report-state">Camera snapshot</span>
-        </div>
-        <div id="report-content" class="report-content" aria-live="polite">
-          <div class="empty-report"><p>Checking camera view</p></div>
-        </div>
-        <footer class="report-actions">
-          <span id="analysis-cooldown">READY</span>
-        </footer>
-      </section>
     </aside>
   </main>
 

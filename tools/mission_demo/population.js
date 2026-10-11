@@ -1,3 +1,5 @@
+import { createHumanoid, SHIRT_COLORS, PANTS_COLORS } from './humanoid.js';
+
 // Feet positions; interior elevations match the exposed GLB floor slabs.
 export const PEOPLE = [
   {id:'T-11', feet:[-14.2,20.66,35], zone:'West building interior'},
@@ -23,14 +25,21 @@ export function walkingPose(person,time){
 }
 
 export function createWalker(THREE,color){
-  const group=new THREE.Group(),shirt=new THREE.MeshStandardMaterial({color,roughness:.9}),pants=new THREE.MeshStandardMaterial({color:0x242a30,roughness:1}),skin=new THREE.MeshStandardMaterial({color:0xbb9274,roughness:1});
-  const torso=new THREE.Mesh(new THREE.BoxGeometry(.52,.65,.29),shirt);torso.position.y=1.23;group.add(torso);
-  const head=new THREE.Mesh(new THREE.SphereGeometry(.18,12,10),skin);head.position.y=1.78;group.add(head);
-  group.userData.limbs=[];
-  for(const side of [-1,1])for(const arm of [false,true]){
-    const pivot=new THREE.Group();pivot.position.set(side*(arm?.34:.15),arm?1.49:.93,0);
-    const limb=new THREE.Mesh(new THREE.BoxGeometry(arm?.15:.19,arm?.62:.83,.18),arm?shirt:pants);limb.position.y=arm?-.28:-.4;pivot.add(limb);
-    group.add(pivot);group.userData.limbs.push({pivot,phase:side*(arm?-1:1)});
-  }
-  group.traverse(o=>{if(o.isMesh)o.castShadow=true;});return group;
+  return createHumanoid(THREE,{shirt:color,pants:0x242a30,seed:color});
+}
+
+function hashId(id){
+  let hash=2166136261;
+  for(const ch of String(id))hash=Math.imul(hash^ch.charCodeAt(0),16777619)>>>0;
+  return hash;
+}
+
+// Stationary person: clothing colours are derived from the id so every load looks the same.
+export function createStandingPerson(THREE,person){
+  const seed=hashId(person.id);
+  const shirt=person.color ?? SHIRT_COLORS[seed%SHIRT_COLORS.length];
+  const pants=PANTS_COLORS[(seed>>>8)%PANTS_COLORS.length];
+  const group=createHumanoid(THREE,{shirt,pants,seed,height:1.62+((seed>>>16)%20)/100});
+  group.name=`Person_${person.id}`;
+  return group;
 }
