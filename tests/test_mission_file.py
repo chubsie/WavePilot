@@ -325,3 +325,26 @@ def test_example_mission_matches_param_defaults() -> None:
     assert spec.search_east_min_m == defaults.search_area_east_min_m
     assert spec.search_east_max_m == defaults.search_area_east_max_m
     assert spec.target_upper_color == DEFAULT_TARGET_COLOR
+
+
+# --- 선택 키 search_area.altitude_m ---
+
+
+def test_search_altitude_is_optional_and_defaults_to_none():
+    assert parse_mission(_valid_mission_dict()).search_altitude_m is None
+
+
+def test_search_altitude_is_read_when_given():
+    data = _valid_mission_dict()
+    data["search_area"]["altitude_m"] = 8.0
+
+    assert parse_mission(data).search_altitude_m == 8.0
+
+
+@pytest.mark.parametrize("bad_value", [0.0, -3.0, float("nan"), "8"])
+def test_search_altitude_rejects_non_positive_or_non_number(bad_value):
+    data = _valid_mission_dict()
+    data["search_area"]["altitude_m"] = bad_value
+
+    with pytest.raises(ValueError, match="search_area.altitude_m"):
+        parse_mission(data)

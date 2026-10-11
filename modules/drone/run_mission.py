@@ -389,13 +389,15 @@ def resolve_target_upper_color(target_color_arg: str | None, spec: MissionSpec |
 
 
 def apply_mission_spec(defaults: ParamDefaults, spec: MissionSpec) -> ParamDefaults:
-    """임무 파일의 탐색 구역으로 기본값을 덮는다 (D-13). 복귀 지점(home_*)은 파일에 없어 그대로다 (D-12)."""
+    """임무 파일의 탐색 구역(과 있으면 탐색 고도)으로 기본값을 덮는다 (D-13). 복귀 지점(home_*)은 파일에 없어 그대로다 (D-12)."""
+    search_altitude_m = defaults.search_altitude_m if spec.search_altitude_m is None else spec.search_altitude_m
     return dataclasses.replace(
         defaults,
         search_area_north_min_m=spec.search_north_min_m,
         search_area_north_max_m=spec.search_north_max_m,
         search_area_east_min_m=spec.search_east_min_m,
         search_area_east_max_m=spec.search_east_max_m,
+        search_altitude_m=search_altitude_m,
     )
 
 

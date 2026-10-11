@@ -1,5 +1,6 @@
 """선택·모드 종료 → 브라우저 — mission_loop 콜백 payload, bridge selection·mode_end 칸, run_mission browser 연결, urban_demo.toml."""
 
+import dataclasses
 import json
 import logging
 from datetime import datetime
@@ -256,9 +257,22 @@ def test_urban_demo_mission_loads_inside_mission_demo_map():
     spec = load_mission_file(URBAN_DEMO_PATH)
 
     assert spec.target_class == "person"
-    assert spec.target_upper_color is None  # any
+    assert spec.target_upper_color == "red"  # 빨간 옷 사람에게만 하트
+    assert spec.search_altitude_m == 8.0  # 15 m 에선 FPV 의 사람이 너무 작아 YOLO 가 못 잡는다
     for bound_m in (spec.search_north_min_m, spec.search_north_max_m, spec.search_east_min_m, spec.search_east_max_m):
         assert abs(bound_m) < MISSION_DEMO_MAP_HALF_M
     assert spec.search_north_min_m - spec.geofence_margin_m >= -MISSION_DEMO_MAP_HALF_M
     assert spec.search_north_max_m + spec.geofence_margin_m <= MISSION_DEMO_MAP_HALF_M
     assert spec.max_flight_sec == 300.0
+
+
+def test_mission_search_altitude_overrides_default_only_when_given():
+    from modules.decision.params import ParamDefaults
+    from modules.drone.run_mission import apply_mission_spec
+
+    spec = load_mission_file(URBAN_DEMO_PATH)
+    defaults = ParamDefaults()
+
+    assert apply_mission_spec(defaults, spec).search_altitude_m == 8.0
+    without_altitude = dataclasses.replace(spec, search_altitude_m=None)
+    assert apply_mission_spec(defaults, without_altitude).search_altitude_m == defaults.search_altitude_m

@@ -11,12 +11,13 @@
 
 [target]
 class = "person"
-upper_color = "any"         # 맵에 빨간 옷 보행자도 있지만 데모는 색 조건 없이 쏜다
+upper_color = "red"         # 빨간 옷 사람에게만 하트를 퍼붓는다(맵에 빨간 옷 보행자 T-21 이 있다)
 action = "heart"
 
 [search_area]
 north_m = [-45.0, 45.0]     # [min, max] m, 맵 경계 ±68 안
 east_m = [-6.0, 6.0]        # [min, max] m, 중앙 도로 폭 안
+altitude_m = 8.0            # m, 15 m 에선 FPV 의 사람이 ~17 px 라 YOLO 가 못 잡는다(8 m 에서 ~40 px)
 
 [safety]
 geofence_margin_m = 20.0    # m, 구역 밖 허용 폭

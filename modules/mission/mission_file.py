@@ -1,8 +1,9 @@
 """임무 파일 — TOML 한 장을 읽어 검증한 MissionSpec 을 돌려준다 (MIS-01, D-14).
 
-TOML 모양 (모든 섹션·키 필수, 모르는 섹션·키는 거부):
+TOML 모양 (모든 섹션·키 필수 — 선택 키 표시 제외, 모르는 섹션·키는 거부):
     [target]       class, upper_color ("red" | "any"), action ("heart")
     [search_area]  north_m, east_m — 각각 [min, max], min < max
+                   altitude_m (선택, > 0) — 탐색 고도. 없으면 ParamDefaults.search_altitude_m
     [safety]       geofence_margin_m (>= 0), battery_reserve_pct (0 <= x < 100), max_flight_sec (> 0)
 
 복귀 지점 필드는 없다 — RETURN 은 initialize GPS(운용자 위치, NED 원점)로 간다 (D-12).
@@ -26,6 +27,10 @@ _SECTION_KEYS: dict[str, tuple[str, ...]] = {
     "search_area": ("north_m", "east_m"),
     "safety": ("geofence_margin_m", "battery_reserve_pct", "max_flight_sec"),
 }
+# 선택 키 — 없어도 되지만 있으면 검증한다. 맵마다 탐지 가능한 고도가 달라 탐색 고도는 파일에서 바꿀 수 있게 둔다
+_OPTIONAL_SECTION_KEYS: dict[str, tuple[str, ...]] = {
+    "search_area": ("altitude_m",),
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,6 +45,7 @@ class MissionSpec:
     geofence_margin_m: float  # >= 0
     battery_reserve_pct: float  # 0 <= x < 100
     max_flight_sec: float  # > 0
+    search_altitude_m: float | None = None  # > 0, None 이면 기본 탐색 고도
 
 
 def parse_mission(data: dict) -> MissionSpec:
@@ -48,13 +54,14 @@ def parse_mission(data: dict) -> MissionSpec:
 
     _validate_sections(data)
     for section, keys in _SECTION_KEYS.items():
-        _validate_section_keys(section, data[section], keys)
+        _validate_section_keys(section, data[section], keys, _OPTIONAL_SECTION_KEYS.get(section, ()))
 
     target_class, target_upper_color, action = _read_target(data["target"])
 
     search_area = data["search_area"]
     north_min_m, north_max_m = _read_search_range("search_area.north_m", search_area["north_m"])
     east_min_m, east_max_m = _read_search_range("search_area.east_m", search_area["east_m"])
+    search_altitude_m = _read_optional_altitude("search_area.altitude_m", search_area.get("altitude_m"))
 
     geofence_margin_m, battery_reserve_pct, max_flight_sec = _read_safety(data["safety"])
 
@@ -69,6 +76,7 @@ def parse_mission(data: dict) -> MissionSpec:
         geofence_margin_m=geofence_margin_m,
         battery_reserve_pct=battery_reserve_pct,
         max_flight_sec=max_flight_sec,
+        search_altitude_m=search_altitude_m,
     )
 
 
@@ -98,10 +106,12 @@ def _validate_sections(data: Mapping) -> None:
             raise ValueError(f"field '{section}' must be a table, got {data[section]!r}")
 
 
-def _validate_section_keys(section: str, table: Mapping, allowed_keys: tuple[str, ...]) -> None:
+def _validate_section_keys(
+    section: str, table: Mapping, allowed_keys: tuple[str, ...], optional_keys: tuple[str, ...] = ()
+) -> None:
     # 모르는 키를 먼저 본다 — 오타가 "required" 보다 먼저 드러나게
     for key in table:
-        if key not in allowed_keys:
+        if key not in allowed_keys and key not in optional_keys:
             raise ValueError(f"field '{section}.{key}' is not allowed")
 
     for key in allowed_keys:
@@ -152,6 +162,16 @@ def _read_safety(safety: Mapping) -> tuple[float, float, float]:
         raise ValueError(f"field 'safety.max_flight_sec' must be > 0, got {max_flight_sec!r}")
 
     return geofence_margin_m, battery_reserve_pct, max_flight_sec
+
+
+def _read_optional_altitude(name: str, value: object) -> float | None:
+    if value is None:
+        return None
+
+    altitude_m = _require_finite_number(name, value)
+    if altitude_m <= 0:
+        raise ValueError(f"field '{name}' must be > 0, got {altitude_m!r}")
+    return altitude_m
 
 
 def _require_finite_number(name: str, value: object) -> float:
