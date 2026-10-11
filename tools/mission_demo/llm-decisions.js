@@ -99,8 +99,10 @@ export function createDecisionLog({ maxEntries = MAX_DECISION_ENTRIES, ttlMs = D
     return push(createModeEndLine(pipelineModeEnd.payload, pipelineModeEnd.seq), nowMs);
   }
 
+  // 지금 실행 중인 결정(가장 최신 selection)은 모드가 몇 분씩 돌아도 남긴다 — 그보다 오래된 항목만 TTL 로 지운다
   function prune(nowMs) {
-    while (entries.length && nowMs - entries[entries.length - 1].atMs > ttlMs) entries.pop();
+    const current = entries.find((entry) => entry.kind === 'selection');
+    while (entries.length && entries[entries.length - 1] !== current && nowMs - entries[entries.length - 1].atMs > ttlMs) entries.pop();
   }
 
   return { entries, addSelection, addModeEnd, prune };

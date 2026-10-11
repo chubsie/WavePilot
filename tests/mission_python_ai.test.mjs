@@ -174,7 +174,7 @@ test('decision card model carries mode, source, target and the previous result',
   assert.equal(createModeEndLine({ rule_mode: 'approach', outcome: 'success', target_track: 'T3' }, 2).text, 'END approach → success T3');
 });
 
-test('decision log is newest first, deduplicated by seq and expires with the YOLO log TTL', () => {
+test('decision log is newest first, deduplicated by seq and expires with the YOLO log TTL except the current decision', () => {
   assert.equal(DECISION_TTL_MS, LOG_TTL_MS);
   const log = createDecisionLog();
   assert.ok(log.addSelection({ seq: 1, payload: selectionPayload }, 0));
@@ -189,7 +189,10 @@ test('decision log is newest first, deduplicated by seq and expires with the YOL
   log.prune(DECISION_TTL_MS + 150);
   assert.deepEqual(log.entries.map((entry) => entry.key), ['selection-2', 'mode-end-1']);
   log.prune(DECISION_TTL_MS + 401);
-  assert.deepEqual(log.entries, []);
+  assert.deepEqual(log.entries.map((entry) => entry.key), ['selection-2'], 'the running decision stays past its TTL');
+  log.addSelection({ seq: 4, payload: selectionPayload }, DECISION_TTL_MS + 600);
+  log.prune(DECISION_TTL_MS + 600);
+  assert.deepEqual(log.entries.map((entry) => entry.key), ['selection-4'], 'a newer decision lets the old one expire');
   assert.equal(log.addSelection({ seq: 2, payload: selectionPayload }, DECISION_TTL_MS + 500), null, 'expired seq is not re-added');
 });
 
