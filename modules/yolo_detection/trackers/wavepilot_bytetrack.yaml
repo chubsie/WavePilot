@@ -1,0 +1,16 @@
+# WavePilot ByteTrack 설정 — 8 m 고도 FPV 의 작은 사람 박스(h 15~60 px, conf 0.2~0.6)에서 id 가 끊기지 않게 기본값을 조정한다.
+# 기본 bytetrack.yaml 과 다른 점과 이유:
+# - fuse_score False: 기본(True)은 1단계 비용을 1 - IoU*conf 로 매겨 conf 0.3 박스는 IoU 0.67 이상이어야 이어진다.
+#   작은 박스는 한두 픽셀만 움직여도 IoU 가 크게 떨어지므로 저신뢰 프레임마다 트랙이 끊기고 새 id 가 생긴다.
+# - track_buffer 120: 프레임 수 기준이다(최대 ~60 fps 에서 ~2 s). 기본 30 은 60 fps 에서 0.5 s 만에 잃은 트랙을 지운다.
+# - match_thresh 0.85: 1 - IoU <= 0.85, 즉 IoU 0.15 이상이면 이어 붙인다 — 카메라가 움직이는 작은 박스용.
+# - track_low_thresh 0.1: 2단계(저신뢰 박스로 기존 트랙 잇기) 하한. 지금은 YoloDetectionSource 가 conf 0.25 로 미리 거르므로
+#   2단계는 비어 있다 — conf 를 낮추면 이 값부터 기존 트랙만 잇는다(새 트랙은 new_track_thresh 이상).
+# - new_track_thresh 0.25: 새 트랙은 지금처럼 conf 0.25 이상에서만 만든다 — 저신뢰 박스는 기존 트랙만 잇는다.
+tracker_type: bytetrack
+track_high_thresh: 0.25
+track_low_thresh: 0.1
+new_track_thresh: 0.25
+track_buffer: 120
+match_thresh: 0.85
+fuse_score: False

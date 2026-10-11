@@ -20,7 +20,7 @@ from modules.yolo_detection.run_yolo import (
     stream_frames,
     summarize_latencies,
 )
-from modules.yolo_detection.source import YoloDetectionSource
+from modules.yolo_detection.source import DEFAULT_TRACKER, YoloDetectionSource
 
 BENCH_SUMMARY_KEYS = {
     "weights",
@@ -204,7 +204,7 @@ def test_run_detection_bench_writes_one_summary_line() -> None:
     assert (summary["image_width"], summary["image_height"]) == (1280, 720)
     assert summary["device"] == "cpu"
     assert model.track_kwargs[0]["persist"] is True
-    assert model.track_kwargs[0]["tracker"] == "bytetrack.yaml"
+    assert model.track_kwargs[0]["tracker"] == DEFAULT_TRACKER
 
 
 def test_run_detection_writes_frame_lines_to_result_stream() -> None:

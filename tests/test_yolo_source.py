@@ -1,5 +1,6 @@
 """YoloDetectionSource 테스트 — 가짜 모델 주입으로 Frame 계약을 검증한다 (DET-01, SC1, SC2, SC3)."""
 
+import dataclasses
 import sys
 import types
 
@@ -8,11 +9,11 @@ import pytest
 from modules.yolo_detection.interface.detection import DetectionSource, Frame
 from tests.yolo_fakes import FakeResult, FakeYoloModel, make_boxes
 from modules.yolo_detection.convert import convert_boxes
-from modules.yolo_detection.source import YoloDetectionSource
+from modules.yolo_detection.source import DEFAULT_TRACKER, YoloDetectionSource
 
 DEFAULT_TRACK_KWARGS = {
     "persist": True,
-    "tracker": "bytetrack.yaml",
+    "tracker": DEFAULT_TRACKER,
     "classes": [0, 2, 5, 7],
     "conf": 0.25,
     "imgsz": 640,
@@ -105,7 +106,9 @@ def test_yolo_source_forwards_custom_track_args() -> None:
 
 def test_yolo_source_frames_match_converted_boxes_and_round_trip() -> None:
     results = _make_results(2)
+    # 같은 자리에서 0.1 s 뒤 raw id 가 1 -> 2 로 바뀐 것은 id 교체라 TrackIdStabilizer 가 1 로 잇는다
     expected = [convert_boxes(result.boxes) for result in results]
+    expected[1] = tuple(dataclasses.replace(detection, track_id=1) for detection in expected[1])
     source = YoloDetectionSource(_make_image_source([0.0, 0.1]), model=FakeYoloModel(list(results)))
 
     frames = _read_all_frames(source)

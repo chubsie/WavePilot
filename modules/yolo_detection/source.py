@@ -5,20 +5,24 @@
 ultralytics 는 `__init__` 안에서만 지연 import 한다. 그래야 yolo 그룹이 없는 base 환경에서도 이 모듈을 import 할 수 있다 (SC3).
 프레임 크기는 `result.orig_shape` 에서 가져온다 — imgsz letterbox 와 무관하게 박스가 원본 픽셀 좌표로 나온다.
 person 박스에는 상체 색을 붙인다(D-02). 색 판별 함수는 생성자로 바꿔 끼울 수 있다(테스트 가짜 이미지용).
+트래커는 리포의 wavepilot_bytetrack.yaml 을 쓰고, 그래도 바뀌는 id 는 TrackIdStabilizer 가 안정 id 로 이어 준다.
 """
 
 import dataclasses
 from collections.abc import Callable, Iterable
+from pathlib import Path
 from typing import Any
 
 from modules.yolo_detection.interface.detection import Detection, Frame
 from modules.yolo_detection.convert import TRACKED_CLASS_IDS, convert_boxes
+from modules.yolo_detection.trackers.id_stabilizer import TrackIdStabilizer
 from modules.yolo_detection.upper_color import classify_upper_color
 
 ColorClassifier = Callable[[Any, tuple[float, float, float, float]], str | None]
 
 DEFAULT_WEIGHTS_PATH = "models/yolo11n.pt"  # cwd 에 자동 다운로드되지 않게 gitignore 된 models/ 로 고정
-DEFAULT_TRACKER = "bytetrack.yaml"
+# 기본 bytetrack.yaml 은 작은 저신뢰 박스에서 id 가 자주 바뀐다 — 조정 이유는 yaml 주석에 있다
+DEFAULT_TRACKER = str(Path(__file__).resolve().parent / "trackers" / "wavepilot_bytetrack.yaml")
 DEFAULT_CONFIDENCE_THRESHOLD = 0.25
 DEFAULT_IMAGE_SIZE = 640
 TIMESTAMP_DECIMALS = 3  # mock 과 같은 자릿수
@@ -36,6 +40,7 @@ class YoloDetectionSource:
         conf: float = DEFAULT_CONFIDENCE_THRESHOLD,
         imgsz: int = DEFAULT_IMAGE_SIZE,
         color_classifier: ColorClassifier | None = None,
+        id_stabilizer: TrackIdStabilizer | None = None,
     ) -> None:
         if not 0.0 < conf <= 1.0:
             raise ValueError(f"conf must be in (0, 1], got {conf}")
@@ -60,6 +65,7 @@ class YoloDetectionSource:
         }
         self._frame_index = 0
         self._color_classifier = color_classifier or classify_upper_color
+        self._id_stabilizer = id_stabilizer or TrackIdStabilizer()
 
     def read_frame(self) -> Frame | None:
         item = next(self._images, None)
@@ -79,7 +85,7 @@ class YoloDetectionSource:
             detections=detections,
         )
         self._frame_index += 1
-        return frame
+        return self._id_stabilizer.stabilize(frame)
 
     def _attach_upper_colors(self, detections: tuple[Detection, ...], image: Any) -> tuple[Detection, ...]:
         """person 박스에만 프레임 단위 상체 색을 붙인다. 나머지 박스는 upper_color None 그대로."""
