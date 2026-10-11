@@ -1,8 +1,7 @@
 // YOLO log: 브라우저 프레임 → Python YOLO 탐지 → state JSON → 보고 문장 흐름을 오른쪽 패널에 보여준다.
 // 위쪽은 순수 함수(node 테스트 대상), 아래 createYoloLogView 만 DOM 을 만진다. 서버 문자열은 textContent 로만 넣는다.
 
-export const MAX_LOG_ENTRIES = 30;
-export const FRAME_LOG_INTERVAL_MS = 1000;
+export const MAX_LOG_ENTRIES = 150;  // 30 fps 로 약 5 초치
 
 // ---------- 포맷 ----------
 const hasTrackId = (detection) => detection.track_id !== null && detection.track_id !== undefined;
@@ -74,10 +73,9 @@ export function reportSentences(payload) {
 }
 
 // ---------- 로그 모델 (최신이 앞) ----------
-export function createYoloLog({ maxEntries = MAX_LOG_ENTRIES, frameIntervalMs = FRAME_LOG_INTERVAL_MS } = {}) {
+export function createYoloLog({ maxEntries = MAX_LOG_ENTRIES } = {}) {
   const entries = [];
   const seenFrameIds = new Set();
-  let lastFrame = { atMs: -Infinity, signature: null };
   let lastStateSeq = null, lastReportSeq = null;
 
   function push(entry) {
@@ -89,14 +87,11 @@ export function createYoloLog({ maxEntries = MAX_LOG_ENTRIES, frameIntervalMs = 
     return entry;
   }
 
-  // 같은 frame_id 는 한 번만, 그리고 탐지 내용이 바뀌었거나 frameIntervalMs 가 지났을 때만 남긴다
-  function addFrame(frame, latencyMs, nowMs) {
+  // YOLO 가 낸 프레임마다 한 줄 — 폴링마다 최근 결과가 겹쳐 오므로 frame_id 로만 중복을 거른다
+  function addFrame(frame, latencyMs) {
     if (!frame || seenFrameIds.has(frame.frame_id)) return null;
-    const signature = detectionSignature(frame);
-    if (signature === lastFrame.signature && nowMs - lastFrame.atMs < frameIntervalMs) return null;
 
     seenFrameIds.add(frame.frame_id);
-    lastFrame = { atMs: nowMs, signature };
     return push({
       kind: 'frame', key: `frame-${frame.frame_id}`, seq: frame.seq, frame,
       header: formatFrameHeader(frame, latencyMs),

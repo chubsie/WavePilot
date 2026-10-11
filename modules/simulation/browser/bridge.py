@@ -26,6 +26,7 @@ HEART_SHOT_EVENT = "heart_shot"
 HEART_SHOT_LIMIT = 1000
 FRAME_FPS_WINDOW_SEC = 1.0
 PIPELINE_MESSAGE_KINDS = ("state", "report")
+DETECTION_LOG_SIZE = 30  # 페이지 폴링 한 번 사이에 YOLO 가 낸 결과를 빠짐없이 넘길 만큼
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,6 +63,7 @@ class SimBridge:
 
         self._detections: dict | None = None
         self._detections_seq: int | None = None
+        self._detection_log: deque[dict] = deque(maxlen=DETECTION_LOG_SIZE)
         self._yolo_latency_ms: float | None = None
 
         self._pipeline_messages: dict[str, dict | None] = dict.fromkeys(PIPELINE_MESSAGE_KINDS)
@@ -213,6 +215,7 @@ class SimBridge:
             self._detections = frame_dict
             self._detections_seq = seq
             self._yolo_latency_ms = latency_ms
+            self._detection_log.append({**frame_dict, "seq": seq, "latency_ms": latency_ms})
 
     def latest_detections(self) -> dict | None:
         with self._condition:
@@ -224,6 +227,11 @@ class SimBridge:
             if self._detections is None or self._detections_seq is None:
                 return self._detections
             return {**self._detections, "seq": self._detections_seq}
+
+    def recent_detections(self) -> list[dict]:
+        """최근 YOLO 결과 전부(오래된 것부터) — 페이지가 frame_id 로 중복을 걸러 프레임마다 로그를 남긴다."""
+        with self._condition:
+            return [dict(entry) for entry in self._detection_log]
 
     # --- Python → 브라우저: 파이프라인 state·report (운용자 콘솔 대신 페이지가 받는다) ---
 

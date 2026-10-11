@@ -43,7 +43,9 @@ const testFlight=new TestFlight();
 // Python 은 이 데모의 비행을 조종하지 않는다 — 명령은 모두 거절한다.
 const SimLink = window.SimLink;
 const RAD_TO_DEG = 180 / Math.PI;
-const YOLO_PANEL_REFRESH_MS = 200;
+const YOLO_PANEL_REFRESH_MS = 1000 / 30;
+const YOLO_FPS_WINDOW_MS = 1000;
+const yoloFrameTimes = [];  // 로그에 새로 들어온 YOLO 프레임 시각 — 실측 fps 용
 const yoloLog = createYoloLog();
 const yoloView = createYoloLogView($('yolo-log'));
 let shownReportSeq = null;
@@ -79,6 +81,8 @@ const link = SimLink && world.fpvCanvas ? SimLink.createLink({
   isAiMode: () => mode === 'ai' || mode === 'auto',
   onCommand: () => false,
   takeEvents: () => [],
+  // 업로드 상한을 렌더 속도로 열어 두고 in-flight 2 장 제한을 역압으로 쓴다 — YOLO 는 자기 처리 속도 그대로 돈다
+  frameHz: 60, telemetryHz: 60,  // 결과 폴링도 같이 열어 FPV 박스가 YOLO 속도대로 갱신되게
   log: (line) => console.info('[sim-link]', line),
 }) : null;
 link?.start();
@@ -250,13 +254,17 @@ function renderPipelineReport(pipelineReport) {
 
 function updateYoloPanel() {
   if (!link) return;
-  const frame = getFreshDetections();
-  if (frame) yoloLog.addFrame(frame, link.state.yoloLatencyMs, performance.now());
+  if (mode !== 'test') {
+    for (const frame of link.state.detectionLog) {
+      if (yoloLog.addFrame(frame, frame.latency_ms)) yoloFrameTimes.push(performance.now());
+    }
+  }
+  while (yoloFrameTimes.length && performance.now() - yoloFrameTimes[0] > YOLO_FPS_WINDOW_MS) yoloFrameTimes.shift();
+  $("yolo-fps").textContent = String(yoloFrameTimes.length);
   const pipeline = link.state.pipeline || {};
   yoloLog.addState(pipeline.state);
   yoloLog.addReport(pipeline.report);
   yoloView.render(yoloLog.entries);
-  $("yolo-log-count").textContent = String(yoloLog.entries.length).padStart(2, "0");
 
   const report = getPipelineReport();
   if (report) renderPipelineReport(report);

@@ -12,7 +12,7 @@ import pytest
 from modules.comm.interface import CommLink, Message
 from modules.drone import run_scenario
 from modules.flight_control.interface import Telemetry
-from modules.simulation.browser.bridge import BrowserFrame, SimBridge
+from modules.simulation.browser.bridge import DETECTION_LOG_SIZE, BrowserFrame, SimBridge
 from modules.simulation.browser.comm_link import BridgeCommLink
 from modules.simulation.browser.detection_source import BrowserDetectionSource
 from modules.simulation.browser.server import start_sim_server
@@ -176,6 +176,28 @@ def test_detections_without_seq_are_sent_unchanged(sim_server) -> None:
     assert response["detections"] == detections
 
 
+def test_detection_log_carries_every_recent_yolo_frame_oldest_first(sim_server) -> None:
+    bridge, port = sim_server
+    for frame_id in range(DETECTION_LOG_SIZE + 5):
+        bridge.publish_detections({"frame_id": frame_id, "detections": []}, 8.0 + frame_id, seq=100 + frame_id)
+
+    log = post_telemetry(port)["detection_log"]
+
+    assert [entry["frame_id"] for entry in log] == list(range(5, DETECTION_LOG_SIZE + 5))
+    assert log[-1]["seq"] == 100 + DETECTION_LOG_SIZE + 4
+    assert log[-1]["latency_ms"] == 8.0 + DETECTION_LOG_SIZE + 4
+
+
+def test_static_files_are_not_heuristically_cached(sim_server) -> None:
+    _, port = sim_server
+
+    _, static_headers, _ = request(port, "GET", "/mission_demo/app.js")
+    _, api_headers, _ = request(port, "POST", "/sim/telemetry", body=json.dumps(_make_telemetry_post()).encode(), headers={"Content-Type": "application/json"})
+
+    assert static_headers["cache-control"] == "no-cache"
+    assert api_headers["cache-control"] == "no-store"
+
+
 # --- A3 BridgeCommLink → pipeline 필드 ---
 
 
@@ -189,7 +211,7 @@ def test_telemetry_response_has_empty_pipeline_before_any_message(sim_server) ->
     response = post_telemetry(port)
 
     assert response["pipeline"] == {"state": None, "report": None}
-    assert set(response) == {"commands", "detections", "status", "mission", "pipeline"}
+    assert set(response) == {"commands", "detections", "status", "mission", "pipeline", "detection_log"}
     assert set(response["status"]) == {"frame_fps", "yolo_latency_ms"}
 
 
