@@ -2,7 +2,7 @@ import { resolveMovement, sphereIntersectsAabb } from "./collision.js";
 import { createDrone } from "./drone-model.js";
 import { MainFlightCore, D2R, DRAG_H, DRAG_V } from "./flight-core.js";
 import { HeartBeam, updateStatusLeds } from "./hearts.js";
-import { PEOPLE, createWalker } from './population.js';
+import { PEOPLE, createStandingPerson, createWalker } from './population.js';
 import { createCourse, TEST_START } from './test-flight.js';
 import { createMountain, terrainHeight } from './mountain-course.js';
 
@@ -337,17 +337,11 @@ export class DroneWorld {
   }
 
   addPeople() {
-    const parts=[];
-    this.environment.traverse(object=>{if(object.isMesh && object.name.startsWith('Person_T03')) parts.push(object);});
+    // 절차적 휴머노이드 — GLB 의 저폴리 Person_T03 은 YOLO 가 person 으로 못 잡는다
     for (const person of PEOPLE) {
-      const group=person.route?createWalker(THREE,person.color):new THREE.Group();
+      const group=person.route?createWalker(THREE,person.color):createStandingPerson(THREE,person);
       group.name=`Person_${person.id}`;
       group.position.set(...person.feet);
-      for (const source of person.route?[]:parts) {
-        const mesh=source.clone();
-        mesh.position.sub(new THREE.Vector3(2,0,-22));
-        group.add(mesh);
-      }
       this.environment.add(group);
       this.targetMeshes.set(person.id,[{object:group,initial:group.position.clone(),origin:[person.feet[0],person.feet[2]]}]);
     }
