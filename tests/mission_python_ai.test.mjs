@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import {
+  formatAiBadge, formatConfidence, formatProbabilityBars, formatModeResult, formatFallbackReason,
+  createDecisionCard, createModeEndLine, createDecisionLog, DECISION_TTL_MS,
+} from '../tools/mission_demo/llm-decisions.js';
+import { LOG_TTL_MS } from '../tools/mission_demo/yolo-log.js';
 
 const require = createRequire(import.meta.url);
 const T = require('../tools/visualizer/three.min.js');
@@ -108,4 +113,88 @@ test('fire_heart reaches onHeart and the recorded heart_shot event', () => {
   assert.equal(autopilot.apply({ id: 2, kind: 'fire_heart', track_id: 'T3' }, 1), false);
   assert.deepEqual(shots, [3]);
   assert.deepEqual(autopilot.takeEvents(), [{ kind: 'heart_shot', track_id: 3, time_sec: 1, actor_id: null }]);
+});
+
+// ---------- llm-decisions ----------
+const selectionPayload = {
+  time_sec: 12.3, event_kind: 'new_target', rule_mode: 'approach', params: { target_track: 'T3' },
+  source: 'd1', confidence: .823, probabilities: { approach: .823, search: .1, observe: .05, hold: .027 },
+  fallback_reason: 'none', options: ['search', 'approach', 'observe', 'hold', 'aim_and_fire'], latency_ms: 41.6,
+  mode_result: { rule_mode: 'search', outcome: 'success', target_track: 'T3' },
+};
+
+test('AI badge shows the running mode or WAITING', () => {
+  assert.equal(formatAiBadge({ running_mode: 'aim_and_fire' }), 'AI · AIM_AND_FIRE');
+  assert.equal(formatAiBadge({ running_mode: null }), 'AI · WAITING');
+  assert.equal(formatAiBadge(null), 'AI · WAITING');
+  assert.equal(formatAiBadge(undefined), 'AI · WAITING');
+});
+
+test('confidence, fallback reason and mode result formats', () => {
+  assert.equal(formatConfidence(.823), '82%');
+  assert.equal(formatConfidence(null), '–');
+  assert.equal(formatConfidence('0.5'), '–');
+  assert.equal(formatFallbackReason('none'), null);
+  assert.equal(formatFallbackReason(null), null);
+  assert.equal(formatFallbackReason('timeout'), 'timeout');
+  assert.equal(formatModeResult({ rule_mode: 'search', outcome: 'success', target_track: 'T3' }), 'search → success T3');
+  assert.equal(formatModeResult({ rule_mode: 'hold', outcome: 'timeout', target_track: null }), 'hold → timeout');
+  assert.equal(formatModeResult(null), null);
+});
+
+test('probability bars follow options, sort high first, keep the top four and clamp', () => {
+  assert.deepEqual(formatProbabilityBars(selectionPayload.probabilities, selectionPayload.options), [
+    { mode: 'approach', percent: 82 }, { mode: 'search', percent: 10 }, { mode: 'observe', percent: 5 }, { mode: 'hold', percent: 3 },
+  ]);
+  assert.deepEqual(formatProbabilityBars({ a: 1.4, b: -1, c: 'x' }, []), [{ mode: 'a', percent: 100 }, { mode: 'b', percent: 0 }, { mode: 'c', percent: 0 }]);
+  assert.deepEqual(formatProbabilityBars(null, null), []);
+});
+
+test('decision card model carries mode, source, target and the previous result', () => {
+  const card = createDecisionCard(selectionPayload, 5);
+  assert.equal(card.key, 'selection-5');
+  assert.equal(card.mode, 'APPROACH');
+  assert.equal(card.source, 'd1');
+  assert.equal(card.sourceClass, 'd1');
+  assert.equal(card.confidence, '82%');
+  assert.equal(card.fallbackReason, null);
+  assert.equal(card.eventKind, 'new_target');
+  assert.equal(card.target, 'T3');
+  assert.equal(card.previousResult, 'search → success T3');
+  assert.equal(card.latency, '42 ms');
+
+  const forced = createDecisionCard({ rule_mode: 'return_home', source: 'FORCED', confidence: null, fallback_reason: 'battery_low', params: {} }, 6);
+  assert.equal(forced.source, 'forced');
+  assert.equal(forced.confidence, '–');
+  assert.equal(forced.fallbackReason, 'battery_low');
+  assert.equal(forced.target, null);
+  assert.equal(forced.previousResult, null);
+  assert.equal(forced.latency, null);
+  assert.equal(createDecisionCard({ source: '<b>x</b>' }, 7).sourceClass, 'unknown', 'unknown sources never become a CSS class');
+  assert.equal(createModeEndLine({ rule_mode: 'approach', outcome: 'success', target_track: 'T3' }, 2).text, 'END approach → success T3');
+});
+
+test('decision log is newest first, deduplicated by seq and expires with the YOLO log TTL', () => {
+  assert.equal(DECISION_TTL_MS, LOG_TTL_MS);
+  const log = createDecisionLog();
+  assert.ok(log.addSelection({ seq: 1, payload: selectionPayload }, 0));
+  assert.equal(log.addSelection({ seq: 1, payload: selectionPayload }, 100), null, 'same seq polled again');
+  assert.ok(log.addModeEnd({ seq: 1, payload: { rule_mode: 'approach', outcome: 'success', target_track: 'T3' } }, 200));
+  assert.equal(log.addModeEnd({ seq: 1, payload: {} }, 300), null);
+  assert.ok(log.addSelection({ seq: 2, payload: { ...selectionPayload, rule_mode: 'aim_and_fire' } }, 400));
+  assert.equal(log.addSelection(null, 500), null);
+  assert.equal(log.addSelection({ seq: 3 }, 500), null, 'missing payload');
+  assert.deepEqual(log.entries.map((entry) => entry.key), ['selection-2', 'mode-end-1', 'selection-1']);
+
+  log.prune(DECISION_TTL_MS + 150);
+  assert.deepEqual(log.entries.map((entry) => entry.key), ['selection-2', 'mode-end-1']);
+  log.prune(DECISION_TTL_MS + 401);
+  assert.deepEqual(log.entries, []);
+  assert.equal(log.addSelection({ seq: 2, payload: selectionPayload }, DECISION_TTL_MS + 500), null, 'expired seq is not re-added');
+});
+
+test('decision log is capped', () => {
+  const log = createDecisionLog({ maxEntries: 3 });
+  for (let seq = 1; seq <= 5; seq++) log.addSelection({ seq, payload: selectionPayload }, seq);
+  assert.deepEqual(log.entries.map((entry) => entry.seq), [5, 4, 3]);
 });

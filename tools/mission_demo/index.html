@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#080b09">
   <title>WavePilot — Field Command</title>
-  <link rel="stylesheet" href="styles.css?v=yolo-log-5">
+  <link rel="stylesheet" href="styles.css?v=llm-decisions-1">
 </head>
 <body>
   <header class="command-bar">
@@ -69,7 +69,7 @@
               <button id="observation-toggle" class="utility-button">Start observation</button>
               <button id="reset-flight" class="utility-button">Reset position</button>
             </div>
-            <p>Thumb / M: Manual ↔ Circle · Middle / L: Hearts</p>
+            <p>Thumb / M: Manual ↔ AI · Middle / L: Hearts</p>
             <output id="flight-details"></output>
             <canvas id="sensor-chart" aria-label="Last 500 sensor samples"></canvas>
             <p class="chart-legend"><span>Roll</span><span>Pitch</span><span>Yaw rate</span></p>
@@ -107,12 +107,12 @@
         <div id="yolo-log" class="yolo-log" aria-live="off"></div>
       </section>
 
-      <section class="panel-section detections-section">
+      <section class="panel-section decisions-section">
         <header class="section-heading">
-          <div><h1>Visible targets</h1><span id="detection-source" class="source-badge">ORIN DEMO (fallback)</span></div>
-          <div class="metric"><b id="track-count">0</b><small>TARGETS</small></div>
+          <div><h1>LLM Decisions</h1></div>
+          <div class="metric"><b id="decision-running-mode">–</b><small>RUNNING MODE</small></div>
         </header>
-        <div id="detection-list" class="detection-list" aria-live="polite"></div>
+        <div id="decision-list" class="decision-list" aria-live="polite"></div>
       </section>
 
     </aside>
