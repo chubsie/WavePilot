@@ -48,6 +48,7 @@ from modules.decision.factory import SelectorConfig, create_decision_model
 from modules.decision.interface import DecisionModel
 from modules.decision.params import ParamDefaults
 from modules.drone.mission_loop import (
+    DEFAULT_REDECIDE_INTERVAL_SEC,
     MissionConfig,
     MissionFrameSource,
     MissionRunner,
@@ -304,6 +305,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "(mission max_flight_sec wins)",
     )
     parser.add_argument("--tick-hz", type=float, default=DEFAULT_TICK_HZ, help="mission loop ticks per sim second")
+    parser.add_argument(
+        "--redecide-sec", type=float, default=DEFAULT_REDECIDE_INTERVAL_SEC,
+        help=f"re-run the selector every N sim seconds while a mode runs and switch if the decision differs "
+        f"(default {DEFAULT_REDECIDE_INTERVAL_SEC}; 0 = only on events, the old behavior)",
+    )
     parser.add_argument(
         "--speed", type=float, default=0.0,
         help="mock only: sim seconds per wall second; 0 = as fast as possible",
@@ -616,6 +622,7 @@ def _build_runner(
         on_selection=on_selection,
         on_mode_end=on_mode_end,
         is_link_up=is_link_up,
+        redecide_interval_sec=args.redecide_sec if args.redecide_sec > 0 else None,  # 0 이면 재판단 끔
     )
 
 
@@ -694,6 +701,8 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
         parser.error(f"--max-mission-sec must be > 0, got {args.max_mission_sec}")
     if args.tick_hz <= 0:
         parser.error(f"--tick-hz must be > 0, got {args.tick_hz}")
+    if not math.isfinite(args.redecide_sec) or args.redecide_sec < 0:
+        parser.error(f"--redecide-sec must be a finite number >= 0, got {args.redecide_sec}")
     if args.speed < 0:
         parser.error(f"--speed must be >= 0, got {args.speed}")
     if args.sim_connect_timeout_sec <= 0:

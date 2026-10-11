@@ -260,11 +260,11 @@ def test_rule_selector_mission_flows_search_approach_fire_search_return():
     assert result.end_reason == END_LANDED
     assert result.final_flight_mode == "grounded"
     assert not result.forced_return
-    assert modes == ["search", "approach", "aim_and_fire", "search", "return_home"]
-    assert result.mode_results[0] == ModeResult("search", "success", "T1")
-    assert result.mode_results[1] == ModeResult("approach", "success", "T1")
-    assert result.mode_results[2] == ModeResult("aim_and_fire", "success", "T1")
-    assert result.mode_results[3].outcome == "failure"
+    # 1 s 재판단: new_target 에서 search 를 버리고 approach 로 바꾼다 — search 는 결과 없이 끝난다
+    assert modes == ["approach", "aim_and_fire", "search", "return_home"]
+    assert result.mode_results[0] == ModeResult("approach", "success", "T1")
+    assert result.mode_results[1] == ModeResult("aim_and_fire", "success", "T1")
+    assert result.mode_results[2].outcome == "failure"
     assert result.mode_results[-1] == ModeResult("return_home", "success", None)
     assert [record.rule_mode for record in result.selections] == ["search", "approach", "aim_and_fire", "search", "return_home"]
     assert result.selections[1].params["target_track"] == "T1"
@@ -303,7 +303,7 @@ def test_hearted_label_reaches_next_selection_state():
 def test_aim_and_fire_fires_burst_and_marks_hearted(caplog):
     caplog.set_level(logging.INFO, logger="modules.drone.mission_loop")
     selector = ScriptedSelector(["search", "aim_and_fire", "return_home"])
-    runner, flight = build_runner(selector)
+    runner, flight = build_runner(selector, redecide_interval_sec=None)  # 순서 고정 선택기 — 사건 때만 고른다
 
     result = runner.run()
 
@@ -319,7 +319,9 @@ def test_aim_and_fire_fires_burst_and_marks_hearted(caplog):
 
 def test_observe_succeeds_once_color_is_confirmed():
     selector = ScriptedSelector(["search", "observe", "return_home"])
-    runner, flight = build_runner(selector, targets=(RED_PERSON,), settings=build_red_settings())
+    runner, flight = build_runner(
+        selector, targets=(RED_PERSON,), settings=build_red_settings(), redecide_interval_sec=None
+    )
 
     result = runner.run()
 
@@ -336,7 +338,8 @@ def test_observe_succeeds_once_color_is_confirmed():
 def test_burst_rejected_midway_fails_but_marks_hearted():
     selector = ScriptedSelector(["search", "aim_and_fire", "return_home"])
     runner, flight = build_runner(
-        selector, control_wrapper=lambda inner: HeartRejectingControl(inner, accepted_heart_count=3)
+        selector, control_wrapper=lambda inner: HeartRejectingControl(inner, accepted_heart_count=3),
+        redecide_interval_sec=None,
     )
 
     result = runner.run()
@@ -351,7 +354,8 @@ def test_burst_rejected_midway_fails_but_marks_hearted():
 def test_burst_rejected_from_first_shot_is_not_hearted():
     selector = ScriptedSelector(["search", "aim_and_fire", "return_home"])
     runner, flight = build_runner(
-        selector, control_wrapper=lambda inner: HeartRejectingControl(inner, accepted_heart_count=0)
+        selector, control_wrapper=lambda inner: HeartRejectingControl(inner, accepted_heart_count=0),
+        redecide_interval_sec=None,
     )
 
     result = runner.run()
@@ -427,7 +431,7 @@ def test_loop_accepts_any_decision_model():
 
 def test_max_flight_time_forces_return_home_without_selector():
     selector = ScriptedSelector(["hold"])
-    runner, _ = build_runner(selector, config=MissionConfig(max_mission_sec=20.0))
+    runner, _ = build_runner(selector, config=MissionConfig(max_mission_sec=20.0), redecide_interval_sec=None)
 
     result = runner.run()
 
@@ -569,7 +573,8 @@ def test_ai_to_manual_stops_commands_and_resume_selects_immediately():
 
     selector = ScriptedSelector(["search", "return_home"])
     runner, flight = build_runner(
-        selector, targets=(), operator=operator, on_advance=take_over_between_thirty_and_forty_seconds
+        selector, targets=(), operator=operator, on_advance=take_over_between_thirty_and_forty_seconds,
+        redecide_interval_sec=None,
     )
 
     result = runner.run()
@@ -602,7 +607,9 @@ def test_resume_after_manual_keeps_hearted_tracks():
             operator.ai_requested = True
 
     selector = ScriptedSelector(["search", "aim_and_fire", "hold"])
-    runner, flight = build_runner(selector, operator=operator, on_advance=take_over_after_burst)
+    runner, flight = build_runner(
+        selector, operator=operator, on_advance=take_over_after_burst, redecide_interval_sec=None
+    )
 
     result = runner.run()
 

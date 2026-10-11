@@ -26,8 +26,19 @@ mock·browser 클래스를 모른다. 시간은 clock() 으로 읽고 advance(dt
 | e    | AI 일 때만 이번 틱의 모드 결과를 trigger.poll 에 넘긴다                                           |
 | f    | return_home 결과 처리: success -> 착륙 종료, failure -> 비정상 종료, timeout -> 한 번 재시도       |
 | g    | 안전 감시 check (매 틱, 모드와 무관하게 이력 갱신). AI 이고 사유가 있으면 AI→RETURN, 강제 복귀     |
-| h    | AI 이고 실행 중 모드가 없을 때만 선택. 재개 틱에 사건이 없으면 periodic_check 로 즉시 고른다       |
+| h    | AI 일 때 선택. 모드가 없으면 사건이 있을 때 고르고(재개 틱에 사건이 없으면 periodic_check 로 즉시), |
+|      | 모드가 있으면 재판단(아래)                                                                       |
 | i    | link 변화 로그, on_status, should_abort / 강제 정지 확인, advance(dt)                             |
+
+재판단 ("다르면 전환", redecide_interval_sec 마다 — 기본 1 s, None 이면 끔):
+- AI 이고 실행 중 모드가 있으면, 마지막 선택이 끝난 시각에서 간격이 지났거나 사건(new_target·periodic_check)이 난
+  틱에 선택기를 다시 부른다. 간격은 select 완료 시각부터 잰다 — d1 이 오래 막혀도 다음 판단 전에 틱이 돈다.
+- 결과 (rule_mode, target_track) 이 실행 중 모드와 같으면 그대로 계속한다(모드 step·명령 끊김 없음). 이 판단은
+  selection 기록·MissionLog 에 남기지 않고 debug 로그와 on_selection payload("continued": true)만 낸다.
+- 다르면 실행 중 모드를 버리고(mode_abandoned reason=redecide) 새 모드로 바꾼다 — 보통 선택처럼 기록한다.
+- 끊지 않는 모드: aim_and_fire 연사 중(첫 FireHeart 수락 이후) · return_home(선택·강제 모두). 이때는 판단하지 않는다.
+- 방금 실패한 (모드, track) 으로는 재판단으로도 바꾸지 않는다 — 선택기 보기 필터는 mode_ended 사건에서만 그 쌍을
+  빼므로, 이어지는 periodic 재판단이 같은 실패를 곧바로 다시 고르지 않게 루프가 막는다.
 
 하트 기록 (D-13, D-14, SC5):
 - 모드에는 원본 FlightControl 대신 HeartRecordingControl 프록시를 넘긴다. 수락된 FireHeart 를 보면 그 track 을
@@ -75,6 +86,7 @@ from typing import Protocol
 
 from modules.decision.interface import DecisionModel, SelectionResult
 from modules.decision.interface.state import EVENT_PERIODIC_CHECK, ModeResult, SelectionEvent, SelectionState
+from modules.decision.options import FAILED_OUTCOMES
 from modules.decision.params import ParamDefaults, fill_params
 from modules.decision.trigger import PERIODIC_CHECK_INTERVAL_SEC, SelectionTrigger
 from modules.drone.selection_state import build_selection_state
@@ -107,11 +119,14 @@ HEART_LOG_PREFIX = "heart"
 HEART_DUPLICATE_LOG_PREFIX = "heart_duplicate"
 
 AIRBORNE_TOLERANCE_M = 1.0
+DEFAULT_REDECIDE_INTERVAL_SEC = 1.0  # 실행 중 모드 재판단 간격 (select 완료 시각 기준)
+REDECIDE_EPSILON_SEC = 1e-6  # 틱 시각 누적 오차로 간격을 한 틱 늦게 보지 않게
 LINK_WAIT_LOG_INTERVAL_SEC = 10.0  # 링크 대기 중 'waiting for simulator reconnect' 줄 간격(틱 수로 잰 대략값)
 
 EVENT_RETURN_RETRY = "return_home_retry"
 SOURCE_FORCED = "forced"
 RETURN_REASON_SELECTED = "selector"  # 선택기가 return_home 을 골랐을 때의 return 로그 사유
+ABANDON_REASON_REDECIDE = "redecide"
 
 END_LANDED = "landed"
 END_TAKEOFF_REJECTED = "takeoff_rejected"
@@ -176,8 +191,11 @@ class MissionRunResult:
         return self.end_reason == END_LANDED
 
 
-def build_selection_payload(record: SelectionRecord, result: SelectionResult | None) -> dict:
-    """selection pipeline payload. result 가 None 이면 강제 복귀 — 확률·보기·지연이 없다."""
+def build_selection_payload(record: SelectionRecord, result: SelectionResult | None, continued: bool = False) -> dict:
+    """selection pipeline payload. result 가 None 이면 강제 복귀 — 확률·보기·지연이 없다.
+
+    continued 는 재판단 결과가 실행 중 모드와 같아 그대로 계속한다는 뜻 — 페이지가 새 결정 카드로 덮지 않게.
+    """
     return {
         "time_sec": record.time_sec,
         "event_kind": record.event_kind,
@@ -190,6 +208,7 @@ def build_selection_payload(record: SelectionRecord, result: SelectionResult | N
         "options": [] if result is None else list(result.options),
         "latency_ms": None if result is None else result.latency.total_ms,
         "mode_result": _mode_result_to_dict(record.mode_result),
+        "continued": continued,
     }
 
 
@@ -268,7 +287,10 @@ class MissionRunner:
         on_selection: Callable[[dict], None] | None = None,
         on_mode_end: Callable[[dict], None] | None = None,
         is_link_up: Callable[[], bool] | None = None,
+        redecide_interval_sec: float | None = DEFAULT_REDECIDE_INTERVAL_SEC,
     ) -> None:
+        _validate_redecide_interval(redecide_interval_sec)
+
         self._flight_control = flight_control
         self._frame_source = frame_source
         self._aggregator = aggregator
@@ -302,7 +324,12 @@ class MissionRunner:
         self._clock_offset_sec = 0.0
         self._takeoff_sec: float | None = None  # 첫 TakeOff 수락 시각 — 비행 경과 기준 (MANUAL 포함)
         self._running_mode: RuleMode | None = None
-        self._heart_control = HeartRecordingControl(flight_control, self._record_heart)
+        self._running_target: str | None = None  # 실행 중 모드를 고른 params 의 target_track — 재판단 비교용
+        self._is_burst_started = False  # 실행 중 모드에서 FireHeart 가 한 발이라도 수락됐다
+        self._redecide_interval_sec = redecide_interval_sec
+        self._last_decide_sec: float | None = None  # 마지막 select 가 끝난 시각
+        self._last_failed_choice: tuple[str, str | None] | None = None  # 직전 모드가 실패했으면 그 (모드, track)
+        self._heart_control = HeartRecordingControl(flight_control, self._handle_heart_accepted)
         self._latest_tracks: tuple[Track, ...] = ()
         self._hearted_track_ids: list[int] = []  # 기록 순서 유지
         self._hearted_positions: list[tuple[float, float]] = []  # 발사 순간 (north_m, east_m)
@@ -453,7 +480,7 @@ class MissionRunner:
             if self._modes.mode == MODE_AI:
                 if is_resumed and event is None and self._running_mode is None:
                     event = SelectionEvent(EVENT_PERIODIC_CHECK, None)  # 재개 즉시 새로 고른다 (D-08)
-                self._select_next_mode(now_sec, state, event)
+                self._decide(now_sec, state, event)
 
             self._record_link(now_sec, link)
             self._publish_status(now_sec, link)
@@ -524,23 +551,104 @@ class MissionRunner:
 
         return None
 
-    def _select_next_mode(self, now_sec: float, state: SelectionState, event: SelectionEvent | None) -> None:
-        if event is None:
-            return
-        if self._running_mode is not None:
-            logger.debug("event %s ignored while %s is running", event.kind, self._running_mode.rule_mode)
+    # --- 선택·재판단 ---
+
+    def _decide(self, now_sec: float, state: SelectionState, event: SelectionEvent | None) -> None:
+        """AI 틱의 선택 단계. 모드가 없으면 사건에 고르고, 있으면 간격·사건마다 재판단한다("다르면 전환")."""
+        if self._running_mode is None:
+            if event is not None:
+                self._start_selected_mode(now_sec, event, self._select(state, event))
             return
 
+        if not self._is_redecidable():
+            if event is not None:
+                logger.debug("event %s ignored while %s is running", event.kind, self._running_mode.rule_mode)
+            return
+        if event is None and not self._is_redecide_due(now_sec):
+            return
+
+        redecide_event = event if event is not None else SelectionEvent(EVENT_PERIODIC_CHECK, None)
+        if event is None:
+            self._trigger.reset_periodic(now_sec)  # 이 재판단이 주기 확인을 겸한다 — 곧이어 periodic_check 가 겹치지 않게
+        self._redecide(now_sec, redecide_event, self._select(state, redecide_event))
+
+    def _select(self, state: SelectionState, event: SelectionEvent) -> SelectionResult:
         result = self._decision_model.select(state, event)
+        self._last_decide_sec = self._now()  # 간격은 select 가 끝난 시각부터 — 느린 선택기가 틱을 굶기지 않게
+
+        return result
+
+    def _is_redecidable(self) -> bool:
+        """실행 중 모드를 재판단으로 끊어도 되는지. 연사 중 aim_and_fire 와 return_home 은 끊지 않는다."""
+        if self._redecide_interval_sec is None or self._running_mode is None:
+            return False
+
+        rule_mode = self._running_mode.rule_mode
+        if rule_mode == "return_home":
+            return False
+        return not (rule_mode == "aim_and_fire" and self._is_burst_started)
+
+    def _is_redecide_due(self, now_sec: float) -> bool:
+        if self._redecide_interval_sec is None:
+            return False
+        if self._last_decide_sec is None:
+            return True
+
+        return now_sec - self._last_decide_sec >= self._redecide_interval_sec - REDECIDE_EPSILON_SEC
+
+    def _redecide(self, now_sec: float, event: SelectionEvent, result: SelectionResult) -> None:
+        running_mode = self._running_mode
+        assert running_mode is not None  # _decide 가 확인했다
+
+        choice = (result.rule_mode, _get_target_track(result.params))
+        if choice == (running_mode.rule_mode, self._running_target):
+            self._report_continued(now_sec, event, result)
+            return
+        if choice == self._last_failed_choice:
+            logger.info(
+                "redecide_ignored t=%.1f mode=%s target=%s reason=just_failed (keeping %s)",
+                now_sec, choice[0], choice[1], running_mode.rule_mode,
+            )
+            return
+
+        logger.info(
+            "redecide t=%.1f from=%s/%s to=%s/%s",
+            now_sec, running_mode.rule_mode, self._running_target, choice[0], choice[1],
+        )
+        self._abandon_running_mode(now_sec, ABANDON_REASON_REDECIDE)
+        self._last_failed_choice = None  # 실패 직후 고른 모드를 떠났다 — 막는 것은 그 모드가 도는 동안뿐
+        self._start_selected_mode(now_sec, event, result)
+
+    def _start_selected_mode(self, now_sec: float, event: SelectionEvent, result: SelectionResult) -> None:
         record = SelectionRecord(
             now_sec, event.kind, result.rule_mode, result.params, result.source, result.fallback_reason,
             event.mode_result, confidence=result.confidence,
         )
         self._record_selection(record, result)
-        self._running_mode = self._mode_factory(result.rule_mode, result.params, self._settings)
+        self._start_mode(result.rule_mode, result.params)
 
         if result.rule_mode == "return_home":
             self._record_return(now_sec, RETURN_REASON_SELECTED, result.params)
+
+    def _start_mode(self, rule_mode: str, params: ModeParams) -> None:
+        self._running_mode = self._mode_factory(rule_mode, params, self._settings)
+        self._running_target = _get_target_track(params)
+        self._is_burst_started = False
+
+    def _report_continued(self, now_sec: float, event: SelectionEvent, result: SelectionResult) -> None:
+        """같은 결정 — 모드를 그대로 두고 기록 없이 debug 로그·continued payload 만 낸다."""
+        logger.debug(
+            "%s t=%.1f event=%s mode=%s target=%s continued",
+            SELECTION_LOG_PREFIX, now_sec, event.kind, result.rule_mode, self._running_target,
+        )
+        if self._on_selection is None:
+            return
+
+        record = SelectionRecord(
+            now_sec, event.kind, result.rule_mode, result.params, result.source, result.fallback_reason,
+            event.mode_result, confidence=result.confidence,
+        )
+        self._on_selection(build_selection_payload(record, result, continued=True))
 
     # --- 운용 모드·안전 감시 (MIS-02, MIS-03, GUARD-01..03) ---
 
@@ -581,7 +689,7 @@ class MissionRunner:
 
     def _start_forced_return(self, now_sec: float, state: SelectionState, event_kind: str) -> None:
         params = fill_params("return_home", state, SelectionEvent(EVENT_PERIODIC_CHECK, None), self._param_defaults)
-        self._running_mode = self._mode_factory("return_home", params, self._settings)
+        self._start_mode("return_home", params)
 
         record = SelectionRecord(now_sec, event_kind, "return_home", params, SOURCE_FORCED, "none", None, confidence=None)
         self._record_selection(record, None)
@@ -595,6 +703,10 @@ class MissionRunner:
         self._running_mode = None
 
     # --- 하트 기록 (D-13, D-14) ---
+
+    def _handle_heart_accepted(self, track_id: int) -> None:
+        self._is_burst_started = True  # 연사가 시작됐다 — 이 모드는 끝까지 재판단으로 끊지 않는다
+        self._record_heart(track_id)
 
     def _record_heart(self, track_id: int) -> None:
         if track_id in self._hearted_track_ids:
@@ -696,6 +808,8 @@ class MissionRunner:
 
     def _record_mode_result(self, now_sec: float, result: ModeResult) -> None:
         self._mode_results.append(result)
+        is_failed = result.outcome in FAILED_OUTCOMES
+        self._last_failed_choice = (result.rule_mode, result.target_track) if is_failed else None
         logger.info(
             "%s t=%.1f mode=%s outcome=%s target=%s",
             MODE_END_LOG_PREFIX, now_sec, result.rule_mode, result.outcome, result.target_track,
@@ -733,3 +847,17 @@ class MissionRunner:
         )
 
         return result
+
+
+def _get_target_track(params: ModeParams) -> str | None:
+    target_track = params.get("target_track")
+    return target_track if isinstance(target_track, str) else None
+
+
+def _validate_redecide_interval(redecide_interval_sec: float | None) -> None:
+    if redecide_interval_sec is None:
+        return
+
+    value = redecide_interval_sec
+    if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value) or value <= 0:
+        raise ValueError(f"redecide_interval_sec must be None or a finite number > 0, got {value!r}")

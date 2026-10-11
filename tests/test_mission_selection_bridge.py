@@ -34,7 +34,7 @@ MISSION_DEMO_MAP_HALF_M = 68.0
 
 SELECTION_KEYS = {
     "time_sec", "event_kind", "rule_mode", "params", "source", "confidence", "probabilities",
-    "fallback_reason", "options", "latency_ms", "mode_result",
+    "fallback_reason", "options", "latency_ms", "mode_result", "continued",
 }
 MODE_RESULT_KEYS = {"rule_mode", "outcome", "target_track"}
 PERSON = ScriptedTarget(track_id=1, class_name="person", north_m=60.0, east_m=0.0)
@@ -75,6 +75,7 @@ def test_rule_mission_reports_every_selection_and_mode_end():
     mode_end_list: list[dict] = []
 
     result = run_rule_mission(300.0, on_selection=selection_list.append, on_mode_end=mode_end_list.append)
+    selection_list = [payload for payload in selection_list if not payload["continued"]]  # 재판단 "그대로 계속" 제외
 
     assert len(selection_list) == len(result.selections) > 0
     assert len(mode_end_list) == len(result.mode_results) > 0
