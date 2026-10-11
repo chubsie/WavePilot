@@ -2,6 +2,8 @@ import { KeyboardInput, GloveInput, AutoPilotInput } from "./input.js";
 import { AnalysisEngine } from "./analysis.js";
 import { DroneWorld } from "./world.js";
 import { TestFlight, COURSE } from './test-flight.js';
+import { terrainHeight } from './mountain-course.js';
+import { createYoloLog, createYoloLogView, createThumbnailStore, createTrackChip, detectionSignature, formatDetectionLabel, reportSentences, scaleBox } from './yolo-log.js';
 
 // TODO: 임시 — 장갑 수동(IMU)·산악 코스에서 비행 키를 누르는 동안은 키보드가 우선한다. 장갑 검증 끝나면 false로.
 const ALLOW_KEYBOARD_OVERRIDE = true;
@@ -35,6 +37,64 @@ const glove = new GloveInput({
 const autopilot = new AutoPilotInput();
 const analysis = new AnalysisEngine(renderReportState);
 const testFlight=new TestFlight();
+
+// ---------- Python YOLO 링크 (sim_link.js) ----------
+// FPV 캔버스(world.fpvCanvas)를 10 Hz JPEG 로 올리고, 응답의 detections·pipeline 을 패널에 보여준다.
+// Python 은 이 데모의 비행을 조종하지 않는다 — 명령은 모두 거절한다.
+const SimLink = window.SimLink;
+const RAD_TO_DEG = 180 / Math.PI;
+const YOLO_PANEL_REFRESH_MS = 200;
+const thumbnails = createThumbnailStore();
+const yoloLog = createYoloLog();
+const yoloView = createYoloLogView($('yolo-log'), thumbnails);
+let shownReportSeq = null;
+
+// 좌표: world x→east, -z→north, y→up(down=-y). 카메라 기울기는 짐벌(-90..0°)로, 남는 기수 들림만 body pitch 로 보낸다
+function getSimTelemetry() {
+  const flight = world.telemetry(), position = flight.position;
+  const northM = -position.z, eastM = position.x, downM = -position.y;
+  const cameraPitchDeg = world.camera.rotation.x * RAD_TO_DEG;
+  const gimbalPitchDeg = Math.min(0, Math.max(-90, cameraPitchDeg));
+  const groundM = world.training ? terrainHeight(position.x, position.z) : 0;
+  const timeSec = performance.now() / 1000;
+  const isMoving = flight.speed > .5 || Math.abs(flight.climb) > .5;
+
+  return {
+    time_sec: timeSec,
+    north_m: northM, east_m: eastM, down_m: downM,
+    roll_deg: -world.camera.rotation.z * RAD_TO_DEG,
+    pitch_deg: cameraPitchDeg - gimbalPitchDeg,
+    yaw_deg: SimLink.wrapYawDeg(flight.heading),
+    gimbal_pitch_deg: gimbalPitchDeg,
+    gimbal_yaw_deg: 0,
+    battery_pct: SimLink.batteryPctAt(100, (performance.now() - startedAt) / 1000),
+    flight_mode: flight.onGround ? 'grounded' : isMoving ? 'moving' : 'hover',
+    gps: SimLink.nedToGps(northM, eastM, downM),
+    height_above_ground_m: SimLink.heightAboveGroundM(position.y, groundM),
+  };
+}
+
+const link = SimLink && world.fpvCanvas ? SimLink.createLink({
+  canvas: world.fpvCanvas,
+  getTelemetry: getSimTelemetry,
+  isAiMode: () => mode === 'ai' || mode === 'auto',
+  onCommand: () => false,
+  takeEvents: () => [],
+  onFrameSent: (seq, blob) => thumbnails.put(seq, blob),
+  log: (line) => console.info('[sim-link]', line),
+}) : null;
+link?.start();
+
+function getFreshDetections() {
+  if (!link || !link.state.detections || mode === 'test') return null;
+  const ageSec = performance.now() / 1000 - link.state.detectionsAtSec;
+  return ageSec < SimLink.DETECTION_STALE_SEC ? link.state.detections : null;
+}
+
+function getPipelineReport() {
+  if (!link || !link.state.connected || mode === 'test') return null;
+  return link.state.pipeline?.report?.payload ? link.state.pipeline.report : null;
+}
 
 function startTest(){
   if(world.loading)return;
@@ -102,16 +162,111 @@ function renderTracks(tracks, visibleTracks) {
     const screen = world.project(track.position);
     if (!screen.visible) return;
     visibleIds.add(track.id);
-    let box = overlay.querySelector(`[data-track="${track.id}"]`);
-    if (!box) {
-      box = document.createElement("div"); box.className = "target-box"; box.dataset.track = track.id;
-      box.innerHTML = `<span class="target-label"></span><span class="target-distance"></span>`; overlay.appendChild(box);
-    }
+    const box = upsertTargetBox(overlay, track.id);
     box.style.cssText = `left:${screen.x-screen.width/2}px;top:${screen.y-screen.height/2}px;width:${screen.width}px;height:${screen.height}px`;
     box.querySelector(".target-label").textContent = `${track.id} / ${track.clothing?track.clothing.toUpperCase():track.kind} ${track.confidence}`;
     box.querySelector(".target-distance").textContent = `${screen.distance.toFixed(1)} M`;
   });
   overlay.querySelectorAll(".target-box").forEach((box) => { if (!visibleIds.has(box.dataset.track)) box.remove(); });
+}
+
+function upsertTargetBox(overlay, key) {
+  let box = overlay.querySelector(`[data-track="${key}"]`);
+  if (!box) {
+    box = document.createElement("div"); box.className = "target-box"; box.dataset.track = key;
+    box.innerHTML = `<span class="target-label"></span><span class="target-distance"></span>`; overlay.appendChild(box);
+  }
+  return box;
+}
+
+// YOLO 결과로 목록·FPV 박스를 그린다. 서버 문자열은 textContent 로만
+function renderYoloDetections(frame) {
+  const detections = frame.detections || [];
+  $("track-count").textContent = String(detections.length).padStart(2, "0");
+
+  const list = $("detection-list");
+  const listKey = `yolo:${detectionSignature(frame)}`;
+  if (list.dataset.tracks !== listKey) {
+    list.dataset.tracks = listKey;
+    list.replaceChildren(...detections.map((_, index) => {
+      const card = document.createElement("article");
+      card.className = "detection-card"; card.style.animationDelay = `${index*55}ms`;
+      card.innerHTML = `<span class="detection-id"></span><div class="detection-main"><b></b><span></span></div><div class="detection-side"><b></b><small>CONFIDENCE</small></div>`;
+      return card;
+    }));
+  }
+  detections.forEach((detection, index) => {
+    const card = list.children[index], ratio = (Number(detection.xyxy[0]) + Number(detection.xyxy[2])) / 2 / frame.image_width;
+    const hasTrack = detection.track_id !== null && detection.track_id !== undefined;
+    card.querySelector(".detection-id").textContent = hasTrack ? `#${detection.track_id}` : "—";
+    card.querySelector(".detection-main b").textContent = `${detection.class_name}${detection.upper_color ? ` · ${detection.upper_color}` : ""}`;
+    card.querySelector(".detection-main span").textContent = `${ratio<.35?'Left':ratio>.65?'Right':'Center'} of frame`;
+    card.querySelector(".detection-side b").textContent = `${Math.round(Number(detection.confidence)*100)}%`;
+  });
+
+  const overlay = $("detection-overlay"), view = $("fpv-view");
+  const boxKeys = new Set();
+  detections.forEach((detection, index) => {
+    const key = `yolo-${index}`, box = upsertTargetBox(overlay, key);
+    const rect = scaleBox(detection.xyxy, frame.image_width, frame.image_height, view.clientWidth, view.clientHeight);
+    boxKeys.add(key);
+    box.style.cssText = `left:${rect.left}px;top:${rect.top}px;width:${rect.width}px;height:${rect.height}px`;
+    box.querySelector(".target-label").textContent = formatDetectionLabel(detection);
+    box.querySelector(".target-distance").textContent = "";
+  });
+  overlay.querySelectorAll(".target-box").forEach((box) => { if (!boxKeys.has(box.dataset.track)) box.remove(); });
+}
+
+function renderDetectionSource(frame) {
+  const latency = link?.state.yoloLatencyMs;
+  $("detection-source").textContent = frame ? `YOLO LIVE · ${Number.isFinite(latency) ? Math.round(latency) : '–'} ms` : "ORIN DEMO (fallback)";
+  $("detection-source").classList.toggle("live", Boolean(frame));
+}
+
+function createReportLine(cite, text, index) {
+  const line = document.createElement("div");
+  line.className = "report-line"; line.style.animationDelay = `${index*85}ms`;
+  const citeSpan = document.createElement("span"), textSpan = document.createElement("span");
+  citeSpan.className = "cite";
+  if (typeof cite === "string") citeSpan.textContent = cite; else citeSpan.append(...cite);
+  textSpan.textContent = text;
+  line.append(citeSpan, textSpan);
+  return line;
+}
+
+// Python 보고(state JSON → LLM 문장)가 있으면 Scene report 를 그 문장으로 바꾼다
+function renderPipelineReport(pipelineReport) {
+  if (pipelineReport.seq === shownReportSeq) return;
+  shownReportSeq = pipelineReport.seq;
+  const payload = pipelineReport.payload, decision = payload.decision || {};
+  const lines = reportSentences(payload).map((sentence, index) => createReportLine(
+    sentence.trackIds.length ? sentence.trackIds.map(createTrackChip) : sentence.kind.slice(0, 3).toUpperCase(), sentence.text, index));
+  if (payload.report_error) lines.push(createReportLine("ERR", `Report error: ${payload.report_error}`, lines.length));
+  if (!lines.length) lines.push(createReportLine("—", String(decision.reason ?? "No report sentences"), 0));
+
+  $("report-content").replaceChildren(...lines);
+  $("report-time").textContent = `t=${Number(payload.time_sec ?? 0).toFixed(1)}s · YOLO pipeline`;
+  $("report-state").textContent = decision.verdict ? String(decision.verdict).toUpperCase() : "Report";
+  $("report-grounding").textContent = payload.report?.is_grounded ? "YOLO · Grounded" : "YOLO";
+}
+
+function updateYoloPanel() {
+  if (!link) return;
+  const frame = getFreshDetections();
+  if (frame) yoloLog.addFrame(frame, link.state.yoloLatencyMs, performance.now());
+  const pipeline = link.state.pipeline || {};
+  yoloLog.addState(pipeline.state);
+  yoloLog.addReport(pipeline.report);
+  yoloView.render(yoloLog.entries);
+  $("yolo-log-count").textContent = String(yoloLog.entries.length).padStart(2, "0");
+
+  const report = getPipelineReport();
+  if (report) renderPipelineReport(report);
+  else if (shownReportSeq !== null) {
+    // 보고가 끊기면 브라우저 보고로 즉시 되돌린다
+    shownReportSeq = null; initialReportRequested = false;
+    $("report-grounding").textContent = "Simulation";
+  }
 }
 
 function renderReportState(state) {
@@ -120,6 +275,7 @@ function renderReportState(state) {
     return;
   }
   $("analysis-cooldown").textContent = "AUTO UPDATE";
+  if (getPipelineReport()) return;   // Python 보고가 우선 — 브라우저 보고는 fallback
   $("report-time").textContent = `${state.generatedAt.toLocaleTimeString("en-GB", { hour12:false })} captured`;
   $("report-state").textContent = "Camera snapshot";
   $("report-content").innerHTML = state.lines.map((line, index) => `<div class="report-line" style="animation-delay:${index*85}ms"><span class="cite">${line.ids.join("+")}</span><span>${line.text}</span></div>`).join("");
@@ -170,6 +326,7 @@ function frame(now) {
   const visibleTracks = lastTracks.filter(t => world.canObserve(t.position));
   // AI/AUTO keep their original path; keys there already hand control back via onTakeover.
   const keyboardOverride = ALLOW_KEYBOARD_OVERRIDE && keyboard.isActive() && (mode === 'imu' || mode === 'test');
+  // AUTO 자율 접근은 3D 위치가 필요해 YOLO 박스가 아니라 정답 트랙(visibleTracks)을 계속 쓴다
   const input = keyboardOverride ? keyboard.sample()
     : mode==='test'?(glove.link?glove.sample():keyboard.sample()):mode === "auto" ? autopilot.sample(telemetry.position, world.heading, visibleTracks, now)
     : mode === 'ai' ? {...glove.mapped(),source:'ai'} : mode === "imu" ? glove.sample() : keyboard.sample();
@@ -190,7 +347,11 @@ function frame(now) {
   });
   const current=updateTelemetry();
   reportContext={altitude:current.altitude,speed:current.speed,mode:$('flight-mode-text').textContent};
-  renderTracks(reportTracks, reportTracks);
+  const yoloFrame = getFreshDetections();
+  if (yoloFrame) renderYoloDetections(yoloFrame); else renderTracks(reportTracks, reportTracks);
+  renderDetectionSource(yoloFrame);
+  // 10 Hz 업로드 스로틀은 sim_link 가 한다. 끊겨 있으면 JPEG 인코딩도 하지 않는다(텔레메트리 POST 가 연결을 되살린다)
+  if (link?.state.connected) link.afterRender(delta);
   drawSensorChart();
   if(mode==='test'){
     testFlight.update(world.camera.position.toArray(),now);
@@ -254,6 +415,7 @@ window.addEventListener('keydown',event=>{
 window.addEventListener('keyup',event=>{if(event.code==='KeyL') keyFlash=false;});
 window.addEventListener('blur',()=>{keyFlash=false;});
 setInterval(()=>{glove.hz=glove.packetCount;glove.packetCount=0;},1000);
+setInterval(updateYoloPanel, YOLO_PANEL_REFRESH_MS);
 $("reset-flight").addEventListener("click", () => { if(mode==='test'){startTest();return;}world.reset(); autopilot.reset(); blockedUntil = 0; });
 $('normal-tab').addEventListener('click',()=>{if(mode==='test')setMode(glove.link?'imu':'keyboard');});
 $('participate-tab').addEventListener('click',()=>{if(mode!=='test')startTest();});

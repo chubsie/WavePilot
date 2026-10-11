@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#080b09">
   <title>WavePilot — Field Command</title>
-  <link rel="stylesheet" href="styles.css?v=mode-tabs-1">
+  <link rel="stylesheet" href="styles.css?v=yolo-log-1">
 </head>
 <body>
   <header class="command-bar">
@@ -101,7 +101,7 @@
     <aside class="analysis-panel" aria-label="Scene analysis">
       <section class="panel-section detections-section">
         <header class="section-heading">
-          <div><h1>Visible targets</h1></div>
+          <div><h1>Visible targets</h1><span id="detection-source" class="source-badge">ORIN DEMO (fallback)</span></div>
           <div class="metric"><b id="track-count">0</b><small>TARGETS</small></div>
         </header>
         <div id="detection-list" class="detection-list" aria-live="polite"></div>
@@ -123,6 +123,14 @@
           <span id="analysis-cooldown">READY</span>
         </footer>
       </section>
+
+      <section class="panel-section yolo-log-section">
+        <header class="section-heading">
+          <div><h2>YOLO log</h2></div>
+          <div class="metric"><b id="yolo-log-count">00</b><small>ENTRIES</small></div>
+        </header>
+        <div id="yolo-log" class="yolo-log" aria-live="off"></div>
+      </section>
     </aside>
   </main>
 
@@ -134,6 +142,7 @@
 
   <script src="../visualizer/three.min.js"></script>
   <script src="vendor/GLTFLoader.js"></script>
+  <script src="../visualizer/sim_link.js"></script>
   <script type="module" src="app.js"></script>
 </body>
 </html>
