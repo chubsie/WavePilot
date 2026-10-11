@@ -12,6 +12,9 @@ export const PEOPLE = [
   {id:'T-18', feet:[18,0,27], zone:'East alley'},
   {id:'T-21',feet:[-7,0,12],zone:'West sidewalk',clothing:'Red',color:0xc83c32,speed:1.15,route:[[-7,12],[-7,45],[-4,45],[-4,12]]},
   {id:'T-22',feet:[6,0,46],zone:'East sidewalk',clothing:'Blue',color:0x286bd1,speed:1.3,route:[[6,46],[6,16],[3,16],[3,46]]},
+  // 도로 북쪽 절반에도 빨강·파랑 보행자 — search 구역(north -45..45, east ±6) 안을 걷는다
+  {id:'T-23',feet:[6,0,-12],zone:'East sidewalk north',clothing:'Red',color:0xc83c32,speed:1.0,route:[[6,-12],[6,-42],[3,-42],[3,-12]]},
+  {id:'T-24',feet:[-6,0,-40],zone:'West sidewalk north',clothing:'Blue',color:0x286bd1,speed:1.2,route:[[-6,-40],[-6,-10],[-3,-10],[-3,-40]]},
 ];
 
 export function walkingPose(person,time){
