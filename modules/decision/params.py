@@ -36,14 +36,15 @@ Params = dict[str, str | int | float | None]
 
 @dataclass(frozen=True, slots=True)
 class ParamDefaults:
-    search_timeout_sec: float = 120.0
+    search_timeout_sec: float = 160.0
     # search 구역 — 홈 기준 북쪽 사각형, NED m. Phase 5 임무 파일이 덮어씀 (D-05)
     search_area_north_min_m: float = 20.0
     search_area_north_max_m: float = 120.0
     search_area_east_min_m: float = -50.0  # NED 라 음수 허용
     search_area_east_max_m: float = 50.0
     search_altitude_m: float = 15.0
-    # 20 m 면 기본 구역 순찰이 125 s 로 search_timeout_sec 120 s 를 넘는다 — 25 m 는 517.5 m / 5 m/s = 103.5 s
+    # 25 m 면 기본 구역 순찰이 517.5 m / 5 m/s = 103.5 s, 스캔 지점(시작 + 웨이포인트 8)당 ~4 s × 9 를 더해
+    # ≈ 138 s 로 search_timeout_sec 160 s 안에 끝난다 — 20 m 면 125 s + 스캔 ~44 s 로 넘는다
     search_lane_spacing_m: float = 25.0
     approach_stop_distance_m: float = 5.0
     approach_timeout_sec: float = 30.0

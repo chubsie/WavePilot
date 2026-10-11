@@ -67,7 +67,7 @@ def test_defaults_match_table_and_are_frozen():
     defaults = ParamDefaults()
 
     assert dataclasses.asdict(defaults) == {
-        "search_timeout_sec": 120.0,
+        "search_timeout_sec": 160.0,
         "search_area_north_min_m": 20.0,
         "search_area_north_max_m": 120.0,
         "search_area_east_min_m": -50.0,
@@ -135,7 +135,7 @@ def test_non_positive_search_altitude_or_spacing_is_rejected(name, value):
 def test_search_params_unchanged_by_area_defaults():
     params = fill_params("search", _make_state(), _make_event(), ParamDefaults(search_lane_spacing_m=40.0))
 
-    assert params == {"timeout_sec": 120.0}
+    assert params == {"timeout_sec": 160.0}
 
 
 @pytest.mark.parametrize("value", [0, True, 2.0])

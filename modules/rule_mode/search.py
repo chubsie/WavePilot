@@ -1,10 +1,15 @@
-"""search 모드 — 수색 구역 위를 지그재그(boustrophedon)로 순찰하며 타깃을 찾는다 (RM-01, D-05, D-06, D-07, D-04).
+"""search 모드 — 지점마다 호버하며 360° 회전 스캔으로 타깃을 찾는다 (RM-01, D-05, D-06, D-07, D-04).
 
-레인은 북쪽 방향이고, 드론에서 가장 가까운 레인 끝에서 시작한다. 웨이포인트마다 GoTo 를 한 번씩 보내고
-텔레메트리가 arrival_tolerance_m 이내가 되면 다음으로 넘어간다 (Phase 2 D-09).
+첫 지점은 시작 위치(첫 tick 텔레메트리 N/E, 고도 search_altitude_m)이고, 그다음은 build_zigzag_waypoints 의
+지그재그 웨이포인트다. 지점마다 GoTo 를 보내고 arrival_tolerance_m 이내로 도착하면 스캔한다 (Phase 2 D-09).
+
+스캔: SetGimbal(SCAN_GIMBAL_PITCH_DEG, 0) 한 번 뒤, 스캔 시작 yaw 에서 +SCAN_STEP_DEG 씩 SCAN_STEP_COUNT 번
+SetYaw(절대 heading)를 보낸다. 각 단계는 yaw 가 목표 SCAN_YAW_TOLERANCE_DEG 이내가 되거나
+SCAN_STEP_TIMEOUT_SEC 가 지나면 다음으로 넘어간다. 한 바퀴를 다 돌면 다음 지점으로 간다.
 
 - success: target_class 의 활성·미하트·색 어긋나지 않은 track 이 FOUND_STREAK_TICKS tick 연속 관측되면 그 track 으로 끝난다 (D-06)
-- failure: 타깃 없이 모든 웨이포인트에 도달 (D-07), 또는 GoTo 거부 (D-04)
+  — 이동·스캔 어느 단계에서든 매 tick 확인한다
+- failure: 타깃 없이 모든 지점의 스캔을 마침 (D-07), 또는 명령 거부 (D-04)
 - timeout: 경과 시간 >= timeout_sec (D-07)
 끝난 뒤 step 을 다시 부르면 RuntimeError ("정확히 한 번" 계약).
 """
@@ -12,11 +17,20 @@
 import math
 
 from modules.decision.interface.state import ModeResult
-from modules.flight_control.interface import FlightControl, GoTo
+from modules.flight_control.interface import Command, FlightControl, GoTo, SetGimbal, SetYaw
 from modules.rule_mode.interface import ModeParams, ModeTick, RuleModeSettings, SearchArea, track_label
 
 RULE_MODE = "search"
 FOUND_STREAK_TICKS = 5  # D-06 의 N — 10 Hz 에서 0.5 s
+
+# 지상 표적이 FPV 아래쪽에 들어오도록 내려다본다 — 15 m 고도에서 약 26 m 앞 지면이 화면 가운데
+SCAN_GIMBAL_PITCH_DEG = -30.0
+# 시뮬레이터는 SetYaw 를 최단 호로 돌린다 — 180° 미만 단계여야 방향이 한쪽으로 고정된다
+SCAN_STEP_DEG = 90.0
+SCAN_STEP_COUNT = 4
+SCAN_YAW_TOLERANCE_DEG = 5.0
+# 90°/s 기준 한 단계 1 s — 실제 기체가 느리거나 멈춰도 스캔이 끝나도록 넉넉히
+SCAN_STEP_TIMEOUT_SEC = 4.0
 
 
 def build_zigzag_waypoints(
@@ -88,10 +102,17 @@ class SearchMode:
         self._timeout_sec = float(timeout_sec)
         self._settings = settings
         self._start_sec: float | None = None
-        self._waypoints: tuple[GoTo, ...] = ()
-        self._waypoint_index = 0
         self._streak_by_track: dict[int, int] = {}
         self._is_finished = False
+
+        # 스캔 지점: [시작 위치, 지그재그 웨이포인트...]
+        self._scan_points: tuple[GoTo, ...] = ()
+        self._point_index = 0
+
+        # 스캔 진행 — 이동 중이면 _scan_step_index 가 None
+        self._scan_step_index: int | None = None
+        self._scan_start_yaw_deg = 0.0
+        self._scan_step_start_sec = 0.0
 
     def step(self, tick: ModeTick, control: FlightControl) -> ModeResult | None:
         if self._is_finished:
@@ -99,14 +120,8 @@ class SearchMode:
 
         if self._start_sec is None:
             self._start_sec = tick.now_sec
-            self._waypoints = build_zigzag_waypoints(
-                self._settings.search_area,
-                self._settings.search_altitude_m,
-                self._settings.search_lane_spacing_m,
-                tick.telemetry.north_m,
-                tick.telemetry.east_m,
-            )
-            if not self._send_goto(control, self._waypoints[0]):
+            self._scan_points = self._build_scan_points(tick)
+            if not self._send(control, self._scan_points[0]):
                 return self._finish("failure")
 
         # 마감 tick 에 발견한 것도 인정되도록 발견 확인이 timeout 보다 먼저다
@@ -117,12 +132,69 @@ class SearchMode:
         if tick.now_sec - self._start_sec >= self._timeout_sec:
             return self._finish("timeout")
 
-        if self._has_arrived(tick):
-            self._waypoint_index += 1
-            if self._waypoint_index == len(self._waypoints):
+        if self._scan_step_index is None:
+            if self._has_arrived(tick) and not self._start_scan(tick, control):
                 return self._finish("failure")
-            if not self._send_goto(control, self._waypoints[self._waypoint_index]):
+            return None
+
+        if self._is_scan_step_done(tick):
+            return self._advance_scan(tick, control)
+
+        return None
+
+    def _build_scan_points(self, tick: ModeTick) -> tuple[GoTo, ...]:
+        telemetry = tick.telemetry
+        start_point = GoTo(telemetry.north_m, telemetry.east_m, self._settings.search_altitude_m)
+        zigzag_waypoints = build_zigzag_waypoints(
+            self._settings.search_area,
+            self._settings.search_altitude_m,
+            self._settings.search_lane_spacing_m,
+            telemetry.north_m,
+            telemetry.east_m,
+        )
+
+        return (start_point, *zigzag_waypoints)
+
+    def _start_scan(self, tick: ModeTick, control: FlightControl) -> bool:
+        self._scan_start_yaw_deg = tick.telemetry.yaw_deg
+        if not self._send(control, SetGimbal(SCAN_GIMBAL_PITCH_DEG, 0.0)):
+            return False
+
+        return self._send_scan_step(tick, control, 0)
+
+    def _send_scan_step(self, tick: ModeTick, control: FlightControl, step_index: int) -> bool:
+        self._scan_step_index = step_index
+        self._scan_step_start_sec = tick.now_sec
+
+        return self._send(control, SetYaw(self._get_scan_target_yaw_deg(step_index)))
+
+    def _get_scan_target_yaw_deg(self, step_index: int) -> float:
+        return _wrap_yaw_deg(self._scan_start_yaw_deg + (step_index + 1) * SCAN_STEP_DEG)
+
+    def _is_scan_step_done(self, tick: ModeTick) -> bool:
+        assert self._scan_step_index is not None
+        target_yaw_deg = self._get_scan_target_yaw_deg(self._scan_step_index)
+        error_deg = _wrap_yaw_deg(tick.telemetry.yaw_deg - target_yaw_deg)
+        if abs(error_deg) <= SCAN_YAW_TOLERANCE_DEG:
+            return True
+
+        return tick.now_sec - self._scan_step_start_sec >= SCAN_STEP_TIMEOUT_SEC
+
+    def _advance_scan(self, tick: ModeTick, control: FlightControl) -> ModeResult | None:
+        assert self._scan_step_index is not None
+        next_step_index = self._scan_step_index + 1
+        if next_step_index < SCAN_STEP_COUNT:
+            if not self._send_scan_step(tick, control, next_step_index):
                 return self._finish("failure")
+            return None
+
+        # 한 바퀴 끝 — 다음 지점으로 이동, 남은 지점이 없으면 D-07 failure
+        self._scan_step_index = None
+        self._point_index += 1
+        if self._point_index == len(self._scan_points):
+            return self._finish("failure")
+        if not self._send(control, self._scan_points[self._point_index]):
+            return self._finish("failure")
 
         return None
 
@@ -156,23 +228,34 @@ class SearchMode:
         return upper_color != target_upper_color
 
     def _has_arrived(self, tick: ModeTick) -> bool:
-        waypoint = self._waypoints[self._waypoint_index]
+        point = self._scan_points[self._point_index]
         telemetry = tick.telemetry
         distance_m = math.sqrt(
-            (waypoint.north_m - telemetry.north_m) ** 2
-            + (waypoint.east_m - telemetry.east_m) ** 2
-            + (waypoint.altitude_m - telemetry.altitude_m) ** 2
+            (point.north_m - telemetry.north_m) ** 2
+            + (point.east_m - telemetry.east_m) ** 2
+            + (point.altitude_m - telemetry.altitude_m) ** 2
         )
 
         return distance_m <= self._settings.arrival_tolerance_m
 
-    def _send_goto(self, control: FlightControl, goto: GoTo) -> bool:
-        return control.send_command(goto).accepted
+    def _send(self, control: FlightControl, command: Command) -> bool:
+        return control.send_command(command).accepted
 
     def _finish(self, outcome: str, target_track: str | None = None) -> ModeResult:
         self._is_finished = True
 
         return ModeResult(RULE_MODE, outcome, target_track)
+
+
+def _wrap_yaw_deg(yaw_deg: float) -> float:
+    """(-180, 180] 로 감싼다 — 텔레메트리 yaw 와 같은 범위."""
+    wrapped_deg = math.fmod(yaw_deg, 360.0)
+    if wrapped_deg > 180.0:
+        wrapped_deg -= 360.0
+    elif wrapped_deg <= -180.0:
+        wrapped_deg += 360.0
+
+    return wrapped_deg
 
 
 def _require_positive_finite(name: str, value: float) -> None:
