@@ -35,6 +35,14 @@ mock·browser 클래스를 모른다. 시간은 clock() 으로 읽고 advance(dt
   틱에 선택기를 다시 부른다. 간격은 select 완료 시각부터 잰다 — d1 이 오래 막혀도 다음 판단 전에 틱이 돈다.
 - 결과 (rule_mode, target_track) 이 실행 중 모드와 같으면 그대로 계속한다(모드 step·명령 끊김 없음). 이 판단은
   selection 기록·MissionLog 에 남기지 않고 debug 로그와 on_selection payload("continued": true)만 낸다.
+  대상은 '같은 표적'이면 같다고 본다 — 라벨이 같거나, 같은 클래스이고 지면 위치가 SAME_TARGET_RADIUS_M 안이다.
+  트래커가 같은 사람에게 새 id 를 주고 approach·aim_and_fire 가 그 id 로 갈아탄 경우다.
+  이때 비교 대상 라벨을 새 id 로 옮긴다.
+- 대상 모드(approach·observe·aim_and_fire)를 대상 없는 결과(search 등)로 바꾸려 하면, 실행 중 대상이 살아 있는 동안은
+  바꾸지 않는다(redecide_ignored reason=target_alive). 살아 있음 = 그 대상(또는 같은 표적)이 여전히 원하는 대상이고
+  (클래스·hearted·색) 마지막으로 본 지 TARGET_KEEP_SEC 안. 트래커는 2 s 만 못 봐도 비활성으로 표시해 선택기 보기에서
+  빠지지만, 모드는 자기 놓침 판정(유예)을 따로 갖는다 — 놓쳤다는 판단은 모드가 failure 로 끝내며 내리고, 그 mode_ended
+  사건에 선택기가 새로 고른다. 선택기 종류(규칙·d1)와 무관하게 루프가 같은 규칙을 쓴다.
 - 다르면 실행 중 모드를 버리고(mode_abandoned reason=redecide) 새 모드로 바꾼다 — 보통 선택처럼 기록한다.
 - 끊지 않는 모드: aim_and_fire 연사 중(첫 FireHeart 수락 이후) · return_home(선택·강제 모두). 이때는 판단하지 않는다.
 - 방금 실패한 (모드, track) 으로는 재판단으로도 바꾸지 않는다 — 선택기 보기 필터는 mode_ended 사건에서만 그 쌍을
@@ -85,8 +93,14 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from modules.decision.interface import DecisionModel, SelectionResult
-from modules.decision.interface.state import EVENT_PERIODIC_CHECK, ModeResult, SelectionEvent, SelectionState
-from modules.decision.options import FAILED_OUTCOMES
+from modules.decision.interface.state import (
+    EVENT_PERIODIC_CHECK,
+    ModeResult,
+    SelectionEvent,
+    SelectionState,
+    TrackState,
+)
+from modules.decision.options import FAILED_OUTCOMES, is_wanted_track
 from modules.decision.params import ParamDefaults, fill_params
 from modules.decision.trigger import PERIODIC_CHECK_INTERVAL_SEC, SelectionTrigger
 from modules.drone.selection_state import build_selection_state
@@ -105,10 +119,20 @@ from modules.mission.mission_log import (
 from modules.mission.mode_machine import MODE_AI, MODE_MANUAL, MODE_RETURN, ModeStateMachine, ModeTransition
 from modules.mission.operator import LinkStatus, OperatorInput, ScriptedOperator
 from modules.mission.safety import SafetyConfig, SafetyMonitor
+from modules.perception.tracking import LOST_AFTER_SEC as TRACK_LOST_AFTER_SEC
 from modules.perception.tracking import TrackAggregator
 from modules.perception.interface import Track
+from modules.rule_mode.approach import LOST_AFTER_SEC as APPROACH_LOST_AFTER_SEC
 from modules.rule_mode.factory import create_rule_mode
-from modules.rule_mode.interface import ModeParams, ModeTick, RuleMode, RuleModeSettings, SearchArea, track_label
+from modules.rule_mode.interface import (
+    SAME_TARGET_RADIUS_M,
+    ModeParams,
+    ModeTick,
+    RuleMode,
+    RuleModeSettings,
+    SearchArea,
+    track_label,
+)
 from modules.yolo_detection.interface import Frame
 
 logger = logging.getLogger("modules.drone.mission_loop")
@@ -121,6 +145,9 @@ HEART_DUPLICATE_LOG_PREFIX = "heart_duplicate"
 AIRBORNE_TOLERANCE_M = 1.0
 DEFAULT_REDECIDE_INTERVAL_SEC = 1.0  # 실행 중 모드 재판단 간격 (select 완료 시각 기준)
 REDECIDE_EPSILON_SEC = 1e-6  # 틱 시각 누적 오차로 간격을 한 틱 늦게 보지 않게
+# 재판단이 대상 모드를 대상 없는 결과로 끊지 않는 시간(마지막으로 본 뒤) — 트래커 비활성(2 s) + approach 놓침 유예(3 s).
+# 모드의 놓침 판정이 먼저 끝나도록 가장 긴 유예에 맞춘다. 그 전에 모드가 failure 로 끝나면 mode_ended 로 새로 고른다
+TARGET_KEEP_SEC = TRACK_LOST_AFTER_SEC + APPROACH_LOST_AFTER_SEC
 LINK_WAIT_LOG_INTERVAL_SEC = 10.0  # 링크 대기 중 'waiting for simulator reconnect' 줄 간격(틱 수로 잰 대략값)
 
 EVENT_RETURN_RETRY = "return_home_retry"
@@ -570,7 +597,7 @@ class MissionRunner:
         redecide_event = event if event is not None else SelectionEvent(EVENT_PERIODIC_CHECK, None)
         if event is None:
             self._trigger.reset_periodic(now_sec)  # 이 재판단이 주기 확인을 겸한다 — 곧이어 periodic_check 가 겹치지 않게
-        self._redecide(now_sec, redecide_event, self._select(state, redecide_event))
+        self._redecide(now_sec, state, redecide_event, self._select(state, redecide_event))
 
     def _select(self, state: SelectionState, event: SelectionEvent) -> SelectionResult:
         result = self._decision_model.select(state, event)
@@ -596,18 +623,25 @@ class MissionRunner:
 
         return now_sec - self._last_decide_sec >= self._redecide_interval_sec - REDECIDE_EPSILON_SEC
 
-    def _redecide(self, now_sec: float, event: SelectionEvent, result: SelectionResult) -> None:
+    def _redecide(self, now_sec: float, state: SelectionState, event: SelectionEvent, result: SelectionResult) -> None:
         running_mode = self._running_mode
         assert running_mode is not None  # _decide 가 확인했다
 
         choice = (result.rule_mode, _get_target_track(result.params))
-        if choice == (running_mode.rule_mode, self._running_target):
+        if choice[0] == running_mode.rule_mode and self._is_same_target(state, choice[1]):
+            self._follow_target(now_sec, choice[1])
             self._report_continued(now_sec, event, result)
             return
         if choice == self._last_failed_choice:
             logger.info(
                 "redecide_ignored t=%.1f mode=%s target=%s reason=just_failed (keeping %s)",
                 now_sec, choice[0], choice[1], running_mode.rule_mode,
+            )
+            return
+        if choice[1] is None and self._is_running_target_alive(now_sec, state):
+            logger.info(
+                "redecide_ignored t=%.1f mode=%s reason=target_alive (keeping %s/%s)",
+                now_sec, choice[0], running_mode.rule_mode, self._running_target,
             )
             return
 
@@ -618,6 +652,47 @@ class MissionRunner:
         self._abandon_running_mode(now_sec, ABANDON_REASON_REDECIDE)
         self._last_failed_choice = None  # 실패 직후 고른 모드를 떠났다 — 막는 것은 그 모드가 도는 동안뿐
         self._start_selected_mode(now_sec, event, result)
+
+    def _is_same_target(self, state: SelectionState, target_track: str | None) -> bool:
+        """target_track 이 실행 중 대상과 같은 표적인가 — 같은 라벨, 또는 같은 클래스이고 SAME_TARGET_RADIUS_M 안."""
+        if target_track == self._running_target:
+            return True
+        if target_track is None or self._running_target is None:
+            return False
+
+        running_track = _find_track_state(state, self._running_target)
+        chosen_track = _find_track_state(state, target_track)
+        if running_track is None or chosen_track is None:
+            return False
+
+        return _is_near_same_class(running_track, chosen_track)
+
+    def _follow_target(self, now_sec: float, target_track: str | None) -> None:
+        """같은 표적의 새 id 로 비교 라벨을 옮긴다 — 모드가 이미 그 id 로 갈아탔거나 곧 갈아탄다."""
+        if target_track == self._running_target:
+            return
+
+        logger.debug(
+            "redecide t=%.1f target %s continues as %s (same target)", now_sec, self._running_target, target_track
+        )
+        self._running_target = target_track
+
+    def _is_running_target_alive(self, now_sec: float, state: SelectionState) -> bool:
+        """실행 중 대상(또는 같은 표적의 다른 id)이 아직 원하는 대상이고 TARGET_KEEP_SEC 안에 보였는가."""
+        if self._running_target is None:
+            return False
+
+        running_track = _find_track_state(state, self._running_target)
+        if running_track is None:
+            return False
+
+        hearted_labels = frozenset(state.mission.hearted_tracks)
+        return any(
+            (track is running_track or _is_near_same_class(running_track, track))
+            and is_wanted_track(track, state.mission, hearted_labels)
+            and now_sec - track.last_seen_sec <= TARGET_KEEP_SEC
+            for track in state.tracks
+        )
 
     def _start_selected_mode(self, now_sec: float, event: SelectionEvent, result: SelectionResult) -> None:
         record = SelectionRecord(
@@ -852,6 +927,19 @@ class MissionRunner:
 def _get_target_track(params: ModeParams) -> str | None:
     target_track = params.get("target_track")
     return target_track if isinstance(target_track, str) else None
+
+
+def _find_track_state(state: SelectionState, label: str) -> TrackState | None:
+    for track in state.tracks:
+        if track.track_id == label:
+            return track
+
+    return None
+
+
+def _is_near_same_class(track_a: TrackState, track_b: TrackState) -> bool:
+    distance_m = math.hypot(track_a.north_m - track_b.north_m, track_a.east_m - track_b.east_m)
+    return track_a.class_name == track_b.class_name and distance_m <= SAME_TARGET_RADIUS_M
 
 
 def _validate_redecide_interval(redecide_interval_sec: float | None) -> None:

@@ -59,11 +59,13 @@ def get_candidate_tracks(state: SelectionState, event: SelectionEvent) -> tuple[
     mission = state.mission
     hearted_labels = _get_hearted_labels(state, event)
 
-    return tuple(
-        track
-        for track in state.tracks
-        if track.is_active
-        and track.class_name == mission.target_class
+    return tuple(track for track in state.tracks if track.is_active and is_wanted_track(track, mission, hearted_labels))
+
+
+def is_wanted_track(track: TrackState, mission: MissionSummary, hearted_labels: frozenset[str]) -> bool:
+    """활성 여부를 뺀 후보 조건 — 임무 클래스이고, hearted 가 아니고, 색이 어긋나지 않는다."""
+    return (
+        track.class_name == mission.target_class
         and track.track_id not in hearted_labels
         and not _is_color_mismatch(track, mission)
     )
