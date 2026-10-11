@@ -1,6 +1,6 @@
-import { KeyboardInput, GloveInput, AutoPilotInput } from "./input.js";
+import { KeyboardInput, GloveInput, AutoPilotInput } from "./input.js?v=middle-gesture-1";
 import { AnalysisEngine } from "./analysis.js";
-import { DroneWorld } from "./world.js?v=slope-15";
+import { DroneWorld } from "./world.js?v=yaw-steering-hearts-1";
 import { TestFlight, COURSE } from './test-flight.js?v=slope-15';
 import { terrainHeight } from './mountain-course.js?v=slope-15';
 import { createYoloLog, createYoloLogView, formatDetectionLabel, getObjectCategory, scaleBox } from './yolo-log.js';

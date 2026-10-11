@@ -6,6 +6,7 @@ import { getHeartFlightSec } from "./heart-overlay.js";
 import { PEOPLE, createStandingPerson, createWalker } from './population.js';
 import { createCourse, TEST_START } from './test-flight.js?v=slope-15';
 import { createMountain, terrainHeight } from './mountain-course.js?v=slope-15';
+import { gloveTurnRate } from './yaw-steering.js';
 
 const THREE = window.THREE;
 
@@ -212,6 +213,14 @@ export class DroneWorld {
     if (isPython) {
       this.followPythonCommand(input, delta);
     } else if (mainControl) {
+      if((input.source==='imu' && input.fly) || input.source==='imu-stale'){
+        const rate=input.source==='imu-stale'?0:gloveTurnRate(input.yawDegrees??0);
+        const yawDegrees=-this.heading/D2R+rate*delta;
+        input={...input,yawDegrees};
+        // The rate is already integrated in time. Don't smooth an absolute
+        // wrist heading toward it, which would undo a turn on recentering.
+        this.mainFlight.shown.yaw=yawDegrees;
+      }
       const result = this.mainFlight.step(input, delta, this.camera.position, this.velocity,this.training?terrainHeight(this.camera.position.x,this.camera.position.z):0);
       this.heading = result.heading;
       moveAltitude = result.moveAltitude;

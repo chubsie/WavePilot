@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import { resolveMovement, sphereIntersectsAabb } from '../tools/mission_demo/collision.js';
 import { AutoPilotInput, GloveInput } from '../tools/mission_demo/input.js';
+import { MiddleButton } from '../tools/mission_demo/middle-button.js';
 import { AnalysisEngine } from '../tools/mission_demo/analysis.js';
 import { PEOPLE } from '../tools/mission_demo/population.js';
 import { TestFlight, COURSE, NORMALS, TEST_START } from '../tools/mission_demo/test-flight.js';
@@ -149,7 +150,32 @@ test('stale IMU and lost AUTO observations stop all translational movement', () 
   }
 });
 
-test('sequence-integrated yaw drives world heading and parked mode coasts while holding altitude', () => {
+test('holding glove yaw at either 30-degree limit turns 180 degrees in two seconds',()=>{
+  for(const [yawDegrees,direction] of [[30,1],[-30,-1],[330,-1]]){
+    for(const dt of [1/60,1/20]){
+      const world=flightWorld();
+      const input={source:'imu',fly:true,roll:0,pitch:0,yawDegrees,throttle:.5,flexReady:true,flex0:1500};
+      for(let i=0;i<Math.round(2/dt);i++)world.update(input,dt);
+      assert.ok(Math.abs(world.heading+direction*Math.PI)<1e-8);
+      const heading=world.heading;
+      for(let i=0;i<60;i++)world.update({...input,yawDegrees:360},1/60);
+      assert.ok(Math.abs(world.heading-heading)<1e-10,'returning to neutral must hold the new heading');
+      world.update({...input,source:'imu-stale'},1/60);
+      assert.ok(Math.abs(world.heading-heading)<1e-10,'lost packets must not continue turning');
+    }
+  }
+});
+
+test('small wrist movements stay neutral and intermediate angles turn more slowly',()=>{
+  const world=flightWorld();
+  const input={source:'imu',fly:true,roll:0,pitch:0,throttle:.5,flexReady:true,flex0:1500};
+  for(const yawDegrees of [-5,0,5,355])world.update({...input,yawDegrees},1/60);
+  assert.ok(Math.abs(world.heading)<1e-10);
+  for(let i=0;i<60;i++)world.update({...input,yawDegrees:19},1/60);
+  assert.ok(Math.abs(world.heading+Math.PI/4)<1e-8);
+});
+
+test('sequence-integrated yaw drives parked heading and parked mode coasts while holding altitude', () => {
   const world = flightWorld(), glove = new GloveInput();
   glove.axes.fly = false;
   glove.parse('G,10,50,-45,90,1500,0,0');
@@ -211,7 +237,8 @@ test('extended main glove packet preserves flex throttle and button edge actions
   Object.assign(glove.flex0, { flat: 1000, bent: 2000 });
   glove.feed('G,1,15,-30,45,1500,0,3\nG,2,15,-30,45,2000,0,3\nG,3,0,0,0,1000,0,0\n');
   assert.equal(toggles, 1);
-  assert.deepEqual(aux, [true, false]);
+  assert.deepEqual(aux, []);
+  assert.equal(glove.yawDegrees,0,'short middle press re-centers yaw');
   assert.equal(glove.last.throttle, 0);
   assert.equal(glove.last.flexReady, true);
   const neutral = glove.parse('G,4,15,-30,45,1500,0,0');
@@ -223,6 +250,31 @@ test('extended main glove packet preserves flex throttle and button edge actions
   assert.equal(neutral.yaw, -.5);
   glove.last.timestamp = performance.now() - 501;
   assert.equal(glove.sample().source, 'imu-stale');
+});
+
+test('middle tap zeros once; long hold fires until release without zeroing',()=>{
+  const events=[],button=new MiddleButton(()=>events.push('zero'),held=>events.push(held));
+  button.update(true,0);button.update(true,100);button.update(false,180);button.update(false,200);
+  assert.deepEqual(events,['zero']);events.length=0;
+  button.update(true,250);button.update(true,749);assert.deepEqual(events,[]);
+  button.update(true,750);button.update(true,900);button.update(false,1000);
+  assert.deepEqual(events,[true,false]);
+});
+
+test('interrupted middle presses are cancelled without accidental zero or resumed beam',()=>{
+  const events=[],button=new MiddleButton(()=>events.push('zero'),held=>events.push(held));
+  button.update(true,0);button.update(false,700);assert.deepEqual(events,[]);
+  button.update(true,800);button.update(true,1200);button.update(true,1300);
+  assert.deepEqual(events,[true]);button.cancel();assert.deepEqual(events,[true,false]);
+  button.update(true,1400);button.update(false,1500);assert.deepEqual(events,[true,false]);
+  button.update(true,1600);button.update(false,1700);assert.deepEqual(events,[true,false,'zero']);
+});
+
+test('short middle press sends the same firmware zero command as the Zero button',()=>{
+  const sent=[],glove=new GloveInput();glove.link={send:async command=>sent.push(command)};
+  glove.yawDegrees=30;
+  glove.parse('G,1,0,0,0,1500,0,1');glove.parse('G,2,0,0,0,1500,0,0');
+  assert.deepEqual(sent,['c']);assert.equal(glove.yawDegrees,0);
 });
 
 test('AUTO approaches stable observations, holds distance, and stops on loss or obstruction', () => {
