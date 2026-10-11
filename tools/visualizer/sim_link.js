@@ -127,6 +127,32 @@
     return null;
   }
 
+  // ---------- 탭 세션 (같은 서버에 붙은 탭끼리 싸우지 않게 — 서버는 최신 탭 우선) ----------
+  function createSessionId(cryptoObject = root.crypto) {
+    // 페이지 로드마다 새 id. randomUUID 가 없으면(비보안 컨텍스트 등) Math.random 으로 만든다
+    if (cryptoObject && typeof cryptoObject.randomUUID === 'function') return cryptoObject.randomUUID();
+
+    const randomHex = () => Math.floor(Math.random() * 0x100000000).toString(16).padStart(8, '0');
+    return `${randomHex()}-${randomHex()}-${randomHex()}-${randomHex()}`;
+  }
+
+  function parseSessionActive(body) {
+    // 응답에 session_active 가 없으면(옛 서버) 활성으로 본다
+    return !(body && body.session_active === false);
+  }
+
+  // 화면 배너 한 줄 — 세션 뺏김 > 백그라운드 안내 > 링크 끊김 순. 보여줄 게 없으면 null
+  const SESSION_TAKEN_TEXT = '다른 탭이 드론을 제어 중 — 이 탭을 닫거나 새로고침';
+  const BACKGROUND_NOTICE_TEXT = '탭이 백그라운드로 가면 브라우저가 타이머를 늦춰 Python 링크가 끊깁니다 — 임무는 일시정지했다가 재연결 시 이어집니다';
+  const LINK_LOST_TEXT = 'LINK LOST — 재연결 대기';
+
+  function describeLinkNotice({ sessionActive = true, isPaired = false, connected = false, isBackgroundNotice = false } = {}) {
+    if (sessionActive === false) return { kind: 'session', text: SESSION_TAKEN_TEXT };
+    if (isBackgroundNotice) return { kind: 'background', text: BACKGROUND_NOTICE_TEXT };
+    if (isPaired && !connected) return { kind: 'link', text: LINK_LOST_TEXT };
+    return null;
+  }
+
   function batteryPctAt(startPct, elapsedSec) {
     // D-14: 움직임과 무관하게 시간에 선형으로 소모
     return Math.max(0, startPct - 100 * elapsedSec / BATTERY_FULL_SEC);
@@ -346,12 +372,15 @@
   // ---------- 와이어 프로토콜 클라이언트 ----------
   function createLink(options) {
     const { canvas, getTelemetry, isAiMode, isOperatorLinkUp, onCommand, takeEvents, onPaired, log, frameHz = FRAME_HZ, telemetryHz = TELEMETRY_HZ } = options;
+    const sessionId = options.sessionId || createSessionId();
     // 운용자 링크 heartbeat — 옵션이 없으면 늘 연결(Phase 5 D-01)
     const readOperatorLink = isOperatorLinkUp || (() => true);
     const nowSec = () => performance.now() / 1000;
     const state = {
       connected: false,
       isPaired: false,
+      sessionId,
+      sessionActive: true,   // false = 서버가 다른(더 최신) 탭을 제어 탭으로 골랐다 — 새로고침해야 다시 활성
       lastOkSec: -Infinity,
       frameFps: 0,
       yoloLatencyMs: null,
@@ -376,6 +405,8 @@
 
     function handleCommands(commands) {
       if (!Array.isArray(commands) || commands.length === 0) return;
+      // 제어권을 뺏긴 탭은 혹시 명령이 와도 실행하지 않는다 — 두 탭이 같은 드론을 몰지 않게
+      if (!state.sessionActive) return;
       // D-05: 수동 모드에선 받은 명령을 실행하지 않고 버린다(명령은 한 번만 배달된다)
       if (!isAiMode()) {
         state.discardedCount += commands.length;
@@ -393,6 +424,7 @@
       const status = body.status || {};
 
       state.lastOkSec = nowSec();
+      state.sessionActive = parseSessionActive(body);
       state.roundTripMs = (state.lastOkSec - sentAtSec) * 1000;
       // 첫 응답 = 초기 페어링. 홈을 여기서 잡아야 같은 응답의 명령부터 새 홈 기준으로 실행된다
       if (!state.isPaired) {
@@ -426,7 +458,7 @@
         const response = await fetch('/sim/telemetry', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ telemetry: getTelemetry(), ai_mode: isAiMode(), operator_link: readOperatorLink(), events }),
+          body: JSON.stringify({ session_id: sessionId, telemetry: getTelemetry(), ai_mode: isAiMode(), operator_link: readOperatorLink(), events }),
         });
         if (response.status !== 200) throw new Error('HTTP ' + response.status);
         handleTelemetryResponse(await response.json(), sentAtSec);
@@ -461,10 +493,12 @@
         if (!blob) throw new Error('toBlob returned null');
         const response = await fetch('/sim/frame?seq=' + frameSeq, {
           method: 'POST',
-          headers: { 'Content-Type': 'image/jpeg', 'X-Telemetry': JSON.stringify(snapshot) },
+          headers: { 'Content-Type': 'image/jpeg', 'X-Telemetry': JSON.stringify(snapshot), 'X-Session-Id': sessionId },
           body: blob,
         });
         if (response.status !== 204) throw new Error('HTTP ' + response.status);
+        // 서버가 이 탭의 프레임을 버렸다면(다른 탭이 활성) 다음 텔레메트리를 기다리지 않고 바로 멈춘다
+        if (response.headers && response.headers.get('X-Session-Active') === 'false') state.sessionActive = false;
         frameFailCount = 0;
       } catch (error) {
         if (frameFailCount++ === 0) log('Frame upload failed: ' + error.message);
@@ -476,6 +510,7 @@
     function afterRender(dtSec) {
       refreshConnected();
       if (!/^https?:$/.test(location.protocol)) return;
+      if (!state.sessionActive) return;   // 비활성 탭은 프레임을 올리지 않는다(텔레메트리는 계속)
 
       sinceLastFrameSec += dtSec;
       if (sinceLastFrameSec < frameIntervalSec) return;
@@ -490,7 +525,7 @@
       canvas.toBlob((blob) => uploadFrame(blob, frameSeq, snapshot), 'image/jpeg', JPEG_QUALITY);
     }
 
-    return { start, afterRender, state };
+    return { start, afterRender, postTelemetry, state };
   }
 
   // ---------- 오버레이: YOLO 박스 + 하트 ----------
@@ -655,6 +690,7 @@
     MAX_EVENTS_PER_POST, MAX_RANGEFINDER_M,
     wrapYawDeg, nedToGps, heightAboveGroundM, measureToHome, parseBatteryStartPct, batteryPctAt,
     parseScenarioId, parseAutostart, findActorId,
+    createSessionId, parseSessionActive, describeLinkNotice,
     createAutopilot, createLink,
     startHeart, drawOverlay, renderPanel, formatMissionStatus,
   };

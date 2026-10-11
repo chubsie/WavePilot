@@ -163,6 +163,34 @@ function renderFlightModeBadge() {
   if ($('flight-mode-text').textContent !== text) $('flight-mode-text').textContent = text;
 }
 
+// ---------- 링크 배너: 제어권 뺏김 / 백그라운드 안내 / 링크 끊김 ----------
+const BACKGROUND_NOTICE_AFTER_VISIBLE_MS = 5000;  // 탭이 다시 보인 뒤 안내를 남겨 두는 시간
+const PAGE_TITLE = document.title;
+let backgroundNoticeUntilMs = 0;
+
+function renderLinkNotice(nowMs) {
+  const notice = link ? SimLink.describeLinkNotice({
+    sessionActive: link.state.sessionActive, isPaired: link.state.isPaired, connected: link.state.connected,
+    isBackgroundNotice: nowMs < backgroundNoticeUntilMs,
+  }) : null;
+  const banner = $('link-banner');
+  banner.hidden = !notice;
+  if (!notice) return;
+  if (banner.dataset.kind !== notice.kind) banner.dataset.kind = notice.kind;
+  if (banner.textContent !== notice.text) banner.textContent = notice.text;
+}
+
+// 숨은 탭은 rAF 가 멈추고 타이머가 늦어져 Python 링크가 끊긴다 — 숨은 동안은 탭 제목으로, 돌아오면 배너로 알린다
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') {
+    backgroundNoticeUntilMs = Infinity;
+    document.title = '⏸ 링크 일시정지 — ' + PAGE_TITLE;
+    return;
+  }
+  backgroundNoticeUntilMs = performance.now() + BACKGROUND_NOTICE_AFTER_VISIBLE_MS;
+  document.title = PAGE_TITLE;
+});
+
 function toggleMainMode() { if(mode!=='test')setMode(mode === 'ai' ? (glove.link?'imu':'keyboard') : 'ai'); }
 
 function connectionNotice(message) {
@@ -306,6 +334,7 @@ function frame(now) {
   if (yoloFrame) renderYoloBoxes(yoloFrame); else renderTrackBoxes(lastTracks.filter(t => world.canObserve(t.position)));
   // 10 Hz 업로드 스로틀은 sim_link 가 한다. 끊겨 있으면 JPEG 인코딩도 하지 않는다(텔레메트리 POST 가 연결을 되살린다)
   if (link?.state.connected) link.afterRender(delta);
+  renderLinkNotice(now);
   drawSensorChart();
   if(mode==='test'){
     testFlight.update(world.camera.position.toArray(),now);
