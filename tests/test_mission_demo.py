@@ -37,11 +37,10 @@ def test_demo_assets_are_binary_glb_files():
         assert len(data) < 18 * 1024 * 1024
 
 
-def test_demo_contains_only_the_urban_scenario():
+def test_demo_keeps_urban_assets_and_uses_procedural_mountain_training():
     assert not (DEMO / "assets" / "mountain.glb").exists()
     assert not (DEMO / "assets" / "mountain.blend").exists()
-    for name in ("index.html", "app.js", "world.js", "input.js", "analysis.js", "styles.css"):
-        assert "mountain" not in (DEMO / name).read_text().lower()
+    assert (DEMO / "mountain-course.js").is_file()
 
 
 def test_actual_flight_and_glove_behavior():

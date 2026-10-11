@@ -11,8 +11,8 @@ export function sphereIntersectsAabb(position, radius, box, verticalRadius = rad
   return squaredDistance < 1;
 }
 
-export function resolveMovement(position, movement, radius, boxes, horizontalClearance = radius) {
-  const collides = (candidate) => boxes.some((box) => sphereIntersectsAabb(candidate, horizontalClearance, box, radius));
+export function resolveMovement(position, movement, radius, boxes, horizontalClearance = radius, floorHeight = null) {
+  const collides = (candidate) => (floorHeight && candidate[1] < floorHeight(candidate[0],candidate[2])+radius-1e-6) || boxes.some((box) => sphereIntersectsAabb(candidate, horizontalClearance, box, radius));
   const resolved = [...position];
   const blockedAxes = new Set();
   const steps = Math.max(1, Math.ceil(Math.hypot(...movement) / (radius * 0.5)));

@@ -2,7 +2,9 @@ import { resolveMovement, sphereIntersectsAabb } from "./collision.js";
 import { createDrone } from "./drone-model.js";
 import { MainFlightCore, D2R, DRAG_H, DRAG_V } from "./flight-core.js";
 import { HeartBeam, updateStatusLeds } from "./hearts.js";
-import { PEOPLE } from './population.js';
+import { PEOPLE, createWalker } from './population.js';
+import { createCourse, TEST_START } from './test-flight.js';
+import { createMountain, terrainHeight } from './mountain-course.js';
 
 const THREE = window.THREE;
 
@@ -23,6 +25,8 @@ export class DroneWorld {
     container.appendChild(this.renderer.domElement);
 
     this.scene = new THREE.Scene();
+    this.testCourse=createCourse(THREE);
+    this.scene.add(this.testCourse);
     this.camera = new THREE.PerspectiveCamera(68, 1, 0.1, 320);
     this.camera.rotation.order = "YXZ";
     this.chaseCamera = new THREE.PerspectiveCamera(60, 1, .1, 320);
@@ -136,7 +140,7 @@ export class DroneWorld {
   }
 
   reset() {
-    this.camera.position.set(...URBAN.start);
+    this.camera.position.set(...(this.training?TEST_START:URBAN.start));
     this.heading = URBAN.heading;
     this.velocity.set(0, 0, 0);
     this.mainFlight ??= new MainFlightCore();
@@ -145,6 +149,16 @@ export class DroneWorld {
     this.camera.rotation.set(-.65, this.heading, 0, "YXZ");
     this.camera.updateMatrixWorld(true);
     this.chaseReady = false;
+  }
+
+  setTraining(active){
+    this.training=active;
+    if(!this.mountain){this.mountain=createMountain(THREE);this.scene.add(this.mountain);}
+    this.mountain.visible=active;this.environment.visible=!active;this.testCourse.visible=active;
+    this.scene.background=new THREE.Color(active?0xa7bec4:URBAN.sky);
+    this.scene.fog=new THREE.Fog(active?0xa7bec4:URBAN.fog,active?110:70,active?300:210);
+    this.reset();
+    this.onAssetStatus(active?'MOUNTAIN TRAINING':'BLENDER ASSET · URBAN / READY');
   }
 
   update(input, delta) {
@@ -160,7 +174,7 @@ export class DroneWorld {
     let moveAltitude = true;
     if (mainControl) {
       if (input.source === 'ai' && !this.mainFlight.ai) this.mainFlight.enterAi(this.camera.position.y, 0, -this.heading / D2R);
-      const result = this.mainFlight.step(input, delta, this.camera.position, this.velocity);
+      const result = this.mainFlight.step(input, delta, this.camera.position, this.velocity,this.training?terrainHeight(this.camera.position.x,this.camera.position.z):0);
       this.heading = result.heading;
       moveAltitude = result.moveAltitude;
     } else {
@@ -172,7 +186,7 @@ export class DroneWorld {
     if (input.source === 'imu-stale' || input.brake) this.velocity.set(0, 0, 0);
     const movement = this.velocity.clone().multiplyScalar(delta);
     if (!moveAltitude) movement.y = 0;
-    const resolved = resolveMovement(this.camera.position.toArray(), movement.toArray(), DRONE_RADIUS, this.colliders, BUILDING_SIDE_CLEARANCE);
+    const resolved = resolveMovement(this.camera.position.toArray(), movement.toArray(), DRONE_RADIUS, this.training?[]:this.colliders, BUILDING_SIDE_CLEARANCE,this.training?terrainHeight:null);
     this.camera.position.fromArray(resolved.position);
     if (resolved.blocked) {
       for (let axis = 0; axis < 3; axis++) {
@@ -183,12 +197,13 @@ export class DroneWorld {
       this.mainFlight.ai = false;
       this.heading += input.yaw * delta * 1.45;
     }
-    this.onGround = this.camera.position.y <= .7;
+    const floor=this.training?terrainHeight(this.camera.position.x,this.camera.position.z)+.7:.7;
+    this.onGround = this.camera.position.y <= floor;
     if (this.onGround) {
       this.velocity.x *= Math.max(0, 1 - 4 * delta);
       this.velocity.z *= Math.max(0, 1 - 4 * delta);
     }
-    for (const [axis, min, max] of [[0,-68,68], [1,.7,48], [2,-68,68]]) {
+    for (const [axis, min, max] of [[0,-68,68], [1,floor,this.training?65:48], [2,-68,68]]) {
       const before = this.camera.position.getComponent(axis);
       const bounded = THREE.MathUtils.clamp(before, min, max);
       if (bounded !== before) this.velocity.setComponent(axis, 0);
@@ -196,7 +211,7 @@ export class DroneWorld {
     }
     this.camera.rotation.y = this.heading;
     const overview = THREE.MathUtils.clamp((this.camera.position.y - 12) / 20, 0, 1);
-    this.camera.rotation.x = mainControl ? this.mainFlight.shown.pitch * D2R : -.35 - overview * .3 - input.pitch * 0.09;
+    this.camera.rotation.x = mainControl ? this.mainFlight.shown.pitch * D2R : this.training?-.08-input.pitch*.05:-.35 - overview * .3 - input.pitch * 0.09;
     this.camera.rotation.z = mainControl ? -this.mainFlight.shown.roll * D2R : -input.roll * 0.10;
     this.camera.updateMatrixWorld(true);
     this.renderViews(delta, input);
@@ -262,6 +277,10 @@ export class DroneWorld {
       for (const { object, initial, origin } of this.targetMeshes.get(track.id) || []) {
         object.position.x = initial.x + track.position[0] - origin[0];
         object.position.z = initial.z + track.position[2] - origin[1];
+        if(object.userData.limbs){
+          object.rotation.y=track.heading;
+          for(const {pivot,phase} of object.userData.limbs)pivot.rotation.x=Math.sin(track.stride)*.45*phase;
+        }
         object.updateMatrixWorld(true);
       }
     }
@@ -271,10 +290,10 @@ export class DroneWorld {
     const parts=[];
     this.environment.traverse(object=>{if(object.isMesh && object.name.startsWith('Person_T03')) parts.push(object);});
     for (const person of PEOPLE) {
-      const group=new THREE.Group();
+      const group=person.route?createWalker(THREE,person.color):new THREE.Group();
       group.name=`Person_${person.id}`;
       group.position.set(...person.feet);
-      for (const source of parts) {
+      for (const source of person.route?[]:parts) {
         const mesh=source.clone();
         mesh.position.sub(new THREE.Vector3(2,0,-22));
         group.add(mesh);

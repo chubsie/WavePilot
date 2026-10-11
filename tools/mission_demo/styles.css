@@ -17,7 +17,13 @@ button, a { font: inherit; }
 button { min-height: 40px; color: inherit; cursor: pointer; }
 button:active { transform: scale(.96); }
 
-.command-bar { height: 68px; display: grid; grid-template-columns: 280px 1fr auto; align-items: stretch; border-bottom: 1px solid var(--line); background: #0c100dcc; backdrop-filter: blur(16px); }
+.command-bar { height: 68px; display: grid; grid-template-columns: 280px 1fr 280px; align-items: stretch; border-bottom: 1px solid var(--line); background: #0c100dcc; backdrop-filter: blur(16px); }
+.experience-tabs{display:flex;align-self:stretch;justify-self:center;gap:24px}
+.experience-tabs button{position:relative;min-width:114px;padding:0 14px;border:0;background:none;color:var(--muted);font-size:11px;letter-spacing:.1em}
+.experience-tabs button[aria-selected="true"]{color:var(--lime)}
+.experience-tabs button[aria-selected="true"]:after{content:'';position:absolute;bottom:0;left:8px;right:8px;height:2px;background:var(--lime)}
+.experience-tabs button:hover{color:var(--text)}
+.experience-tabs button:focus-visible{outline:1px solid var(--lime);outline-offset:-5px}
 .brand { display:flex; align-items:center; gap:12px; padding:0 20px; color:inherit; text-decoration:none; border-right:1px solid var(--line); }
 .brand-mark { position:relative; width:34px; height:34px; display:grid; place-items:center; transform:rotate(45deg); border:1px solid var(--lime-dim); }
 .brand-mark i { position:absolute; width:4px; height:4px; background:var(--lime); box-shadow:0 0 10px var(--lime); }
@@ -193,6 +199,9 @@ button:disabled{opacity:.4;cursor:default}
 .analysis-panel .section-heading h1,.analysis-panel .section-heading h2{font-size:18px;letter-spacing:.02em}
 .analysis-panel .detection-side b:after{content:none}
 .report-line{line-height:1.8}
+.test-hud{position:absolute;top:20px;left:50%;transform:translateX(-50%);width:190px;z-index:5;padding:12px;border:1px solid var(--line);background:#0c140feb;font-variant-numeric:tabular-nums}
+.test-hud .test-help{display:block;font-size:8px;line-height:1.7;color:var(--muted);margin-top:10px}
+.test-hud[hidden]{display:none}.test-hud small{font-size:9px;color:var(--lime)}.test-hud>div{display:flex;align-items:center;justify-content:space-between;margin-top:8px}.test-hud b{font:600 26px var(--display)}.test-hud time{font-size:16px}.test-hud p{font-size:10px;line-height:1.5;color:var(--lime);margin:8px 0}.test-hud p:empty{display:none}.test-hud button{min-height:26px;margin-top:8px;background:none;border:1px solid var(--line);font-size:9px;padding:0 8px}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition-duration:0s!important}}
 @media (max-width:900px){body{overflow:auto}.command-bar{grid-template-columns:1fr auto;height:auto}.brand{height:60px}.scenario-switch{justify-content:flex-end}.system-strip{grid-column:1/-1;height:34px;border-top:1px solid var(--line);justify-content:center}.command-grid{height:auto;grid-template-columns:1fr;grid-template-rows:62vh 650px}.camera-panel{border-right:0;border-bottom:1px solid var(--line)}.analysis-panel{grid-template-rows:300px 350px}.footer-strip{position:fixed;bottom:0;left:0;right:0;z-index:10}}
 @media (max-width:600px){.quality-switch{grid-column:1;grid-row:2;justify-self:start}.glove-controls{grid-column:1/-1;grid-row:3;flex-wrap:wrap}.control-dock>.icon-button{grid-row:1}.camera-footer{bottom:184px}.flight-hint{bottom:158px}.camera-topline{font-size:8px}.glove-status{font-size:9px}.command-bar{grid-template-columns:1fr}.scenario-switch{display:none}.system-strip{gap:10px}.brand{border-right:0}.glove-controls .utility-button{padding:0 6px}}

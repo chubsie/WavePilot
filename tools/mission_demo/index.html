@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#080b09">
   <title>WavePilot — Field Command</title>
-  <link rel="stylesheet" href="styles.css?v=urban-ui-1">
+  <link rel="stylesheet" href="styles.css?v=mode-tabs-1">
 </head>
 <body>
   <header class="command-bar">
@@ -13,9 +13,13 @@
       <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
       <span><b>WAVEPILOT</b><small>FIELD COMMAND / 01</small></span>
     </a>
+    <nav class="experience-tabs" role="tablist" aria-label="Experience mode">
+      <button id="normal-tab" role="tab" aria-selected="true" aria-controls="mode-screen">NORMAL</button>
+      <button id="participate-tab" role="tab" aria-selected="false" aria-controls="mode-screen" tabindex="-1">PARTICIPATE</button>
+    </nav>
   </header>
 
-  <main class="command-grid">
+  <main id="mode-screen" class="command-grid" role="tabpanel" aria-labelledby="normal-tab">
     <section class="camera-panel" aria-label="Drone live view">
       <div id="viewport" class="viewport"></div>
       <section class="fpv-inset" aria-label="Drone camera inset">
@@ -74,6 +78,13 @@
         </details>
       </section>
       <div id="flight-mode-badge" class="flight-mode-badge" role="status"><i></i><span id="flight-mode-text">MANUAL</span></div>
+      <section id="test-hud" class="test-hud" aria-label="Manual mountain course" hidden>
+        <small id="test-state">PASS RING 1 TO START</small>
+        <div><b id="test-score">0 / 10</b><time id="test-time">00:00.0</time></div>
+        <p id="test-result" role="status"></p>
+        <small class="test-help">WASD move · Q/E turn · R/F altitude<br>Or pair your glove</small>
+        <button id="test-restart">RESTART</button>
+      </section>
       <div class="scanlines" aria-hidden="true"></div>
       <div id="cinematic-effects" class="cinematic-effects urban" aria-hidden="true"></div>
       <div class="camera-footer">
