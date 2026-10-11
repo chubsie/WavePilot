@@ -345,7 +345,7 @@
 
   // ---------- 와이어 프로토콜 클라이언트 ----------
   function createLink(options) {
-    const { canvas, getTelemetry, isAiMode, isOperatorLinkUp, onCommand, takeEvents, onPaired, log } = options;
+    const { canvas, getTelemetry, isAiMode, isOperatorLinkUp, onCommand, takeEvents, onPaired, onFrameSent, log } = options;
     // 운용자 링크 heartbeat — 옵션이 없으면 늘 연결(Phase 5 D-01)
     const readOperatorLink = isOperatorLinkUp || (() => true);
     const nowSec = () => performance.now() / 1000;
@@ -361,6 +361,7 @@
       recentCommands: [],
       discardedCount: 0,
       mission: null,
+      pipeline: null,   // {state, report} — Python 이 YOLO 결과로 만든 state JSON·보고(없으면 null)
     };
 
     function refreshConnected() {
@@ -405,6 +406,7 @@
       }
       // Python 이 임무 상태를 안 보내면 지난 값을 지운다(D-02)
       state.mission = body.mission && typeof body.mission === 'object' ? body.mission : null;
+      state.pipeline = body.pipeline && typeof body.pipeline === 'object' ? body.pipeline : null;
       handleCommands(body.commands);
     }
 
@@ -483,7 +485,13 @@
       const snapshot = getTelemetry();
       const frameSeq = seq = (seq + 1) % MAX_SEQ;
       pendingFrames++;
-      canvas.toBlob((blob) => uploadFrame(blob, frameSeq, snapshot), 'image/jpeg', JPEG_QUALITY);
+      canvas.toBlob((blob) => {
+        // 선택 훅: 보낸 프레임을 seq 와 함께 넘긴다(YOLO 로그 썸네일용) — 훅이 터져도 업로드는 계속한다
+        if (blob && onFrameSent) {
+          try { onFrameSent(frameSeq, blob); } catch (error) { log('onFrameSent failed: ' + error.message); }
+        }
+        uploadFrame(blob, frameSeq, snapshot);
+      }, 'image/jpeg', JPEG_QUALITY);
     }
 
     return { start, afterRender, state };
