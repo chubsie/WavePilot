@@ -331,7 +331,7 @@ test('urban AUTO completes a loop without collision against actual GLB proxies a
   assert.equal(visited.size,pilot.route.length);
 });
 
-test('manual mountain course scores rotated rings in order and freezes the completed timer',()=>{
+test('manual mountain course scores rings in order and freezes the completed timer',()=>{
   const challenge=new TestFlight();
   challenge.update(TEST_START,5000);assert.equal(challenge.elapsed,0);
   for(let i=0;i<COURSE.length;i++){
@@ -343,6 +343,21 @@ test('manual mountain course scores rotated rings in order and freezes the compl
   assert.equal(challenge.state,'COMPLETE');assert.equal(challenge.elapsed,9);
   challenge.update(TEST_START,999999);assert.equal(challenge.elapsed,9);
   challenge.start();assert.equal(challenge.index,0);assert.equal(challenge.elapsed,0);
+});
+
+test('straight training course begins 39m ahead and all ten rings are reachable without turning',()=>{
+  assert.equal(TEST_START[2]-COURSE[0][2],39);
+  const world=flightWorld(),challenge=new TestFlight();world.training=true;world.reset();
+  world.camera.position.set(TEST_START[0],7.85,COURSE[0][2]+1);
+  world.velocity.set(0,.9,-6);
+  for(let i=1;i<COURSE.length;i++)assert.ok(Math.abs((COURSE[i][1]-COURSE[i-1][1])/12-.15)<1e-10);
+  for(let frame=0;frame<60*45 && challenge.state!=='COMPLETE';frame++){
+    assert.equal(world.update({source:'keyboard',roll:0,pitch:6/13,yaw:0,throttle:.9/8},1/60),false);
+    challenge.update(world.camera.position.toArray(),frame*1000/60);
+  }
+  assert.equal(challenge.passed.size,10);
+  assert.equal(world.heading,0);
+  assert.equal(world.camera.position.x,TEST_START[0]);
 });
 
 test('mountain training stays still without input and terrain stops low flight into hills',()=>{

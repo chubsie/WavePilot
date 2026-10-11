@@ -1,8 +1,8 @@
 import { KeyboardInput, GloveInput, AutoPilotInput } from "./input.js";
 import { AnalysisEngine } from "./analysis.js";
-import { DroneWorld } from "./world.js";
-import { TestFlight, COURSE } from './test-flight.js';
-import { terrainHeight } from './mountain-course.js';
+import { DroneWorld } from "./world.js?v=slope-15";
+import { TestFlight, COURSE } from './test-flight.js?v=slope-15';
+import { terrainHeight } from './mountain-course.js?v=slope-15';
 import { createYoloLog, createYoloLogView, formatDetectionLabel, getObjectCategory, scaleBox } from './yolo-log.js';
 import { createDecisionLog, createLlmDecisionView, formatAiBadge } from './llm-decisions.js';
 import { createHeartOverlay, extendHeartPulse, getHeartTarget, isHeartPulseOn } from './heart-overlay.js';
