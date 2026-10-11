@@ -18,6 +18,10 @@ llm_module 은 최상위 파사드(LLMModuleConfig, create_llm_module)만 쓴다
     uv run --group yolo python -m modules.drone.run_scenario --sim browser --operator-port 8765 --backend fake
     브라우저로 http://127.0.0.1:8766/drone_camera.html 을 연다
 
+--operator browser 는 운용자 콘솔 대신 state·report 를 시뮬레이터 페이지로 보낸다(--sim browser 전용, 콘솔 불필요):
+    uv run --group yolo python -m modules.drone.run_scenario --sim browser --operator browser --backend fake
+    브라우저로 http://127.0.0.1:8766/mission_demo/ 를 연다
+
 --yolo orin 은 프레임을 Orin YOLO 서버로 보낸다 — Mac 에 yolo 그룹이 없어도 된다:
     uv run python -m modules.drone.run_scenario --sim browser --yolo orin --yolo-url http://<orin-ip>:8082 --operator-port 8765 --backend fake
 """
@@ -30,6 +34,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from modules.comm.interface import CommLink
 from modules.comm.tcp_link import TcpJsonLinesLink
 from modules.drone.pipeline import (
     DEFAULT_REPORT_INTERVAL_SEC,
@@ -73,7 +78,12 @@ DEFAULT_SIM_CONNECT_TIMEOUT_SEC = 30.0
 SIM_CONNECT_POLL_SEC = 0.1
 DEFAULT_YOLO_DEVICE = "auto"
 SIM_PAGE_PATH = "/drone_camera.html"
+MISSION_DEMO_PAGE_PATH = "/mission_demo/"
 BROWSER_RUN_LABEL = "browser"
+
+OPERATOR_TCP = "tcp"
+OPERATOR_BROWSER = "browser"
+OPERATOR_CHOICES = (OPERATOR_TCP, OPERATOR_BROWSER)
 
 
 class WallClockPacer:
@@ -107,7 +117,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--sim", choices=SIM_CHOICES, default=SIM_MOCK, help="simulator implementation (default mock)")
     parser.add_argument("--scenario", default=None, help="path to a scenario TOML file (required with --sim mock)")
     parser.add_argument("--operator-host", default=DEFAULT_OPERATOR_HOST, help="operator console host")
-    parser.add_argument("--operator-port", type=int, required=True, help="operator console port")
+    parser.add_argument(
+        "--operator", choices=OPERATOR_CHOICES, default=OPERATOR_TCP,
+        help="where state/report go: tcp (operator console) | browser (simulator page, --sim browser only)",
+    )
+    parser.add_argument("--operator-port", type=int, default=None, help="operator console port (required with --operator tcp)")
     parser.add_argument("--backend", choices=["fake", "llama_server"], default="fake", help="report LLM backend")
     parser.add_argument("--llm-url", default=DEFAULT_LLM_URL, help="llama-server base URL")
     parser.add_argument("--llm-timeout-sec", type=float, default=DEFAULT_LLM_TIMEOUT_SEC, help="per-request LLM timeout")
@@ -189,8 +203,12 @@ def _run_pipeline(
     pace: Callable[[float], None] | None,
     run_reports_in_background: bool,
     label: str,
+    link: CommLink | None = None,
 ) -> int:
-    """mock·browser 공통 — LLM·운용자 링크를 붙여 DronePipeline 을 끝까지 돌린다. pipeline 자체는 구현을 모른다 (X-11)."""
+    """mock·browser 공통 — LLM·운용자 링크를 붙여 DronePipeline 을 끝까지 돌린다. pipeline 자체는 구현을 모른다 (X-11).
+
+    link 를 넘기지 않으면 운용자 콘솔에 TCP 로 접속한다.
+    """
     track_provider = TrackAggregator(DEFAULT_CAMERA)
 
     llm_module = create_llm_module(
@@ -202,13 +220,14 @@ def _run_pipeline(
         logger.error("llm backend not ready: %s", error)
         return EXIT_FAILURE
 
-    try:
-        link = TcpJsonLinesLink.connect(
-            args.operator_host, args.operator_port, retry_timeout_sec=args.connect_timeout_sec
-        )
-    except OSError as error:
-        logger.error("could not connect to operator console: %s", error)
-        return EXIT_FAILURE
+    if link is None:
+        try:
+            link = TcpJsonLinesLink.connect(
+                args.operator_host, args.operator_port, retry_timeout_sec=args.connect_timeout_sec
+            )
+        except OSError as error:
+            logger.error("could not connect to operator console: %s", error)
+            return EXIT_FAILURE
 
     config = PipelineConfig(
         report_interval_sec=args.report_interval_sec,
@@ -266,6 +285,7 @@ def _run_browser_sim(args: argparse.Namespace) -> int:
     bridge = components.sim_bridge()
     server = components.start_sim_server(bridge, args.sim_host, args.sim_port)
     logger.info("simulator page: http://%s:%d%s", args.sim_host, args.sim_port, SIM_PAGE_PATH)
+    logger.info("mission demo page: http://%s:%d%s", args.sim_host, args.sim_port, MISSION_DEMO_PAGE_PATH)
 
     detection_source = None
     try:
@@ -283,8 +303,11 @@ def _run_browser_sim(args: argparse.Namespace) -> int:
             timer.daemon = True
             timer.start()
 
+        # 기존 호출 모양을 지키려고 browser 운용자일 때만 link 를 넘긴다 — 없으면 TCP 운용자 콘솔이다
+        link_kwargs = {"link": _create_bridge_comm_link(bridge)} if args.operator == OPERATOR_BROWSER else {}
         return _run_pipeline(
-            args, detection_source, flight_control, pace=None, run_reports_in_background=True, label=BROWSER_RUN_LABEL
+            args, detection_source, flight_control, pace=None, run_reports_in_background=True, label=BROWSER_RUN_LABEL,
+            **link_kwargs,
         )
     except KeyboardInterrupt:
         logger.info("interrupted")
@@ -294,6 +317,13 @@ def _run_browser_sim(args: argparse.Namespace) -> int:
             detection_source.close()
         server.shutdown()
         server.server_close()
+
+
+def _create_bridge_comm_link(bridge) -> CommLink:
+    # browser 구현은 browser 모드에서만 import 한다 (_load_browser_components 와 같은 이유)
+    from modules.simulation.browser.comm_link import BridgeCommLink
+
+    return BridgeCommLink(bridge)
 
 
 def _wait_for_simulator(bridge, timeout_sec: float) -> bool:
@@ -310,6 +340,10 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
     # parser.error 는 종료 코드 2로 끝낸다
     if args.sim == SIM_MOCK and args.scenario is None:
         parser.error("--scenario is required with --sim mock")
+    if args.operator == OPERATOR_BROWSER and args.sim != SIM_BROWSER:
+        parser.error("--operator browser requires --sim browser")
+    if args.operator == OPERATOR_TCP and args.operator_port is None:
+        parser.error("--operator-port is required with --operator tcp")
     if args.speed < 0:
         parser.error(f"--speed must be >= 0, got {args.speed}")
     if args.fps <= 0:
