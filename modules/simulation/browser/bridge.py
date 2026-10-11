@@ -5,6 +5,7 @@
 - 프레임은 최신 한 칸만 유지한다 — 새 프레임이 오면 오래된 프레임은 버린다(YOLO 가 밀려도 지연이 쌓이지 않게).
 - 명령은 큐에 쌓였다가 drain 한 번에 한 번만 배달된다(id 는 1 부터 단조 증가).
 - heart_shot 이벤트(발마다 맞은 배우, Phase 6 D-10)는 recent_events 와 별도 큐 — drain 한 번에 한 번만 나온다.
+- 파이프라인 state·report 는 종류별 최신 한 칸 — --operator browser 일 때 페이지가 /sim/telemetry 로 읽는다.
 
 페이로드 검증(Telemetry.from_dict, 크기 상한)은 HTTP 서버(02-02) 몫이다 — bridge 는 타입이 맞는 객체만 받는다.
 모든 상태는 Condition 하나(내부 Lock)로 보호하므로 서버 스레드·파이프라인 스레드가 동시에 불러도 된다.
@@ -24,6 +25,7 @@ RECENT_EVENT_LIMIT = 50
 HEART_SHOT_EVENT = "heart_shot"
 HEART_SHOT_LIMIT = 1000
 FRAME_FPS_WINDOW_SEC = 1.0
+PIPELINE_MESSAGE_KINDS = ("state", "report")
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,7 +61,10 @@ class SimBridge:
         self._frame_received_times: deque[float] = deque()
 
         self._detections: dict | None = None
+        self._detections_seq: int | None = None
         self._yolo_latency_ms: float | None = None
+
+        self._pipeline_messages: dict[str, dict | None] = dict.fromkeys(PIPELINE_MESSAGE_KINDS)
 
     # --- 브라우저 → Python: 텔레메트리·AI 모드·이벤트 ---
 
@@ -202,14 +207,39 @@ class SimBridge:
 
     # --- 탐지 결과·상태 ---
 
-    def publish_detections(self, frame_dict: dict, latency_ms: float) -> None:
+    def publish_detections(self, frame_dict: dict, latency_ms: float, seq: int | None = None) -> None:
+        """seq 는 추론한 브라우저 프레임 번호 — 페이지가 박스를 어느 프레임에 맞출지 고르는 데 쓴다."""
         with self._condition:
             self._detections = frame_dict
+            self._detections_seq = seq
             self._yolo_latency_ms = latency_ms
 
     def latest_detections(self) -> dict | None:
         with self._condition:
             return self._detections
+
+    def latest_browser_detections(self) -> dict | None:
+        """/sim/telemetry 응답용 — seq 가 있으면 탐지 dict 에 "seq" 를 붙인다. Frame 인터페이스는 그대로 둔다."""
+        with self._condition:
+            if self._detections is None or self._detections_seq is None:
+                return self._detections
+            return {**self._detections, "seq": self._detections_seq}
+
+    # --- Python → 브라우저: 파이프라인 state·report (운용자 콘솔 대신 페이지가 받는다) ---
+
+    def publish_pipeline_message(self, kind: str, entry: dict) -> None:
+        """kind 별 최신 한 칸만 둔다 — 페이지는 10 Hz 폴링이라 지난 값은 필요 없다."""
+        if kind not in PIPELINE_MESSAGE_KINDS:
+            raise ValueError(f"kind must be one of {PIPELINE_MESSAGE_KINDS}, got {kind!r}")
+        if not isinstance(entry, dict):
+            raise TypeError(f"entry must be a dict, got {type(entry).__name__}")
+
+        with self._condition:
+            self._pipeline_messages[kind] = dict(entry)
+
+    def pipeline_messages(self) -> dict[str, dict | None]:
+        with self._condition:
+            return {kind: None if entry is None else dict(entry) for kind, entry in self._pipeline_messages.items()}
 
     def status(self) -> dict:
         with self._condition:

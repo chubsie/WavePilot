@@ -114,7 +114,7 @@ class BrowserDetectionSource:
         # YoloDetectionSource 는 read_frame 한 번에 디코드되는 항목 하나만 꺼내므로, 마지막으로 흘린 프레임이 방금 추론한 프레임이다
         browser_frame = self._stream.last_frame
         latency_ms = (self._clock() - browser_frame.received_at_sec) * MS_PER_SEC
-        self._bridge.publish_detections(frame.to_dict(), latency_ms)
+        self._bridge.publish_detections(frame.to_dict(), latency_ms, seq=browser_frame.seq)
         return frame
 
     def telemetry_for(self, timestamp_sec: float) -> Telemetry | None:

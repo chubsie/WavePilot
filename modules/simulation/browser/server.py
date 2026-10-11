@@ -6,10 +6,12 @@
 
 와이어 프로토콜:
 1. POST /sim/frame?seq=<0..2^31>  — body image/jpeg, 헤더 X-Telemetry(Telemetry JSON) → 204
-2. POST /sim/telemetry            — body JSON {telemetry, ai_mode, events, operator_link?} → 200 {commands, detections, status, mission}
+2. POST /sim/telemetry            — body JSON {telemetry, ai_mode, events, operator_link?} → 200 {commands, detections, status, mission, pipeline}
+                                     detections 에는 추론한 프레임의 seq 가, pipeline 에는 최신 {state, report} 가 실린다(--operator browser)
                                      events 의 kind 는 goal_reached | heart_shot (heart_shot 은 Phase 6 D-10 발사 판정)
 3. GET  /sim/scenario?id=<id>     — 200 브라우저 시나리오 dict (Phase 6 C1) / 400 잘못된 id·파일 / 404 파일 없음
 4. GET  /<file>                   — tools/visualizer/ 정적 파일 (페이지 /drone_camera.html)
+5. GET  /mission_demo/<file>      — tools/mission_demo/ 정적 파일, /visualizer/<file> — tools/visualizer/ (mission_demo 가 ../visualizer/ 를 읽는다)
 
 잘못된 요청은 400 으로 거절하고 bridge 를 건드리지 않는다. 본문은 길이를 먼저 검증한 뒤에만 읽는다.
 표준 라이브러리만 쓴다. 기본은 루프백 바인딩이고 인증은 없다(로컬 시뮬레이터 전용).
@@ -19,17 +21,25 @@
 import argparse
 import functools
 import json
+import posixpath
 import threading
 import time
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse, urlsplit
 
 from modules.flight_control.interface import Telemetry
 from modules.simulation.browser.bridge import HEART_SHOT_EVENT, BrowserFrame, SimBridge
 
-VISUALIZER_DIR = Path(__file__).resolve().parents[3] / "tools" / "visualizer"
+TOOLS_DIR = Path(__file__).resolve().parents[3] / "tools"
+VISUALIZER_DIR = TOOLS_DIR / "visualizer"
+MISSION_DEMO_DIR = TOOLS_DIR / "mission_demo"
+# URL 접두사 → 디렉터리. 접두사가 없으면 기존처럼 VISUALIZER_DIR 루트다
+STATIC_MOUNTS = (
+    ("/mission_demo", MISSION_DEMO_DIR),
+    ("/visualizer", VISUALIZER_DIR),
+)
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 
@@ -47,13 +57,41 @@ GOAL_REACHED_EVENT = "goal_reached"
 
 
 class SimRequestHandler(SimpleHTTPRequestHandler):
-    """POST 와 GET /sim/scenario 는 와이어 프로토콜, 나머지 GET 은 SimpleHTTPRequestHandler 그대로(directory= 안으로 한정)."""
+    """POST 와 GET /sim/scenario 는 와이어 프로토콜, 나머지 GET 은 SimpleHTTPRequestHandler 그대로(마운트 디렉터리 안으로 한정)."""
+
+    # mimetypes 가 플랫폼마다 달라 module 스크립트·GLB 가 octet-stream 으로 나가지 않게 고정한다
+    extensions_map = {
+        **SimpleHTTPRequestHandler.extensions_map,
+        ".js": "text/javascript",
+        ".mjs": "text/javascript",
+        ".glb": "model/gltf-binary",
+        ".gltf": "model/gltf+json",
+    }
 
     def do_GET(self) -> None:
         if urlparse(self.path).path == SCENARIO_PATH:
             self._handle_scenario()
         else:
             super().do_GET()
+
+    def translate_path(self, path: str) -> str:
+        """정규화한 경로가 STATIC_MOUNTS 접두사로 시작하면 그 디렉터리를 루트로 삼는다.
+
+        정규화(unquote → normpath)를 먼저 하므로 %2e%2e 나 /mission_demo/../.. 로는 마운트를 바꿔 빠져나갈 수 없고,
+        남은 경로는 표준 translate_path 가 다시 '..' 를 버리며 directory 안으로 가둔다.
+        """
+        url_path = unquote(urlsplit(path).path)
+        normalized = posixpath.normpath(url_path)
+
+        for prefix, directory in STATIC_MOUNTS:
+            if normalized == prefix or normalized.startswith(prefix + "/"):
+                remainder = normalized.removeprefix(prefix) or "/"
+                if url_path.endswith("/") and not remainder.endswith("/"):
+                    remainder += "/"  # 디렉터리 index 판정이 끝 슬래시를 본다
+                self.directory = str(directory)
+                return super().translate_path(quote(remainder))
+
+        return super().translate_path(path)
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
@@ -142,9 +180,10 @@ class SimRequestHandler(SimpleHTTPRequestHandler):
         bridge.update_from_browser(telemetry, ai_mode, events, operator_link)
         response = {
             "commands": bridge.drain_commands(),
-            "detections": bridge.latest_detections(),
+            "detections": bridge.latest_browser_detections(),
             "status": bridge.status(),
             "mission": bridge.mission_status(),
+            "pipeline": bridge.pipeline_messages(),
         }
         self._send_json(response)
 
