@@ -1,7 +1,7 @@
 import { KeyboardInput, GloveInput, AutoPilotInput } from "./input.js";
 import { AnalysisEngine } from "./analysis.js";
-import { DroneWorld } from "./world.js";
-import { TestFlight, COURSE } from './test-flight.js';
+import { DroneWorld } from "./world.js?v=slope-15";
+import { TestFlight, COURSE } from './test-flight.js?v=slope-15';
 
 const $ = (id) => document.getElementById(id);
 const startedAt = performance.now();

@@ -1,9 +1,10 @@
 export const TEST_START=[-40,.7,52];
-export const COURSE=[[-40,8,39],[-34,11,25],[-22,14,14],[-6,17,9],[12,20,3],[29,18,-9],[36,15,-25],[28,12,-42],[10,10,-49],[-9,14,-42]];
+// Straight course with a 15% climb: 1.8m rise for each 12m forward.
+export const COURSE=Array.from({length:10},(_,index)=>[TEST_START[0],8+index*12*.15,TEST_START[2]-39-index*12]);
 export const NORMALS=COURSE.map((p,i)=>{
-  const before=i?COURSE[i-1]:TEST_START,after=COURSE[i+1]||p;
-  const dx=after[0]-before[0],dz=after[2]-before[2],length=Math.hypot(dx,dz);
-  return [dx/length,0,dz/length];
+  const before=i?COURSE[i-1]:p,after=COURSE[i+1]||p;
+  const dx=after[0]-before[0],dy=after[1]-before[1],dz=after[2]-before[2],length=Math.hypot(dx,dy,dz);
+  return [dx/length,dy/length,dz/length];
 });
 // Scores user movement only; never produces flight commands.
 export class TestFlight {
@@ -13,7 +14,7 @@ export class TestFlight {
     const previous=this.previous;this.previous=[...position];
     if(this.state==='COMPLETE')return;
     const c=COURSE[this.index],n=NORMALS[this.index];
-    const dot=p=>(p[0]-c[0])*n[0]+(p[2]-c[2])*n[2];
+    const dot=p=>(p[0]-c[0])*n[0]+(p[1]-c[1])*n[1]+(p[2]-c[2])*n[2];
     const a=dot(previous),b=dot(position);
     if((a<0&&b>=0)||(a>0&&b<=0)){
       const t=a/(a-b),hit=previous.map((v,i)=>v+(position[i]-v)*t-c[i]);

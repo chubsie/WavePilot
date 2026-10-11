@@ -24,7 +24,7 @@ def test_demo_shell_contract():
 def test_demo_uses_local_three_and_focused_modules():
     html = (DEMO / "index.html").read_text()
     assert "../visualizer/three.min.js" in html
-    assert 'src="app.js"' in html
+    assert 'src="app.js?v=' in html
     assert "https://" not in html
     for module in ("app.js", "world.js", "input.js", "analysis.js", "collision.js", "styles.css"):
         assert (DEMO / module).is_file()

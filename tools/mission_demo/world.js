@@ -3,8 +3,8 @@ import { createDrone } from "./drone-model.js";
 import { MainFlightCore, D2R, DRAG_H, DRAG_V } from "./flight-core.js";
 import { HeartBeam, updateStatusLeds } from "./hearts.js";
 import { PEOPLE, createWalker } from './population.js';
-import { createCourse, TEST_START } from './test-flight.js';
-import { createMountain, terrainHeight } from './mountain-course.js';
+import { createCourse, TEST_START } from './test-flight.js?v=slope-15';
+import { createMountain, terrainHeight } from './mountain-course.js?v=slope-15';
 
 const THREE = window.THREE;
 
@@ -203,7 +203,7 @@ export class DroneWorld {
       this.velocity.x *= Math.max(0, 1 - 4 * delta);
       this.velocity.z *= Math.max(0, 1 - 4 * delta);
     }
-    for (const [axis, min, max] of [[0,-68,68], [1,floor,this.training?65:48], [2,-68,68]]) {
+    for (const [axis, min, max] of [[0,-68,68], [1,floor,this.training?65:48], [2,this.training?-120:-68,68]]) {
       const before = this.camera.position.getComponent(axis);
       const bounded = THREE.MathUtils.clamp(before, min, max);
       if (bounded !== before) this.velocity.setComponent(axis, 0);
