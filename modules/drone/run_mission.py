@@ -491,14 +491,17 @@ def _run_browser_mission(
         if not _wait_for_simulator(bridge, args.sim_connect_timeout_sec):
             logger.error("simulator not connected within %.1fs", args.sim_connect_timeout_sec)
             return None
+
+        # YOLO 는 페이지가 붙자마자 돌린다 — MANUAL 에서도 YOLO log·FPV 박스가 보이게
+        yolo_factory = create_yolo_factory(args.yolo, args.device, args.yolo_url)
+        detection_source = components.browser_detection_source(bridge, yolo_factory=yolo_factory)
+        frame_reader = LatestFrameReader(detection_source)
+
         if not _wait_for_ai_mode(bridge, args.ai_mode_timeout_sec):
             logger.error("AI mode not enabled within %.1fs", args.ai_mode_timeout_sec)
             return None
 
         flight_control = components.browser_flight_control(bridge)
-        yolo_factory = create_yolo_factory(args.yolo, args.device, args.yolo_url)
-        detection_source = components.browser_detection_source(bridge, yolo_factory=yolo_factory)
-        frame_reader = LatestFrameReader(detection_source)
 
         # 조종자 모드·운용자 링크는 매 틱 operator 로 읽고, 브리지 자체가 끊기면 중단한다 (D-01, D-02)
         publisher = BridgePipelinePublisher(bridge)
