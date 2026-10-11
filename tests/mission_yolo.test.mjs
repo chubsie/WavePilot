@@ -15,8 +15,9 @@ test('scaleBox maps source-image pixels onto the view size', () => {
 });
 
 test('detection label and log line formats', () => {
-  assert.equal(formatDetectionLabel(person), 'person #3 87%');
-  assert.equal(formatDetectionLabel(car), 'car 50%');
+  assert.equal(formatDetectionLabel(person), 'person');
+  assert.equal(formatDetectionLabel(car), 'car');
+  assert.equal(formatDetectionLabel({ class_name: 'VEHICLE' }), 'vehicle');
   assert.equal(formatDetectionLine(person), 'person #3 0.87 [64,36,128,108] red');
   assert.equal(formatDetectionLine(car), 'car 0.50 [0,0,10,10]');
 });

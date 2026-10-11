@@ -23,9 +23,9 @@ export function getObjectCategory(className) {
   return VEHICLE_CLASS_NAMES.has(name) ? 'vehicle' : 'object';
 }
 
+// FPV 네임 태그는 무슨 객체인지만 — 트랙 번호·신뢰도는 YOLO log 에 있다
 export function formatDetectionLabel(detection) {
-  const id = hasTrackId(detection) ? ` #${detection.track_id}` : '';
-  return `${String(detection.class_name)}${id} ${Math.round(Number(detection.confidence) * 100)}%`;
+  return String(detection.class_name).toLowerCase();
 }
 
 export function formatDetectionLine(detection) {

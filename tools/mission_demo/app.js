@@ -155,8 +155,8 @@ function renderTracks(tracks, visibleTracks) {
     const box = upsertTargetBox(overlay, track.id);
     box.dataset.kind = getObjectCategory(track.kind);
     box.style.cssText = `left:${screen.x-screen.width/2}px;top:${screen.y-screen.height/2}px;width:${screen.width}px;height:${screen.height}px`;
-    box.querySelector(".target-label").textContent = `${track.id} / ${track.clothing?track.clothing.toUpperCase():track.kind} ${track.confidence}`;
-    box.querySelector(".target-distance").textContent = `${screen.distance.toFixed(1)} M`;
+    box.querySelector(".target-label").textContent = formatDetectionLabel({ class_name: track.kind });
+    box.querySelector(".target-distance").textContent = "";
   });
   overlay.querySelectorAll(".target-box").forEach((box) => { if (!visibleIds.has(box.dataset.track)) box.remove(); });
 }
