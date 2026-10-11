@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import {
-  HEART_PULSE_MS, FPV_HEART_FLIGHT_MS, BURST_GAP_MS,
-  extendHeartPulse, isHeartPulseOn, countBurstShot, formatHeartShot, getHeartFlight, createHeartOverlay,
+  HEART_PULSE_MS, HEART_SHOT_LABEL_MS, BURST_GAP_MS,
+  extendHeartPulse, isHeartPulseOn, countBurstShot, formatHeartShot, createHeartOverlay,
 } from '../tools/mission_demo/heart-overlay.js';
 
 const require = createRequire(import.meta.url);
@@ -158,15 +158,8 @@ test('burst counter continues on the same track and restarts after a gap or a ne
   assert.equal(countBurstShot(burst, 7, 600).count, 1);
 });
 
-test('FPV heart flies from the bottom to the centre, grows and fades out', () => {
-  const start = getHeartFlight(0, 640, 360), end = getHeartFlight(1, 640, 360);
-  assert.equal(start.y, 360);
-  assert.equal(end.y, 180, 'ends on the reticle, where aim_and_fire centred the target');
-  assert.equal(end.x, 320);
-  assert.ok(end.size > start.size);
-  assert.equal(start.alpha, 1);
-  assert.equal(end.alpha, 0);
-  assert.ok(FPV_HEART_FLIGHT_MS > 200, 'consecutive 0.2 s shots overlap on screen');
+test('shot label outlives the 0.2 s gap between consecutive fire_heart shots', () => {
+  assert.ok(HEART_SHOT_LABEL_MS > 200, 'the FIRE ♥ counter does not flicker between shots');
 });
 
 // ---------- FPV 오버레이는 YOLO 업로드 캔버스가 아니다 ----------

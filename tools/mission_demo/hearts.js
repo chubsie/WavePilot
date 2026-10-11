@@ -75,6 +75,10 @@ export class HeartBeam {
     }
   }
 
+  getVisibleSprites() {
+    return this.hearts.filter((heart) => heart.sprite.visible).map((heart) => heart.sprite);
+  }
+
   // 발사 축을 조준 방향으로 바꾼다 — 퍼짐(up/side)도 그 축에 수직으로 다시 잡는다
   alignToAim(direction) {
     this.noseDir.copy(direction).normalize();

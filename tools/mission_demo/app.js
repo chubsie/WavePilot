@@ -1,6 +1,6 @@
 import { KeyboardInput, GloveInput, AutoPilotInput } from "./input.js?v=middle-gesture-1";
 import { AnalysisEngine } from "./analysis.js";
-import { DroneWorld } from "./world.js?v=yaw-steering-hearts-1";
+import { DroneWorld } from "./world.js?v=fpv-3d-hearts-1";
 import { TestFlight, COURSE } from './test-flight.js?v=slope-15';
 import { terrainHeight } from './mountain-course.js?v=slope-15';
 import { createYoloLog, createYoloLogView, formatDetectionLabel, getObjectCategory, scaleBox } from './yolo-log.js';
@@ -54,7 +54,7 @@ const yoloView = createYoloLogView($('yolo-log'));
 const decisionLog = createDecisionLog();
 const decisionView = createLlmDecisionView($('decision-list'));
 
-// FPV 하트는 YOLO 업로드 캔버스(world.fpvCanvas)와 다른 2D 오버레이 캔버스에만 그린다
+// FPV 하트(3D 스프라이트)는 world 의 FPV 하트 캔버스가, 연사 표시는 이 2D 오버레이가 그린다 — 둘 다 YOLO 업로드 캔버스(world.fpvCanvas)가 아니다
 const heartOverlay = world.fpvCanvas ? createHeartOverlay({ canvas: $('heart-overlay'), uploadCanvas: world.fpvCanvas }) : null;
 
 const pyAutopilot = SimLink ? SimLink.createAutopilot({
@@ -62,7 +62,7 @@ const pyAutopilot = SimLink ? SimLink.createAutopilot({
     const target = getHeartTarget(getYoloFrames(), trackId, nowSec());
     world.heartTargetNdc = target?.ndc ?? null;
     heartPulseUntilMs = extendHeartPulse(heartPulseUntilMs, performance.now());
-    heartOverlay?.fire(trackId, performance.now(), target?.screen);
+    heartOverlay?.fire(trackId, performance.now());
     pyAutopilot.recordEvent({ kind: 'heart_shot', track_id: trackId, time_sec: nowSec(), actor_id: null });
   },
 }) : null;

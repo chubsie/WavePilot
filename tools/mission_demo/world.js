@@ -1,7 +1,7 @@
 import { resolveMovement, sphereIntersectsAabb } from "./collision.js";
 import { createDrone } from "./drone-model.js";
 import { MainFlightCore, D2R, DRAG_H, DRAG_V } from "./flight-core.js";
-import { HeartBeam, updateStatusLeds, HEART_SPEED, AIMED_HEART_SPEED } from "./hearts.js";
+import { HeartBeam, updateStatusLeds, HEART_SPEED, AIMED_HEART_SPEED } from "./hearts.js?v=fpv-3d-hearts-1";
 import { getHeartFlightSec } from "./heart-overlay.js";
 import { PEOPLE, createStandingPerson, createWalker } from './population.js';
 import { createCourse, TEST_START } from './test-flight.js?v=slope-15';
@@ -15,6 +15,8 @@ const DRONE_RADIUS = .7;
 const BUILDING_SIDE_CLEARANCE = 2;
 // FPV 전용 캔버스 내부 해상도 — 화면 인셋과 YOLO 로 보내는 JPEG 가 같은 픽셀이다(CSS 로 인셋 크기에 맞춰 축소)
 const FPV_WIDTH = 640, FPV_HEIGHT = 360;
+// 기체 코앞(1.2 m)에서 막 나온 하트는 FPV 화면을 가득 덮는다 — 이 거리보다 가까운 하트는 FPV 하트 오버레이에서 뺀다
+const FPV_HEART_NEAR_M = 3;
 // Python 명령(source 'python') 추종 — drone_camera.html 과 같은 1차 지연·속도 기반 기울기
 const PYTHON_VELOCITY_LAG_PER_SEC = 3;
 const PYTHON_TILT_DEG_PER_MPS = 1.5, PYTHON_MAX_TILT_DEG = 10;
@@ -54,6 +56,17 @@ export class DroneWorld {
       this.fpvCanvas = this.fpvRenderer.domElement;
       this.fpvCanvas.className = "fpv-canvas";
       fpvContainer.prepend(this.fpvCanvas);
+
+      // FPV 위 하트 전용 투명 캔버스 — chase 와 같은 3D 하트 스프라이트를 같은 FPV 카메라로 그린다.
+      // fpvCanvas(YOLO 업로드)와 다른 캔버스라 하트가 YOLO 입력에 섞이지 않는다
+      this.fpvHeartRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+      this.fpvHeartRenderer.setPixelRatio(1);
+      this.fpvHeartRenderer.setSize(FPV_WIDTH, FPV_HEIGHT, false);
+      this.fpvHeartRenderer.setClearColor(0x000000, 0);
+      this.fpvHeartRenderer.outputEncoding = THREE.sRGBEncoding;
+      this.fpvHeartCanvas = this.fpvHeartRenderer.domElement;
+      this.fpvHeartCanvas.className = "fpv-heart-canvas";
+      this.fpvCanvas.after(this.fpvHeartCanvas);
     }
 
     this.scene = new THREE.Scene();
@@ -324,6 +337,7 @@ export class DroneWorld {
       this.setChaseOnlyVisible(false);
       this.fpvRenderer.render(this.scene,this.camera);
       this.setChaseOnlyVisible(true);
+      this.renderFpvHearts();
     } else if(this.fpvContainer) {
       // 전용 렌더러가 없으면(헤드리스 테스트) 예전처럼 메인 캔버스의 scissor 인셋
       const base=this.container.getBoundingClientRect(), pip=this.fpvContainer.getBoundingClientRect();
@@ -359,6 +373,24 @@ export class DroneWorld {
   setChaseOnlyVisible(isVisible) {
     this.drone.visible = isVisible;
     if (this.heartBeam) this.heartBeam.group.visible = isVisible;
+  }
+
+  // FPV 하트 오버레이 — 하트 그룹만 같은 FPV 카메라로 그린다(깊이 가림 없음). 그릴 하트가 없으면 한 번 지우고 스킵
+  renderFpvHearts() {
+    if (!this.fpvHeartRenderer || !this.heartBeam) return;
+
+    const visibleSprites = this.heartBeam.getVisibleSprites();
+    const nearSprites = visibleSprites.filter((sprite) => sprite.position.distanceTo(this.camera.position) < FPV_HEART_NEAR_M);
+    const hasFpvHearts = visibleSprites.length > nearSprites.length;
+
+    if (hasFpvHearts) {
+      for (const sprite of nearSprites) sprite.visible = false;
+      this.fpvHeartRenderer.render(this.heartBeam.group, this.camera);
+      for (const sprite of nearSprites) sprite.visible = true;
+    } else if (this.isFpvHeartDrawn) {
+      this.fpvHeartRenderer.clear();
+    }
+    this.isFpvHeartDrawn = hasFpvHearts;
   }
 
   // 평소엔 기수 3 m 앞(수평), 조준 사격 중엔 짐벌 시선 CHASE_AIM_LOOK_M 앞으로 부드럽게 옮긴다

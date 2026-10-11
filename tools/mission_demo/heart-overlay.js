@@ -1,14 +1,14 @@
-// fire_heart 를 화면에서 확실히 보이게 하는 부분 — chase 빔 펄스 계산 + FPV 위 2D 하트 오버레이.
-// FPV 오버레이는 world.fpvCanvas(YOLO 로 올라가는 JPEG)와 다른 캔버스에만 그린다 — 하트가 YOLO 입력에 섞이면 안 된다.
+// fire_heart 를 화면에서 확실히 보이게 하는 부분 — chase 빔 펄스 계산 + FPV 위 'FIRE ♥ T48 ×3' 연사 표시.
+// 하트 모양 자체는 world.js 가 chase 와 같은 3D 스프라이트로 FPV 하트 캔버스에 그린다.
+// 이 2D 오버레이도 world.fpvCanvas(YOLO 로 올라가는 JPEG)와 다른 캔버스에만 그린다 — 하트가 YOLO 입력에 섞이면 안 된다.
 // 위쪽은 순수 함수(node 테스트 대상), createHeartOverlay 만 canvas 를 만진다.
 
 export const HEART_PULSE_MS = 400;       // fire_heart 한 발이 chase 하트 빔을 켜 두는 시간
-export const FPV_HEART_FLIGHT_MS = 800;  // FPV 하트 한 발이 아래에서 표적(화면 중앙)까지 날아가는 시간
+export const HEART_SHOT_LABEL_MS = 800;  // 마지막 발 이후 연사 표시('FIRE ♥ T48 ×3')를 남겨 두는 시간
 export const BURST_GAP_MS = 1500;        // 이보다 오래 쉬면 다음 발은 새 연사로 센다
 export const HEART_TARGET_MAX_AGE_SEC = 0.5;   // fire_heart 때 이보다 오래된 YOLO 박스는 조준에 쓰지 않는다
 export const BODY_POINT_FROM_TOP = 0.4;        // 박스 위에서 40% — 머리 위가 아니라 몸통을 노린다
 export const HEART_FLIGHT_MIN_SEC = 0.5, HEART_FLIGHT_MAX_SEC = 0.8;
-const RETICLE = { x: 0.5, y: 0.5 };            // 화면 비율 좌표(0..1)의 FPV 중앙
 
 // ---------- 순수 계산 ----------
 // 연속 발사면 끊김 없이 이어지게 — 앞 펄스가 더 길게 남아 있으면 줄이지 않는다
@@ -55,16 +55,13 @@ export function pixelToNdc(x, y, width, height) {
   return { x: (x / width) * 2 - 1, y: 1 - (y / height) * 2 };
 }
 
-// 하트가 쏠 지점: ndc 는 FPV 카메라 unproject 용, screen 은 오버레이용 화면 비율(0..1). 박스가 없으면 null(=레티클)
+// 하트가 쏠 지점: ndc 는 FPV 카메라 unproject 용. 박스가 없으면 null(=레티클)
 export function getHeartTarget(frames, trackId, nowSec, maxAgeSec = HEART_TARGET_MAX_AGE_SEC) {
   const box = findTargetBox(frames, trackId, nowSec, maxAgeSec);
   if (!box) return null;
 
   const pixel = getBodyAimPixel(box.xyxy);
-  return {
-    ndc: pixelToNdc(pixel.x, pixel.y, box.imageWidth, box.imageHeight),
-    screen: { x: pixel.x / box.imageWidth, y: pixel.y / box.imageHeight },
-  };
+  return { ndc: pixelToNdc(pixel.x, pixel.y, box.imageWidth, box.imageHeight) };
 }
 
 // 표적까지 거리(m) → 비행 시간. 순항 속도로 걸리는 시간을 0.5~0.8 s 로 묶어, 가까워도 보이고 멀어도 바로 닿게
@@ -72,48 +69,17 @@ export function getHeartFlightSec(distanceM, cruiseMps) {
   return Math.min(HEART_FLIGHT_MAX_SEC, Math.max(HEART_FLIGHT_MIN_SEC, distanceM / cruiseMps));
 }
 
-// 진행률 0..1 → 하트 위치·크기·투명도. 화면 아래 가운데서 target(화면 비율, 기본 레티클)으로 날아가며 커졌다 사라진다
-export function getHeartFlight(progress, width, height, lane = 0, target = RETICLE) {
-  const travel = Math.min(1, progress * 1.4);
-  const size = height * (0.12 + 0.28 * progress);
-  const startX = width / 2, endX = width * target.x;
-  const startY = height, endY = height * target.y;
-
-  return {
-    x: startX + (endX - startX) * travel + lane * width * 0.06 * (1 - travel),
-    y: startY + (endY - startY) * travel,
-    size,
-    alpha: progress < 0.65 ? 1 : Math.max(0, 1 - (progress - 0.65) / 0.35),
-  };
-}
-
-// 발마다 조금씩 다른 줄(-1..1)로 날려 연사가 한 덩어리로 겹쳐 보이지 않게
-export function getShotLane(count) {
-  return [0, -1, 1, -0.5, 0.5][count % 5];
-}
-
 // ---------- 오버레이 ----------
-function traceHeartPath(ctx, x, y, size) {
-  ctx.beginPath();
-  ctx.moveTo(x, y + size * 0.3);
-  ctx.bezierCurveTo(x, y, x - size * 0.5, y, x - size * 0.5, y + size * 0.3);
-  ctx.bezierCurveTo(x - size * 0.5, y + size * 0.6, x, y + size * 0.8, x, y + size);
-  ctx.bezierCurveTo(x, y + size * 0.8, x + size * 0.5, y + size * 0.6, x + size * 0.5, y + size * 0.3);
-  ctx.bezierCurveTo(x + size * 0.5, y, x, y, x, y + size * 0.3);
-  ctx.closePath();
-}
-
 export function createHeartOverlay({ canvas, uploadCanvas }) {
   if (canvas === uploadCanvas) throw new Error('heart overlay must not draw on the YOLO upload canvas');
 
   const ctx = canvas.getContext('2d');
-  const shots = [];
   let burst = null;
+  let latestShot = null;
 
-  // target = 화면 비율 지점(getHeartTarget().screen). 없으면 레티클로
-  function fire(trackId, nowMs, target = null) {
+  function fire(trackId, nowMs) {
     burst = countBurstShot(burst, trackId, nowMs);
-    shots.push({ trackId, count: burst.count, startMs: nowMs, lane: getShotLane(burst.count), target: target ?? RETICLE });
+    latestShot = { trackId, count: burst.count, startMs: nowMs };
     return burst.count;
   }
 
@@ -123,30 +89,15 @@ export function createHeartOverlay({ canvas, uploadCanvas }) {
     if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
   }
 
-  function drawShot(shot, progress) {
-    const { width, height } = canvas;
-    const flight = getHeartFlight(progress, width, height, shot.lane, shot.target);
-
-    ctx.globalAlpha = flight.alpha;
-    ctx.fillStyle = '#ff3b5c';
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = Math.max(1, height * 0.006);
-    traceHeartPath(ctx, flight.x, flight.y - flight.size / 2, flight.size);
-    ctx.fill();
-    ctx.stroke();
-  }
-
   function drawCounter(nowMs) {
-    const latest = shots[shots.length - 1];
-    if (!latest || nowMs - latest.startMs > FPV_HEART_FLIGHT_MS) return;
+    if (!latestShot || nowMs - latestShot.startMs > HEART_SHOT_LABEL_MS) return;
 
     const fontPx = Math.max(10, Math.round(canvas.height * 0.07));
-    ctx.globalAlpha = 1;
     ctx.font = `700 ${fontPx}px system-ui, sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
     ctx.fillStyle = 'rgba(15,17,21,.7)';
-    const text = formatHeartShot(latest.trackId, latest.count);
+    const text = formatHeartShot(latestShot.trackId, latestShot.count);
     const textWidth = ctx.measureText(text).width + fontPx;
     ctx.fillRect((canvas.width - textWidth) / 2, fontPx * 0.4, textWidth, fontPx * 1.4);
     ctx.fillStyle = '#ff7a93';
@@ -156,14 +107,7 @@ export function createHeartOverlay({ canvas, uploadCanvas }) {
   function draw(nowMs) {
     fitToDisplay();
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    for (let i = shots.length - 1; i >= 0; i--) {
-      const progress = (nowMs - shots[i].startMs) / FPV_HEART_FLIGHT_MS;
-      if (progress >= 1) { shots.splice(i, 1); continue; }
-      if (progress >= 0) drawShot(shots[i], progress);
-    }
     drawCounter(nowMs);
-    ctx.globalAlpha = 1;
   }
 
   return { fire, draw, canvas };

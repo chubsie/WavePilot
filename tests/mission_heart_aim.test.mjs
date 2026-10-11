@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import {
   HEART_TARGET_MAX_AGE_SEC, HEART_FLIGHT_MIN_SEC, HEART_FLIGHT_MAX_SEC,
-  findTargetBox, getBodyAimPixel, pixelToNdc, getHeartTarget, getHeartFlightSec, getHeartFlight,
+  findTargetBox, getBodyAimPixel, pixelToNdc, getHeartTarget, getHeartFlightSec,
 } from '../tools/mission_demo/heart-overlay.js';
 
 const require = createRequire(import.meta.url);
@@ -47,9 +47,8 @@ test('target box: stale, missing-timestamp, other-track and empty inputs give nu
   assert.equal(findTargetBox([], 48, 10), null);
 });
 
-test('heart target: NDC for the camera ray and a screen fraction for the overlay; null means reticle', () => {
+test('heart target: NDC for the camera ray; null means reticle', () => {
   const target = getHeartTarget([frame(9.9, [person(48, [100, 50, 140, 150])])], 48, 10);
-  assert.deepEqual(target.screen, { x: 120 / 640, y: 90 / 360 });
   assert.deepEqual(target.ndc, pixelToNdc(120, 90, 640, 360));
   assert.equal(getHeartTarget([], 48, 10), null);
 });
@@ -58,14 +57,6 @@ test('flight time reaches the target in 0.5–0.8 s', () => {
   assert.equal(getHeartFlightSec(1, AIMED_HEART_SPEED), HEART_FLIGHT_MIN_SEC, 'near targets still get a visible flight');
   assert.equal(getHeartFlightSec(100, AIMED_HEART_SPEED), HEART_FLIGHT_MAX_SEC, 'far targets are reached quickly');
   assert.ok(Math.abs(getHeartFlightSec(9.8, AIMED_HEART_SPEED) - .7) < 1e-9);
-});
-
-test('FPV overlay heart ends on the target box point (default: reticle)', () => {
-  const end = getHeartFlight(1, 640, 360, 1, { x: .25, y: .75 });
-  assert.equal(end.x, 160);
-  assert.equal(end.y, 270);
-  const reticleEnd = getHeartFlight(1, 640, 360, 1);
-  assert.deepEqual([reticleEnd.x, reticleEnd.y], [320, 180]);
 });
 
 // ---------- 월드: 모든 모드가 FPV 시선으로 쏜다 ----------
