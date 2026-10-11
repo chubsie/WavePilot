@@ -11,6 +11,7 @@ const ALLOW_KEYBOARD_OVERRIDE = true;
 
 const $ = (id) => document.getElementById(id);
 const startedAt = performance.now();
+let batteryStartedAt = performance.now();  // AI 임무를 켤 때마다 다시 채운다 — 탭을 오래 열어 두면 0% 로 시작해 즉시 강제 복귀했다
 let mode = "keyboard";
 let lastFrame = performance.now();
 let lastTracks = [];
@@ -98,7 +99,7 @@ function getSimTelemetry() {
     yaw_deg: SimLink.wrapYawDeg(flight.heading),
     gimbal_pitch_deg: gimbalPitchDeg,
     gimbal_yaw_deg: isPythonFlying ? pyAutopilot.gimbal.yawDeg : 0,
-    battery_pct: SimLink.batteryPctAt(100, (performance.now() - startedAt) / 1000),
+    battery_pct: SimLink.batteryPctAt(100, (performance.now() - batteryStartedAt) / 1000),
     flight_mode: isPythonFlying ? pyAutopilot.flightMode : manualFlightMode,
     gps: SimLink.nedToGps(northM, eastM, downM),
     height_above_ground_m: SimLink.heightAboveGroundM(position.y, groundM),
@@ -134,6 +135,7 @@ function setMode(next) {
     world.setTraining(false);
   }
   if (next !== mode) autopilot.resetObservation();
+  if (next === 'ai' && mode !== 'ai') batteryStartedAt = performance.now();
   if (pyAutopilot && next === 'ai' && mode !== 'ai') pyAutopilot.enterAi(getPose());  // 명령이 올 때까지 제자리 유지
   if (pyAutopilot && next !== 'ai' && mode === 'ai') pyAutopilot.cancel();          // 남은 명령이 나중에 되살아나지 않게
   mode = next;
