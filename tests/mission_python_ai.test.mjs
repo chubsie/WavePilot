@@ -190,10 +190,10 @@ test('decision log is newest first, deduplicated by seq and expires with the YOL
   assert.deepEqual(log.entries.map((entry) => entry.key), ['selection-2', 'mode-end-1']);
   log.prune(DECISION_TTL_MS + 401);
   assert.deepEqual(log.entries.map((entry) => entry.key), ['selection-2'], 'the running decision stays past its TTL');
+  assert.equal(log.addSelection({ seq: 2, payload: selectionPayload }, DECISION_TTL_MS + 500), null, 'same seq is not re-added');
   log.addSelection({ seq: 4, payload: selectionPayload }, DECISION_TTL_MS + 600);
   log.prune(DECISION_TTL_MS + 600);
   assert.deepEqual(log.entries.map((entry) => entry.key), ['selection-4'], 'a newer decision lets the old one expire');
-  assert.equal(log.addSelection({ seq: 2, payload: selectionPayload }, DECISION_TTL_MS + 500), null, 'expired seq is not re-added');
 });
 
 test('decision log is capped', () => {
