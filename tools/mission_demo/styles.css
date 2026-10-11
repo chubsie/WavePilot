@@ -165,6 +165,7 @@ button:disabled{opacity:.4;cursor:default}
 .flight-mode-badge{position:absolute;top:20px;right:20px;z-index:5;display:flex;align-items:center;gap:8px;background:#0b140fde;border:1px solid var(--lime-dim);color:var(--lime);padding:8px 12px;font-size:13px;font-weight:600;letter-spacing:.08em}
 .flight-mode-badge i{width:6px;height:6px;background:currentColor;border-radius:50%}
 .flight-mode-badge.automatic{background:var(--amber);border-color:var(--amber);color:#181b10}
+button.flight-mode-badge{font-family:inherit;cursor:pointer;transition:border-color .18s,box-shadow .18s}button.flight-mode-badge:hover{border-color:currentColor;box-shadow:0 0 14px #c9ef5833}
 .glove-status[hidden]{display:none}
 .camera-topline>span:last-child{display:none}
 .camera-footer{bottom:34px}

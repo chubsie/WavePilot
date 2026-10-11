@@ -344,6 +344,7 @@ async function connectGlove(kind) {
 }
 $('observation-toggle').addEventListener('click',()=>setMode(mode==='auto'?(glove.link?'imu':'keyboard'):'auto'));
  $('main-mode-toggle').addEventListener('click',toggleMainMode);
+$('flight-mode-badge').addEventListener('click',toggleMainMode);  // 우상단 MANUAL 배지를 눌러 Manual / AI 전환
 $("connect-ble").addEventListener("click", () => connectGlove('ble'));
 $("flex-flat").addEventListener("click", () => { $("flight-hint").textContent = glove.calibrateFlex("flat") ? "FLAT saved" : "Waiting for flex samples"; });
 $("flex-bent").addEventListener("click", () => { $("flight-hint").textContent = glove.calibrateFlex("bent") ? "BENT saved" : "Waiting for flex samples"; });
