@@ -13,6 +13,9 @@ pipeline.py / run_scenario.py 는 건드리지 않는 별도 컴포지션 루트
     (browser: http://127.0.0.1:8766/drone_camera.html 을 열고 AI 모드로 전환한다.
      패널에 AI mission 상태 줄(MODE·사유·링크)이 보이고, 이상 주입은 패널 Fault injection 버튼으로 한다 — D-19)
     (browser 실행이면 브라우저가 판정한 발마다의 맞은 배우가 같은 JSONL 에 hit 줄로 남는다 — Phase 6 비교 집계용)
+    uv run --group yolo python -m modules.drone.run_mission --sim browser --mission missions/urban_demo.toml
+    (mission_demo: http://127.0.0.1:8766/mission_demo/ — 선택·모드 종료가 브리지 pipeline 의 selection·mode_end
+     칸으로 가고 페이지 LLM Decisions 패널이 읽는다)
 
 --mission 임무 파일이 탐색 구역·상체 색·최대 비행 시간·안전 여유를 정한다(파일 색이 --target-color 보다 우선).
 임무 파일이 없으면 params 기본값 + CLI 로 돈다(Phase 3·4 동작).
@@ -55,6 +58,7 @@ from modules.drone.run_scenario import (
     EXIT_INTERRUPTED,
     EXIT_OK,
     EXIT_USAGE,
+    MISSION_DEMO_PAGE_PATH,
     SIM_BROWSER,
     SIM_CHOICES,
     SIM_MOCK,
@@ -89,6 +93,10 @@ TARGET_COLOR_CHOICES = (DEFAULT_TARGET_COLOR, TARGET_COLOR_NONE)
 
 DEFAULT_MISSION_LOG_DIR = DEFAULT_LOG_DIR  # WavePilot 루트(작업 디렉터리) 상대 경로
 MISSION_CONSOLE_LOGGER_NAME = "modules.drone.mission_loop"  # 기존 selection/mode_end 줄과 같은 로거
+
+# 브리지 PIPELINE_MESSAGE_KINDS 의 값 — bridge 는 browser 실행에서만 import 하므로 여기 둔다
+PIPELINE_KIND_SELECTION = "selection"
+PIPELINE_KIND_MODE_END = "mode_end"
 
 # mock 세계 — 홈 북쪽 수색 구역 안에 빨간 옷 1명 + 다른 색 1명 (D-06, D-07).
 # 시야 안에 들어와야 보이도록 탐지 거리를 제한한다
@@ -235,6 +243,28 @@ def record_heart_shots(bridge, mission_log: MissionLog) -> int:
         )
 
     return len(heart_shot_list)
+
+
+class BridgePipelinePublisher:
+    """선택·모드 종료 payload 를 브리지 pipeline 칸에 {seq, sent_at, payload} 로 넣는다. seq 는 kind 별 단조 증가."""
+
+    def __init__(self, bridge) -> None:
+        self._bridge = bridge
+        self._seq_by_kind: dict[str, int] = {}
+
+    def on_selection(self, payload: dict) -> None:
+        self.publish(PIPELINE_KIND_SELECTION, payload)
+
+    def on_mode_end(self, payload: dict) -> None:
+        self.publish(PIPELINE_KIND_MODE_END, payload)
+
+    def publish(self, kind: str, payload: dict) -> None:
+        seq = self._seq_by_kind.get(kind, 0) + 1
+        self._seq_by_kind[kind] = seq
+
+        # sent_at 은 pipeline.py 와 같은 형식(로컬 ISO 8601, 밀리초)
+        sent_at = datetime.now().astimezone().isoformat(timespec="milliseconds")
+        self._bridge.publish_pipeline_message(kind, {"seq": seq, "sent_at": sent_at, "payload": payload})
 
 
 def _build_browser_status_handler(bridge, mission_log: MissionLog) -> Callable[[dict], None]:
@@ -450,6 +480,7 @@ def _run_browser_mission(
     bridge = components.sim_bridge()
     server = components.start_sim_server(bridge, args.sim_host, args.sim_port)
     logger.info("simulator page: http://%s:%d%s", args.sim_host, args.sim_port, SIM_PAGE_PATH)
+    logger.info("mission demo page: http://%s:%d%s", args.sim_host, args.sim_port, MISSION_DEMO_PAGE_PATH)
 
     detection_source = None
     frame_reader = None
@@ -467,6 +498,7 @@ def _run_browser_mission(
         frame_reader = LatestFrameReader(detection_source)
 
         # 조종자 모드·운용자 링크는 매 틱 operator 로 읽고, 브리지 자체가 끊기면 중단한다 (D-01, D-02)
+        publisher = BridgePipelinePublisher(bridge)
         result = _build_runner(
             args, flight_control, frame_reader, decision_model, setup,
             clock=lambda: flight_control.get_telemetry().time_sec,
@@ -474,6 +506,8 @@ def _run_browser_mission(
             operator=BridgeOperatorInput(bridge),
             should_abort=lambda: not bridge.is_connected(),
             on_status=_build_browser_status_handler(bridge, setup.mission_log),
+            on_selection=publisher.on_selection,
+            on_mode_end=publisher.on_mode_end,
         ).run()
 
         # 마지막 틱 뒤에 도착한 연사 발까지 남긴다 (C3)
@@ -500,6 +534,8 @@ def _build_runner(
     operator: OperatorInput,
     should_abort: Callable[[], bool] | None = None,
     on_status: Callable[[dict], None] | None = None,
+    on_selection: Callable[[dict], None] | None = None,
+    on_mode_end: Callable[[dict], None] | None = None,
 ) -> MissionRunner:
     _record_mission_start(setup, flight_control)
 
@@ -520,6 +556,8 @@ def _build_runner(
         safety=safety,
         mission_log=setup.mission_log,
         on_status=on_status,
+        on_selection=on_selection,
+        on_mode_end=on_mode_end,
     )
 
 

@@ -39,6 +39,10 @@ mock·browser 클래스를 모른다. 시간은 clock() 으로 읽고 advance(dt
 남긴다. 콘솔 접두사 selection / heart 는 MissionLog 가, heart_duplicate / mode_end / mode_abandoned 는 이 모듈
 logger 가 낸다. MissionLog 는 만든 쪽(run_mission·테스트)이 닫는다.
 
+선택·모드 종료 콜백 (mission_demo LLM Decisions 패널): on_selection / on_mode_end 를 주입하면 선택마다(강제 복귀
+포함) build_selection_payload, 모드가 끝날 때마다 build_mode_end_payload 의 JSON 직렬화 가능한 dict 를 넘긴다.
+None 이면 아무것도 하지 않는다 — mock 경로는 그대로다. run_mission --sim browser 가 브리지 pipeline 으로 잇는다.
+
 종료 사유:
 | end_reason            | 뜻                                                                         |
 |-----------------------|----------------------------------------------------------------------------|
@@ -60,7 +64,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
-from modules.decision.interface import DecisionModel
+from modules.decision.interface import DecisionModel, SelectionResult
 from modules.decision.interface.state import EVENT_PERIODIC_CHECK, ModeResult, SelectionEvent, SelectionState
 from modules.decision.params import ParamDefaults, fill_params
 from modules.decision.trigger import PERIODIC_CHECK_INTERVAL_SEC, SelectionTrigger
@@ -162,6 +166,42 @@ class MissionRunResult:
         return self.end_reason == END_LANDED
 
 
+def build_selection_payload(record: SelectionRecord, result: SelectionResult | None) -> dict:
+    """selection pipeline payload. result 가 None 이면 강제 복귀 — 확률·보기·지연이 없다."""
+    return {
+        "time_sec": record.time_sec,
+        "event_kind": record.event_kind,
+        "rule_mode": record.rule_mode,
+        "params": _to_json_safe(record.params),
+        "source": record.source,
+        "confidence": record.confidence,
+        "probabilities": {} if result is None else dict(result.probabilities),
+        "fallback_reason": record.fallback_reason,
+        "options": [] if result is None else list(result.options),
+        "latency_ms": None if result is None else result.latency.total_ms,
+        "mode_result": _mode_result_to_dict(record.mode_result),
+    }
+
+
+def build_mode_end_payload(now_sec: float, result: ModeResult) -> dict:
+    return {"time_sec": now_sec, **_mode_result_to_dict(result)}
+
+
+def _mode_result_to_dict(result: ModeResult | None) -> dict | None:
+    if result is None:
+        return None
+    return {"rule_mode": result.rule_mode, "outcome": result.outcome, "target_track": result.target_track}
+
+
+def _to_json_safe(value):
+    # 튜플은 JSON 배열로 — 페이지가 그대로 읽는다
+    if isinstance(value, dict):
+        return {key: _to_json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_to_json_safe(item) for item in value]
+    return value
+
+
 def build_rule_mode_settings(
     defaults: ParamDefaults, target_class: str = "person", target_upper_color: str | None = None
 ) -> RuleModeSettings:
@@ -215,6 +255,8 @@ class MissionRunner:
         safety: SafetyMonitor | None = None,
         mission_log: MissionLog | None = None,
         on_status: Callable[[dict], None] | None = None,
+        on_selection: Callable[[dict], None] | None = None,
+        on_mode_end: Callable[[dict], None] | None = None,
     ) -> None:
         self._flight_control = flight_control
         self._frame_source = frame_source
@@ -238,6 +280,8 @@ class MissionRunner:
         )
         self._mission_log = mission_log if mission_log is not None else MissionLog(path=None, console=logger)
         self._on_status = on_status
+        self._on_selection = on_selection
+        self._on_mode_end = on_mode_end
 
         self._trigger = SelectionTrigger(config.periodic_interval_sec)
         self._tick_sec = 1.0 / config.tick_hz
@@ -434,7 +478,7 @@ class MissionRunner:
             now_sec, event.kind, result.rule_mode, result.params, result.source, result.fallback_reason,
             event.mode_result, confidence=result.confidence,
         )
-        self._record_selection(record)
+        self._record_selection(record, result)
         self._running_mode = self._mode_factory(result.rule_mode, result.params, self._settings)
 
         if result.rule_mode == "return_home":
@@ -482,7 +526,7 @@ class MissionRunner:
         self._running_mode = self._mode_factory("return_home", params, self._settings)
 
         record = SelectionRecord(now_sec, event_kind, "return_home", params, SOURCE_FORCED, "none", None, confidence=None)
-        self._record_selection(record)
+        self._record_selection(record, None)
         self._record_return(now_sec, event_kind, params)
 
     def _abandon_running_mode(self, now_sec: float, reason: str) -> None:
@@ -540,13 +584,16 @@ class MissionRunner:
             reason=transition.reason, detail=transition.detail,
         )
 
-    def _record_selection(self, record: SelectionRecord) -> None:
+    def _record_selection(self, record: SelectionRecord, result: SelectionResult | None) -> None:
         self._selections.append(record)
         self._mission_log.record(
             KIND_SELECTION, record.time_sec,
             event=record.event_kind, mode=record.rule_mode, params=record.params, source=record.source,
             confidence=record.confidence, fallback=record.fallback_reason,
         )
+
+        if self._on_selection is not None:
+            self._on_selection(build_selection_payload(record, result))
 
     def _record_return(self, now_sec: float, reason: str, params: dict) -> None:
         self._mission_log.record(
@@ -595,6 +642,9 @@ class MissionRunner:
             "%s t=%.1f mode=%s outcome=%s target=%s",
             MODE_END_LOG_PREFIX, now_sec, result.rule_mode, result.outcome, result.target_track,
         )
+
+        if self._on_mode_end is not None:
+            self._on_mode_end(build_mode_end_payload(now_sec, result))
 
     def _get_hearted_labels(self) -> tuple[str, ...]:
         return tuple(track_label(track_id) for track_id in self._hearted_track_ids)
