@@ -52,7 +52,16 @@ None 이면 아무것도 하지 않는다 — mock 경로는 그대로다. run_m
 | return_failed         | return_home failure, 또는 재시도한 return_home 도 success 가 아님            |
 | hard_stop             | max_mission_sec + return_grace_sec 초과 (끝나지 않는 루프 방지). 보통은 안전 |
 |                       | 감시 max_flight_time 이 먼저 복귀시킨다                                     |
-| aborted               | should_abort 훅이 참 (예: 브라우저 연결 끊김)                               |
+| aborted               | should_abort 훅이 참 (외부 중단 요청). 브라우저 링크 끊김은 aborted 가 아니다 |
+
+시뮬레이터 링크 일시정지 (is_link_up 훅): 틱 첫머리에 링크가 끊겨 있으면 재연결까지 기다린다 — 명령·선택·안전 감시·
+모드 step 을 모두 멈추고, 실행 중 모드와 운용 모드는 그대로 둔다(Hold 를 보내지 않는다: 끊긴 동안 넣은 명령은
+재연결 때 늦게 배달될 뿐이라, 아무것도 보내지 않는 쪽이 가장 단순하고 안전하다). 끊김으로는 임무를 끝내지 않고
+무기한 기다리며 LINK_WAIT_LOG_INTERVAL_SEC 마다 한 줄 남긴다. 임무 시계는 sim 시각이라 끊긴 동안 흐르지 않는다 —
+max_flight_sec·takeoff_timeout·hard_stop 도 그동안 멈춘다(별도 보정 없이 시계 정의만으로 일시정지된다).
+
+시계는 단조 비감소로 읽는다(_now): clock() 이 뒤로 가면 오프셋을 다시 잡아 마지막 값에서 이어 간다 — 안전 감시 창·
+경과 시간이 역행하지 않게. 브라우저 경로는 브리지가 이미 보정하므로 이것은 다른 시계 구현을 위한 방어선이다.
 
 위험 기록: GPS 끊김·점프 중 복귀 항법은 텔레메트리 NED(north_m/east_m)를 쓴다. sim 에서는 NED 가 참값이라
 그대로 홈에 돌아오지만, 실기에서는 GPS 없이 관성·기압 추정으로 NED 를 유지해야 한다(Phase 5 범위 밖).
@@ -98,6 +107,7 @@ HEART_LOG_PREFIX = "heart"
 HEART_DUPLICATE_LOG_PREFIX = "heart_duplicate"
 
 AIRBORNE_TOLERANCE_M = 1.0
+LINK_WAIT_LOG_INTERVAL_SEC = 10.0  # 링크 대기 중 'waiting for simulator reconnect' 줄 간격(틱 수로 잰 대략값)
 
 EVENT_RETURN_RETRY = "return_home_retry"
 SOURCE_FORCED = "forced"
@@ -257,6 +267,7 @@ class MissionRunner:
         on_status: Callable[[dict], None] | None = None,
         on_selection: Callable[[dict], None] | None = None,
         on_mode_end: Callable[[dict], None] | None = None,
+        is_link_up: Callable[[], bool] | None = None,
     ) -> None:
         self._flight_control = flight_control
         self._frame_source = frame_source
@@ -269,6 +280,7 @@ class MissionRunner:
         self._config = config
         self._mode_factory = mode_factory
         self._should_abort = should_abort
+        self._is_link_up = is_link_up
         self._operator = operator if operator is not None else ScriptedOperator()
         self._safety = safety if safety is not None else SafetyMonitor(
             SafetyConfig(
@@ -286,6 +298,8 @@ class MissionRunner:
         self._trigger = SelectionTrigger(config.periodic_interval_sec)
         self._tick_sec = 1.0 / config.tick_hz
         self._start_sec = 0.0
+        self._last_now_sec: float | None = None
+        self._clock_offset_sec = 0.0
         self._takeoff_sec: float | None = None  # 첫 TakeOff 수락 시각 — 비행 경과 기준 (MANUAL 포함)
         self._running_mode: RuleMode | None = None
         self._heart_control = HeartRecordingControl(flight_control, self._record_heart)
@@ -306,7 +320,7 @@ class MissionRunner:
         self._logged_track_colors: dict[int, str | None] = {}
 
     def run(self) -> MissionRunResult:
-        self._start_sec = self._clock()
+        self._start_sec = self._now()
 
         end_reason = self._take_off()
         if end_reason is None:
@@ -325,7 +339,10 @@ class MissionRunner:
         is_takeoff_sent = False
 
         while True:
-            now_sec = self._clock()
+            if not self._wait_for_link():
+                return END_ABORTED
+
+            now_sec = self._now()
             telemetry = self._flight_control.get_telemetry()
             link = self._operator.link_status(now_sec)
 
@@ -364,11 +381,52 @@ class MissionRunner:
 
         return telemetry.flight_mode == "hover" and reached_altitude
 
+    # --- 시계·링크 일시정지 ---
+
+    def _now(self) -> float:
+        raw_sec = self._clock()
+        now_sec = raw_sec + self._clock_offset_sec
+        if self._last_now_sec is not None and now_sec < self._last_now_sec:
+            # 역행하면 마지막 값에서 이어지게 오프셋을 다시 잡는다 — 값에 묶어 두면 시간이 멈춘 뒤 한꺼번에 흘러
+            # 안전 감시가 가짜 gps_jump 를 본다
+            self._clock_offset_sec = self._last_now_sec - raw_sec
+            now_sec = self._last_now_sec
+        self._last_now_sec = now_sec
+        return now_sec
+
+    def _wait_for_link(self) -> bool:
+        """링크가 끊겨 있으면 다시 붙을 때까지 틱만 흘려보낸다. should_abort 가 참이면 False (끊김 자체로는 끝내지 않는다)."""
+        if self._is_link_up is None or self._is_link_up():
+            return True
+
+        paused_at_sec = self._now()
+        self._mission_log.record(KIND_MISSION, paused_at_sec, event="paused", reason="simulator_link_lost")
+        logger.warning("simulator link lost t=%.1f: pausing mission (no commands) until reconnect", paused_at_sec)
+
+        log_every_ticks = max(1, round(LINK_WAIT_LOG_INTERVAL_SEC / self._tick_sec))
+        waited_ticks = 0
+        while not self._is_link_up():
+            if self._should_abort is not None and self._should_abort():
+                return False
+            self._advance(self._tick_sec)
+            waited_ticks += 1
+            if waited_ticks % log_every_ticks == 0:
+                logger.info("waiting for simulator reconnect (%.0f s)", waited_ticks * self._tick_sec)
+
+        resumed_at_sec = self._now()
+        self._mission_log.record(
+            KIND_MISSION, resumed_at_sec, event="resumed", waited=round(waited_ticks * self._tick_sec, 1)
+        )
+        return True
+
     # --- 임무 틱 ---
 
     def _fly_mission(self) -> str:
         while True:
-            now_sec = self._clock()
+            if not self._wait_for_link():
+                return END_ABORTED
+
+            now_sec = self._now()
             telemetry = self._flight_control.get_telemetry()
             link = self._operator.link_status(now_sec)
 
@@ -551,7 +609,7 @@ class MissionRunner:
             north_m = round(track.north_m, 1)
             east_m = round(track.east_m, 1)
 
-        self._mission_log.record(KIND_HEART, self._clock(), target=track_label(track_id), north=north_m, east=east_m)
+        self._mission_log.record(KIND_HEART, self._now(), target=track_label(track_id), north=north_m, east=east_m)
 
     def _mark_hearted_by_position(self, now_sec: float, tracks: tuple[Track, ...]) -> None:
         if not self._hearted_positions:
@@ -658,13 +716,13 @@ class MissionRunner:
             selections=tuple(self._selections),
             mode_results=tuple(self._mode_results),
             final_flight_mode=self._flight_control.get_telemetry().flight_mode,
-            elapsed_sec=self._clock() - self._start_sec,
+            elapsed_sec=self._now() - self._start_sec,
             forced_return=self._forced_return,
             return_reason=self._return_reason,
             transitions=tuple(self._transitions),
         )
         self._mission_log.record(
-            KIND_MISSION, self._clock(),
+            KIND_MISSION, self._now(),
             event="end", end_reason=result.end_reason, elapsed=round(result.elapsed_sec, 1),
             return_reason=result.return_reason, forced_return=result.forced_return,
         )
