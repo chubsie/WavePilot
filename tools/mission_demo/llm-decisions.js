@@ -50,24 +50,65 @@ export function formatFallbackReason(reason) {
   return String(reason);
 }
 
-// selection.payload → 카드 모델
-export function createDecisionCard(payload, seq) {
+// selection.payload → 카드 모델. previousRuleMode 가 다르면 카드 위에 'SWITCH search → approach' 한 줄을 단다
+export function createDecisionCard(payload, seq, previousRuleMode = null) {
   const source = isPresent(payload.source) ? String(payload.source).toLowerCase() : 'unknown';
   const params = payload.params && typeof payload.params === 'object' ? payload.params : {};
+  const ruleMode = toRuleMode(payload.rule_mode);
 
   return {
     kind: 'selection', key: `selection-${seq}`, seq,
+    ruleMode,
     mode: toModeName(payload.rule_mode),
+    switchLine: formatSwitchLine(previousRuleMode, ruleMode),
     source,
     sourceClass: KNOWN_SOURCES.has(source) ? source : 'unknown',
-    confidence: formatConfidence(payload.confidence),
-    fallbackReason: formatFallbackReason(payload.fallback_reason),
     eventKind: isPresent(payload.event_kind) ? String(payload.event_kind) : '–',
     target: isPresent(params.target_track) ? String(params.target_track) : null,
-    bars: formatProbabilityBars(payload.probabilities, payload.options),
     previousResult: formatModeResult(payload.mode_result),
+    checkCount: 1,
+    revision: 1,
+    ...readLatestJudgement(payload, seq),
+  };
+}
+
+// 1 s 재판단마다 바뀌는 값 — 확신도·확률·지연·마지막 판단 시각
+function readLatestJudgement(payload, seq) {
+  return {
+    lastSeq: seq,
+    lastTimeSec: Number.isFinite(payload.time_sec) ? payload.time_sec : null,
+    confidence: formatConfidence(payload.confidence),
+    fallbackReason: formatFallbackReason(payload.fallback_reason),
+    bars: formatProbabilityBars(payload.probabilities, payload.options),
     latency: Number.isFinite(payload.latency_ms) ? `${Math.round(payload.latency_ms)} ms` : null,
   };
+}
+
+const toRuleMode = (mode) => (isPresent(mode) ? String(mode).toLowerCase() : null);
+
+export function formatSwitchLine(previousRuleMode, ruleMode) {
+  if (!previousRuleMode || !ruleMode || previousRuleMode === ruleMode) return null;
+  return `SWITCH ${previousRuleMode} → ${ruleMode}`;
+}
+
+// continued:true 이고 실행 중 카드와 모드가 같을 때만 '같은 판단의 연장'으로 본다
+export function isContinuedSelection(payload, currentCard) {
+  return payload.continued === true && Boolean(currentCard) && currentCard.ruleMode === toRuleMode(payload.rule_mode);
+}
+
+// 같은 카드(key 유지)에 최신 판단을 덮어쓴다 — 카드 수는 그대로, 판단 횟수만 늘어난다
+export function applyContinuedSelection(card, payload, seq) {
+  return { ...card, ...readLatestJudgement(payload, seq), checkCount: card.checkCount + 1, revision: card.revision + 1 };
+}
+
+export function formatCheckSummary(card) {
+  const lastTime = Number.isFinite(card.lastTimeSec) ? ` · last t=${card.lastTimeSec.toFixed(1)} s` : '';
+  return `${card.checkCount} ${card.checkCount === 1 ? 'check' : 'checks'}${lastTime}`;
+}
+
+export function formatCheckAge(nowMs, checkedAtMs) {
+  const ageSec = Math.max(0, nowMs - checkedAtMs) / 1000;
+  return `last check ${ageSec.toFixed(1)} s ago`;
 }
 
 // mode_end.payload → 작은 한 줄
@@ -90,7 +131,18 @@ export function createDecisionLog({ maxEntries = MAX_DECISION_ENTRIES, ttlMs = D
   function addSelection(pipelineSelection, nowMs) {
     if (!pipelineSelection || !pipelineSelection.payload || pipelineSelection.seq === lastSelectionSeq) return null;
     lastSelectionSeq = pipelineSelection.seq;
-    return push(createDecisionCard(pipelineSelection.payload, pipelineSelection.seq), nowMs);
+
+    const { payload, seq } = pipelineSelection;
+    const currentIndex = entries.findIndex((entry) => entry.kind === 'selection');
+    const currentCard = currentIndex === -1 ? null : entries[currentIndex];
+
+    if (isContinuedSelection(payload, currentCard)) {
+      // 재판단은 TTL 기준 시각(atMs)과 마지막 판단 시각을 함께 갱신한다
+      entries[currentIndex] = { ...applyContinuedSelection(currentCard, payload, seq), atMs: nowMs, checkedAtMs: nowMs };
+      return entries[currentIndex];
+    }
+    const card = createDecisionCard(payload, seq, currentCard ? currentCard.ruleMode : null);
+    return push({ ...card, checkedAtMs: nowMs }, nowMs);
   }
 
   function addModeEnd(pipelineModeEnd, nowMs) {
@@ -127,44 +179,63 @@ function renderBar(bar) {
   return row;
 }
 
-function renderCard(card) {
-  const article = element('article', 'decision-card');
+// 카드 내용을 채운다 — 처음 만들 때와 재판단으로 갱신될 때 같은 함수를 쓴다(갱신 땐 등장 애니메이션 없이 내용만 교체)
+function fillCard(article, card) {
   const header = element('header');
   header.append(element('b', 'decision-mode', card.mode), element('span', `decision-source ${card.sourceClass}`, card.source.toUpperCase()));
   header.append(element('span', 'decision-confidence', card.confidence));
-  article.append(header);
+
+  const live = element('p', 'decision-live');
+  live.append(element('span', 'decision-live-badge', 'LIVE'), element('span', 'decision-checks', formatCheckSummary(card)), element('span', 'decision-live-age'));
 
   const facts = [card.eventKind, card.target ? `target ${card.target}` : null, card.latency].filter(Boolean).join(' · ');
-  article.append(element('p', 'decision-facts', facts));
-  if (card.fallbackReason) article.append(element('p', 'decision-fallback', `fallback: ${card.fallbackReason}`));
-  if (card.previousResult) article.append(element('p', 'decision-previous', `prev ${card.previousResult}`));
+  const children = [];
+  if (card.switchLine) children.push(element('p', 'decision-switch', card.switchLine));
+  children.push(header, live, element('p', 'decision-facts', facts));
+  if (card.fallbackReason) children.push(element('p', 'decision-fallback', `fallback: ${card.fallbackReason}`));
+  if (card.previousResult) children.push(element('p', 'decision-previous', `prev ${card.previousResult}`));
   if (card.bars.length) {
     const bars = element('div', 'decision-bars');
     bars.append(...card.bars.map(renderBar));
-    article.append(bars);
+    children.push(bars);
   }
+  article.replaceChildren(...children);
   return article;
 }
 
 function renderEntry(entry) {
-  return entry.kind === 'selection' ? renderCard(entry) : element('p', 'decision-end', entry.text);
+  return entry.kind === 'selection' ? fillCard(element('article', 'decision-card'), entry) : element('p', 'decision-end', entry.text);
 }
 
-// 새 항목만 위에 끼우고, 모델에서 빠진 항목은 지운다(비면 CSS :empty 가 대기 문구를 띄운다)
+// 새 항목은 위에 끼우고, 재판단으로 revision 이 오른 카드는 제자리에서 다시 채우고, 모델에서 빠진 항목은 지운다
+// (비면 CSS :empty 가 대기 문구를 띄운다). 가장 최신 selection 카드만 LIVE 표시와 'last check … ago' 를 갖는다
 export function createLlmDecisionView(container) {
   const rendered = new Map();
 
-  function render(entries) {
+  function render(entries, nowMs) {
     const keys = new Set(entries.map((entry) => entry.key));
-    for (const [key, node] of rendered) {
-      if (!keys.has(key)) { node.remove(); rendered.delete(key); }
+    for (const [key, view] of rendered) {
+      if (!keys.has(key)) { view.node.remove(); rendered.delete(key); }
     }
+
     for (let i = entries.length - 1; i >= 0; i--) {
       const entry = entries[i];
-      if (rendered.has(entry.key)) continue;
-      const node = renderEntry(entry);
-      rendered.set(entry.key, node);
-      container.prepend(node);
+      const view = rendered.get(entry.key);
+      if (!view) {
+        const node = renderEntry(entry);
+        rendered.set(entry.key, { node, revision: entry.revision });
+        container.prepend(node);
+      } else if (view.revision !== entry.revision) {
+        fillCard(view.node, entry);
+        view.revision = entry.revision;
+      }
+    }
+
+    const current = entries.find((entry) => entry.kind === 'selection');
+    for (const [key, view] of rendered) view.node.classList.toggle('is-live', Boolean(current) && key === current.key);
+    if (current && Number.isFinite(nowMs)) {
+      const age = rendered.get(current.key).node.querySelector('.decision-live-age');
+      if (age) age.textContent = formatCheckAge(nowMs, current.checkedAtMs);
     }
   }
 

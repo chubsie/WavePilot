@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#080b09">
   <title>WavePilot — Field Command</title>
-  <link rel="stylesheet" href="styles.css?v=main-fpv-1">
+  <link rel="stylesheet" href="styles.css?v=llm-continued-1">
 </head>
 <body>
   <header class="command-bar">
@@ -112,7 +112,7 @@
       <section class="panel-section decisions-section">
         <header class="section-heading">
           <div><h1>LLM Decisions</h1></div>
-          <div class="metric"><b id="decision-running-mode">–</b><small>RUNNING MODE</small></div>
+          <div class="metric"><b id="decision-running-mode">–</b><small>RUNNING MODE · <span class="decision-cadence">1 s CHECK</span></small></div>
         </header>
         <div id="decision-list" class="decision-list" aria-live="polite"></div>
       </section>
@@ -129,6 +129,6 @@
   <script src="../visualizer/three.min.js"></script>
   <script src="vendor/GLTFLoader.js"></script>
   <script src="../visualizer/sim_link.js"></script>
-  <script type="module" src="app.js?v=main-fpv-1"></script>
+  <script type="module" src="app.js?v=llm-continued-1"></script>
 </body>
 </html>

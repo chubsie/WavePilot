@@ -4,7 +4,7 @@ import { DroneWorld } from "./world.js?v=main-fpv-1";
 import { TestFlight, COURSE } from './test-flight.js?v=slope-15';
 import { terrainHeight } from './mountain-course.js?v=slope-15';
 import { createYoloLog, createYoloLogView, formatDetectionLabel, getObjectCategory, mapCaptureBoxToView } from './yolo-log.js';
-import { createDecisionLog, createLlmDecisionView, formatAiBadge } from './llm-decisions.js';
+import { createDecisionLog, createLlmDecisionView, formatAiBadge } from './llm-decisions.js?v=llm-continued-1';
 import { createHeartOverlay, extendHeartPulse, getHeartTarget, isHeartPulseOn } from './heart-overlay.js';
 
 // TODO: 임시 — 장갑 수동(IMU)·산악 코스에서 비행 키를 누르는 동안은 키보드가 우선한다. 장갑 검증 끝나면 false로.
@@ -272,10 +272,11 @@ function updateYoloPanel() {
 }
 
 function updateDecisionPanel(pipeline) {
-  decisionLog.addSelection(pipeline.selection, performance.now());
-  decisionLog.addModeEnd(pipeline.mode_end, performance.now());
-  decisionLog.prune(performance.now());
-  decisionView.render(decisionLog.entries);
+  const nowMs = performance.now();
+  decisionLog.addSelection(pipeline.selection, nowMs);
+  decisionLog.addModeEnd(pipeline.mode_end, nowMs);
+  decisionLog.prune(nowMs);
+  decisionView.render(decisionLog.entries, nowMs);
   const runningMode = link.state.mission?.running_mode;
   $('decision-running-mode').textContent = runningMode ? String(runningMode).toUpperCase() : '–';
   renderFlightModeBadge();

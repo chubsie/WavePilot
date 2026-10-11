@@ -239,6 +239,14 @@ button.flight-mode-badge{font-family:inherit;cursor:pointer;transition:border-co
 .decision-bar-mode{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .decision-bar-track{height:3px;background:var(--line-soft)}.decision-bar-track i{display:block;height:100%;background:var(--lime-dim)}
 .decision-bar b{font-weight:400;text-align:right;font-variant-numeric:tabular-nums}
+.decision-switch{margin:0 0 4px;color:var(--amber);font-size:8px;letter-spacing:.1em;overflow-wrap:anywhere}
+.decision-live{display:flex;gap:6px;align-items:center;margin:3px 0 0;color:var(--muted);font-size:8px;font-variant-numeric:tabular-nums}
+.decision-live-badge,.decision-live-age{display:none}
+.decision-card.is-live .decision-live-badge{display:inline-flex;align-items:center;gap:4px;color:var(--lime);letter-spacing:.12em}
+.decision-card.is-live .decision-live-badge:before{content:'';width:5px;height:5px;border-radius:50%;background:var(--lime);animation:decision-live-pulse 1s ease-in-out infinite}
+.decision-card.is-live .decision-live-age{display:inline;margin-left:auto}
+.decision-cadence{color:var(--lime-dim)}
+@keyframes decision-live-pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.25;transform:scale(.6)}}
 .decision-end{margin:0;padding:5px 0;border-top:1px solid var(--line-soft);color:var(--muted);font-size:8px;letter-spacing:.06em;overflow-wrap:anywhere}
 
 /* 연사 표시('FIRE ♥') — 메인(1인칭) 화면 위 2D 캔버스. YOLO 업로드 캔버스는 오프스크린이라 여기 섞이지 않는다 */
