@@ -197,13 +197,13 @@ export class DroneWorld {
     const right = new THREE.Vector3(Math.cos(this.heading), 0, -Math.sin(this.heading));
     if (input.source !== this.lastSource) this.hoverAltitude = this.camera.position.y;
     this.lastSource = input.source;
-    const mainControl = ['imu', 'imu-stale', 'ai'].includes(input.source);
+    // AI 모드는 Python 명령(source 'python')만 따른다 — main 의 원 선회('ai')는 이 데모에서 쓰지 않는다
+    const mainControl = ['imu', 'imu-stale'].includes(input.source);
     const isPython = input.source === 'python';
     let moveAltitude = true;
     if (isPython) {
       this.followPythonCommand(input, delta);
     } else if (mainControl) {
-      if (input.source === 'ai' && !this.mainFlight.ai) this.mainFlight.enterAi(this.camera.position.y, 0, -this.heading / D2R);
       const result = this.mainFlight.step(input, delta, this.camera.position, this.velocity,this.training?terrainHeight(this.camera.position.x,this.camera.position.z):0);
       this.heading = result.heading;
       moveAltitude = result.moveAltitude;
@@ -272,7 +272,7 @@ export class DroneWorld {
     // Headless physics tests do not construct presentation cameras.
     if (!this.chaseCamera) { this.renderer.render(this.scene,this.camera); return; }
     this.drone.position.copy(this.camera.position);
-    const mainControl = ['imu','imu-stale','ai'].includes(input.source);
+    const mainControl = ['imu','imu-stale'].includes(input.source);
     if (input.source === 'python') {
       const tilt = getVelocityTiltDeg(this.velocity, this.heading);
       this.drone.rotation.set(tilt.pitchDeg * D2R, this.heading, -tilt.rollDeg * D2R, 'YXZ');
