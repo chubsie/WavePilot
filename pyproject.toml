@@ -8,6 +8,7 @@ dependencies = []
 [dependency-groups]
 dev = ["pytest>=9"]
 yolo = ["ultralytics>=8.3", "lap>=0.5.12"]
+compare = ["playwright>=1.47"]
 
 [tool.uv]
 package = false

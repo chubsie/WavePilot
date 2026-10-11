@@ -51,6 +51,7 @@
   const MAX_RECENT_ITEMS = 8;
   const DETECTION_STALE_SEC = 1.0;
   const MAX_PENDING_EVENTS = 50;
+  const MAX_EVENTS_PER_POST = 32;   // server.py MAX_EVENTS_PER_POST 와 같은 값 — 넘기면 POST 전체가 400
 
   // D-09: 아래쪽 거리 센서(레인지파인더) 최대 측정 거리
   const MAX_RANGEFINDER_M = 50;
@@ -103,6 +104,29 @@
     return Number.isFinite(value) ? clamp(value, 0, 100) : 100;
   }
 
+  function parseScenarioId(search) {
+    // URL 형식: ?scenario=<id> (Phase 6 D-05). 형식 검증은 서버(C1 패턴, 400)가 한다
+    const raw = new URLSearchParams(search || '').get('scenario');
+    const value = raw === null ? '' : raw.trim();
+
+    return value === '' ? null : value;
+  }
+
+  function parseAutostart(search) {
+    // URL 형식: ?autostart=ai (Phase 6 D-02). 다른 값은 무시
+    return new URLSearchParams(search || '').get('autostart') === 'ai' ? 'ai' : null;
+  }
+
+  // ---------- 발사 판정 (Phase 6 D-10) ----------
+  function findActorId(object) {
+    // 레이캐스트로 맞은 메시에서 부모로 올라가 배우 루트의 userData.actorId 를 찾는다 — three.js 에 의존하지 않는다
+    for (let node = object; node; node = node.parent) {
+      const actorId = node.userData && node.userData.actorId;
+      if (typeof actorId === 'string') return actorId;
+    }
+    return null;
+  }
+
   function batteryPctAt(startPct, elapsedSec) {
     // D-14: 움직임과 무관하게 시간에 선형으로 소모
     return Math.max(0, startPct - 100 * elapsedSec / BATTERY_FULL_SEC);
@@ -130,6 +154,7 @@
       apply,
       step,
       takeEvents,
+      recordEvent: pushEvent,
     };
 
     function holdAt(pose) {
@@ -255,8 +280,7 @@
         if (!isReached) return toward;
         // D-09: go_to 도착 시 goal_reached 이벤트를 한 번만 보낸다
         if (motion.commandId !== null && motion.commandId !== undefined) {
-          events.push({ kind: 'goal_reached', command_id: motion.commandId, time_sec: nowSec });
-          if (events.length > MAX_PENDING_EVENTS) events.shift();
+          pushEvent({ kind: 'goal_reached', command_id: motion.commandId, time_sec: nowSec });
         }
         motion = { kind: 'hold', northM: motion.northM, eastM: motion.eastM, downM: motion.downM };
         autopilot.flightMode = 'hover';
@@ -304,6 +328,12 @@
         velDownMps: velocity.velDownMps,
         yawDeg,
       };
+    }
+
+    function pushEvent(event) {
+      // 다음 텔레메트리 POST 에 실을 이벤트 — 넘치면 오래된 것부터 버린다
+      events.push(event);
+      if (events.length > MAX_PENDING_EVENTS) events.shift();
     }
 
     function takeEvents() {
@@ -382,9 +412,11 @@
       if (isTelemetryInFlight) return;
       isTelemetryInFlight = true;
 
-      const events = carriedEvents.concat(takeEvents()).slice(-MAX_PENDING_EVENTS);
+      // 서버 상한을 넘기면 POST 전체가 400 이라 영원히 거절된다 — 앞에서 상한만큼만 보내고 나머지는 다음 전송으로
+      const pendingEvents = carriedEvents.concat(takeEvents()).slice(-MAX_PENDING_EVENTS);
+      const events = pendingEvents.slice(0, MAX_EVENTS_PER_POST);
       const sentAtSec = nowSec();
-      carriedEvents = [];
+      carriedEvents = pendingEvents.slice(MAX_EVENTS_PER_POST);
 
       try {
         const response = await fetch('/sim/telemetry', {
@@ -616,8 +648,9 @@
     GIMBAL_PITCH_MIN_DEG, GIMBAL_PITCH_MAX_DEG, GIMBAL_YAW_MIN_DEG, GIMBAL_YAW_MAX_DEG, DEFAULT_GIMBAL_PITCH_DEG,
     GOTO_SPEED_MPS, CLIMB_SPEED_MPS, LAND_SPEED_MPS, GOAL_REACHED_HORIZONTAL_M, GOAL_REACHED_VERTICAL_M, RTH_MIN_ALTITUDE_M,
     YAW_RATE_DPS, GIMBAL_RATE_DPS, HEART_DURATION_SEC, MAX_RECENT_ITEMS, DETECTION_STALE_SEC, MAX_PENDING_EVENTS,
-    MAX_RANGEFINDER_M,
+    MAX_EVENTS_PER_POST, MAX_RANGEFINDER_M,
     wrapYawDeg, nedToGps, heightAboveGroundM, measureToHome, parseBatteryStartPct, batteryPctAt,
+    parseScenarioId, parseAutostart, findActorId,
     createAutopilot, createLink,
     startHeart, drawOverlay, renderPanel, formatMissionStatus,
   };

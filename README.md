@@ -224,6 +224,16 @@ uv run --group yolo python -m modules.drone.run_mission --sim browser --mission 
 
 With `--sim browser`, open `http://127.0.0.1:8766/drone_camera.html` and press M to switch to AI mode. The panel shows the AI mission state, and its Fault injection buttons cut the operator link, drop or shift GPS, and drain the battery.
 
+### Compare selectors on scenarios
+
+`modules.drone.run_compare` flies every scenario in `scenarios/*.toml` in the browser simulator, alternating the rule and d1 selectors, with no hands on the keyboard: it opens Chromium on each scenario and switches to AI mode by itself. Results go to `logs/compare/<start time>/`: `summary.md` and `summary.csv`, plus one folder per run with `truth.json`, the mission log and `stderr.log`. If the d1 or YOLO server does not answer, the comparison does not start and `summary.md` says which server was missing. The default of 3 repeats takes more than an hour.
+
+```bash
+uv run --group compare playwright install chromium
+uv run --group compare python -m modules.drone.run_compare --repeats 1 --yolo-url http://<orin-ip>:8082 --d1-url http://<orin-ip>:8081
+uv run --group compare python -m modules.drone.run_compare --scenarios basic,confusion --selectors rule --headless --yolo-url http://<orin-ip>:8082
+```
+
 ### Plugging in a simulator
 
 A simulator such as Colosseum only needs three things from this code:

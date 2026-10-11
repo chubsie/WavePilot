@@ -1,0 +1,47 @@
+# 기본 비교: 빨강 1명을 찾아 한 번 쏘고, 다른 색 사람·차는 쏘지 않는지 본다.
+
+name = "basic"
+description = "빨강 셔츠 1명, 다른 색 셔츠 2명, 차 2대"
+mission = "missions/compare.toml"
+battery_pct = 100.0
+
+[[actors]]
+id = "red_1"
+model = "soldier"
+north_m = 16.0
+east_m = -3.0
+heading_deg = 90.0
+shirt = "red"
+shirt_rgb = [208, 24, 24]
+
+[[actors]]
+id = "blue_1"
+model = "soldier"
+north_m = 19.0
+east_m = 4.0
+heading_deg = 20.0
+shirt = "other"
+shirt_rgb = [31, 79, 208]
+
+[[actors]]
+id = "green_1"
+model = "soldier"
+north_m = 31.0
+east_m = 6.0
+heading_deg = 200.0
+shirt = "other"
+shirt_rgb = [40, 150, 60]
+
+[[actors]]
+id = "car_1"
+model = "car"
+north_m = 25.0
+east_m = 9.0
+heading_deg = 60.0
+
+[[actors]]
+id = "car_2"
+model = "car"
+north_m = 28.0
+east_m = -9.0
+heading_deg = -30.0

@@ -602,6 +602,7 @@ function updateDroneCam() {
 // People and cars ahead of home (-Z), where the drone looks at start. dx/dz in m from home.
 // HOME (below) is chosen so that every spot here is dry and roughly level.
 // shirtColor = upper-body (shirt) colour for the Phase 4 red-shirt demo: one red soldier + one blue soldier.
+// With ?scenario=<id> the server's comparison scenario replaces these actors (Phase 6 D-05).
 const WALK_SPEED = 1.2;                      // m/s
 const ACTOR_SPECS = [
   { model: 'Soldier.glb', dx: -3, dz: -16, headingDeg: 90, walkM: 6, shirtColor: 0xd01818 },
@@ -610,6 +611,7 @@ const ACTOR_SPECS = [
   { model: 'ferrari.glb', dx: -9, dz: -28, headingDeg: -30 },
 ];
 const actors = [];   // { spec, root, mixer, base, along, dir }
+const scenarioId = SimLink.parseScenarioId(location.search);   // ?scenario=<id>; null = ACTOR_SPECS above
 
 const dracoLoader = new THREE.DRACOLoader();
 dracoLoader.setDecoderPath(DRACO_DECODER_PATH);
@@ -647,21 +649,62 @@ function applyShirtColor(root, shirtColor) {
   });
 }
 
-for (const spec of ACTOR_SPECS) {
-  gltfLoader.load(MODEL_BASE + spec.model, (gltf) => {
-    const base = new THREE.Vector2(HOME.x + spec.dx, HOME.z + spec.dz);
-    const actor = { spec, root: gltf.scene, mixer: null, base, along: 0, dir: 1 };
-    if (gltf.animations.length) {
-      // Without a clip the skinned soldier stands in a T-pose, which YOLO does not see as a person
-      actor.mixer = new THREE.AnimationMixer(gltf.scene);
-      const clip = gltf.animations.find((c) => c.name === (spec.walkM ? 'Walk' : 'Idle'));
-      if (clip) actor.mixer.clipAction(clip).play();
+// spec.actorId goes on the actor root (userData.actorId), so a shot can tell which actor it hit (Phase 6 D-10)
+function spawnActors(specs) {
+  for (const spec of specs) {
+    gltfLoader.load(MODEL_BASE + spec.model, (gltf) => {
+      const base = new THREE.Vector2(HOME.x + spec.dx, HOME.z + spec.dz);
+      const actor = { spec, root: gltf.scene, mixer: null, base, along: 0, dir: 1 };
+      gltf.scene.userData.actorId = spec.actorId;
+      if (gltf.animations.length) {
+        // Without a clip the skinned soldier stands in a T-pose, which YOLO does not see as a person
+        actor.mixer = new THREE.AnimationMixer(gltf.scene);
+        const clip = gltf.animations.find((c) => c.name === (spec.walkM ? 'Walk' : 'Idle'));
+        if (clip) actor.mixer.clipAction(clip).play();
+      }
+      // Scenario cars send shirtColor null, the default specs leave it undefined
+      if (spec.shirtColor != null) applyShirtColor(gltf.scene, spec.shirtColor);
+      scene.add(gltf.scene);
+      actors.push(actor);
+      placeActor(actor);
+    }, undefined, (e) => log(`Model load failed: ${spec.model} (${e.message || e})`));
+  }
+}
+
+// Scenario actors arrive async; a failed load leaves the stage empty and says so in the log
+async function loadScenario(id) {
+  try {
+    const response = await fetch('/sim/scenario?id=' + encodeURIComponent(id), { cache: 'no-store' });
+    if (response.status !== 200) {
+      log(`Scenario load failed: ${id} (HTTP ${response.status})`);
+      return;
     }
-    if (spec.shirtColor !== undefined) applyShirtColor(gltf.scene, spec.shirtColor);
-    scene.add(gltf.scene);
-    actors.push(actor);
-    placeActor(actor);
-  }, undefined, (e) => log(`Model load failed: ${spec.model} (${e.message || e})`));
+
+    const body = await response.json();
+    spawnActors(body.actors.map((a) => ({
+      model: a.model, dx: a.dx, dz: a.dz, headingDeg: a.headingDeg, walkM: a.walkM, shirtColor: a.shirtColor, actorId: a.id,
+    })));
+    // D-08: the scenario's battery is the start battery unless ?battery= says otherwise
+    if (Number.isFinite(body.battery_pct) && !hasBatteryParam) batteryStartPct = clamp(body.battery_pct, 0, 100);
+    log(`Scenario: ${id} (${body.actors.length} actors)`);
+  } catch (error) {
+    log(`Scenario load failed: ${id} (${error.message || error})`);
+  }
+}
+
+if (scenarioId === null) spawnActors(ACTOR_SPECS.map((spec, i) => ({ ...spec, actorId: `default_${i}` })));
+else loadScenario(scenarioId);
+
+// ---------- Shot judgement (Phase 6 D-10) ----------
+// Each fire_heart shot casts a ray through the centre of the drone camera; the first actor it hits is reported.
+const shotRaycaster = new THREE.Raycaster();
+const SCREEN_CENTER_NDC = new THREE.Vector2(0, 0);
+function findShotActorId() {
+  droneCam.updateMatrixWorld();
+  shotRaycaster.setFromCamera(SCREEN_CENTER_NDC, droneCam);
+  const hits = shotRaycaster.intersectObjects(actors.map((a) => a.root), true);
+
+  return hits.length ? SimLink.findActorId(hits[0].object) : null;
 }
 
 function placeActor(actor) {
@@ -741,24 +784,33 @@ const deadband = (deg) => Math.abs(deg) < TILT_DEADBAND ? 0 : deg - Math.sign(de
 // Home = nearest low, dry spot with an open view ahead (-Z), searched outward from the origin.
 // This page also needs the actor stage ahead of home to be dry land within STAGE_MAX_STEP m of home's height.
 const STAGE_MIN_H = 1.5, STAGE_MAX_STEP = 2.5;
-function isStageDry(x, z, h) {
-  return ACTOR_SPECS.every(({ dx, dz, walkM = 0 }) => [-walkM / 2, 0, walkM / 2].every((w) => {
+// Scenario actors arrive after HOME is fixed, so a scenario page checks a grid that covers the whole
+// comparison stage instead (C1: north 10..35 m, east -15..15 m; this grid is north 8..36, east -16..16).
+const COMPARE_STAGE_STEP_M = 4;
+const COMPARE_STAGE_POINTS = [];
+for (let north = 8; north <= 37; north += COMPARE_STAGE_STEP_M) {
+  for (let east = -16; east <= 16; east += COMPARE_STAGE_STEP_M) COMPARE_STAGE_POINTS.push({ dx: east, dz: -north });
+}
+function isStageDry(stage, x, z, h) {
+  return stage.every(({ dx, dz, walkM = 0 }) => [-walkM / 2, 0, walkM / 2].every((w) => {
     const sh = terrainHeight(x + dx + w, z + dz);
     return sh >= STAGE_MIN_H && Math.abs(sh - h) <= STAGE_MAX_STEP;
   }));
 }
-const HOME = (() => {
+function findHome(stage) {
   for (let r = 0; r < 3000; r += 10) {
     for (let a = 0; a < 2 * Math.PI; a += 0.4) {
       const x = r * Math.cos(a), z = r * Math.sin(a), h = terrainHeight(x, z);
       if (h < 2 || h > 6) continue;
       let open = true;
       for (let d = 20; d <= 100 && open; d += 20) open = terrainHeight(x, z - d) < h + 10;
-      if (open && isStageDry(x, z, h)) return new THREE.Vector3(x, 0, z);
+      if (open && isStageDry(stage, x, z, h)) return new THREE.Vector3(x, 0, z);
     }
   }
-  return new THREE.Vector3();
-})();
+  return null;
+}
+// A scenario stage with no dry home falls back to the default stage — still better than the origin
+const HOME = (scenarioId !== null && findHome(COMPARE_STAGE_POINTS)) || findHome(ACTOR_SPECS) || new THREE.Vector3();
 
 function goHome(target = HOME) {
   flight.pos.copy(target);
@@ -806,7 +858,15 @@ const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const spawnGround = Math.max(terrainHeight(HOME.x, HOME.z), 0);
 const home = { x: HOME.x, z: HOME.z, ground: spawnGround, gps: null };
 let batteryStartPct = SimLink.parseBatteryStartPct(location.search);   // ?battery=<0..100>; Battery −30% lowers it
-const autopilot = SimLink.createAutopilot({ onHeart: (trackId) => SimLink.startHeart(trackId, nowSec()) });
+const hasBatteryParam = new URLSearchParams(location.search).has('battery');   // wins over the scenario battery (D-08)
+const isAutostartAi = SimLink.parseAutostart(location.search) === 'ai';         // ?autostart=ai (Phase 6 D-02)
+// One fire_heart command = one shot = one heart_shot event for Python (bursts are grouped there, 06-04)
+const autopilot = SimLink.createAutopilot({
+  onHeart: (trackId) => {
+    SimLink.startHeart(trackId, nowSec());
+    autopilot.recordEvent({ kind: 'heart_shot', track_id: trackId, time_sec: nowSec(), actor_id: findShotActorId() });
+  },
+});
 
 function setReturnHome(active) {
   rth.active = active;
@@ -951,7 +1011,14 @@ const link = SimLink.createLink({
     return isApplied;
   },
   takeEvents: () => autopilot.takeEvents(),
-  onPaired: rememberHomeAtPairing,
+  onPaired: () => {
+    // onPaired fires once, on the first successful reply — so autostart switches to AI exactly once
+    rememberHomeAtPairing();
+    if (isAutostartAi && !mode.ai) {
+      setMode(true);
+      log('Autostart: AI mode');
+    }
+  },
   log,
 });
 link.start();

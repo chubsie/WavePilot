@@ -4,6 +4,7 @@
 - 브리지 연결(LINK_TIMEOUT_SEC) = 기체 내부 배선, 운용자 링크(OPERATOR_LINK_TIMEOUT_SEC) = 텔레메트리 POST 의 operator_link heartbeat (Phase 5 D-01).
 - 프레임은 최신 한 칸만 유지한다 — 새 프레임이 오면 오래된 프레임은 버린다(YOLO 가 밀려도 지연이 쌓이지 않게).
 - 명령은 큐에 쌓였다가 drain 한 번에 한 번만 배달된다(id 는 1 부터 단조 증가).
+- heart_shot 이벤트(발마다 맞은 배우, Phase 6 D-10)는 recent_events 와 별도 큐 — drain 한 번에 한 번만 나온다.
 
 페이로드 검증(Telemetry.from_dict, 크기 상한)은 HTTP 서버(02-02) 몫이다 — bridge 는 타입이 맞는 객체만 받는다.
 모든 상태는 Condition 하나(내부 Lock)로 보호하므로 서버 스레드·파이프라인 스레드가 동시에 불러도 된다.
@@ -20,6 +21,8 @@ from modules.flight_control.interface import Command, Telemetry
 LINK_TIMEOUT_SEC = 1.0
 OPERATOR_LINK_TIMEOUT_SEC = 3.0
 RECENT_EVENT_LIMIT = 50
+HEART_SHOT_EVENT = "heart_shot"
+HEART_SHOT_LIMIT = 1000
 FRAME_FPS_WINDOW_SEC = 1.0
 
 
@@ -42,6 +45,7 @@ class SimBridge:
         self._telemetry_received_at_sec: float | None = None
         self._ai_mode = False
         self._events: deque[dict] = deque(maxlen=RECENT_EVENT_LIMIT)
+        self._heart_shots: deque[dict] = deque(maxlen=HEART_SHOT_LIMIT)  # 넘치면 오래된 것부터 버린다
 
         self._operator_heartbeat_at_sec: float | None = None
         self._operator_heartbeat_time_sec: float | None = None
@@ -72,7 +76,12 @@ class SimBridge:
             self._telemetry_received_at_sec = received_at_sec
             self._ai_mode = ai_mode
             # 호출자가 나중에 dict 를 고쳐도 저장본이 바뀌지 않게 복사한다
-            self._events.extend(dict(event) for event in events)
+            for event in events:
+                stored = dict(event)
+                if stored.get("kind") == HEART_SHOT_EVENT:
+                    self._heart_shots.append(stored)
+                else:
+                    self._events.append(stored)
 
             # 운용자 링크가 끊긴 POST 는 heartbeat 로 치지 않는다 — 브리지 연결은 위에서 그대로 갱신된다 (D-01)
             if operator_link:
@@ -109,6 +118,14 @@ class SimBridge:
     def recent_events(self) -> tuple[dict, ...]:
         with self._condition:
             return tuple(dict(event) for event in self._events)
+
+    def drain_heart_shots(self) -> list[dict]:
+        """쌓인 heart_shot 이벤트를 들어온 순서대로 꺼내고 비운다. 06-03 run_mission 이 매 틱 비워 hit 로그로 옮긴다."""
+        with self._condition:
+            shots = list(self._heart_shots)
+            self._heart_shots.clear()
+
+        return shots
 
     # --- Python → 브라우저: 명령 큐 ---
 
