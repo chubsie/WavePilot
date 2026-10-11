@@ -41,7 +41,9 @@ class _TrackState:
     def record(self, detection: Detection, ground: tuple[float, float], timestamp_sec: float) -> None:
         self.recent_positions.append(ground)
         self.recent_colors.append(detection.upper_color)
-        self.last_seen_sec = timestamp_sec
+        # 프레임이 늦게(더 이른 timestamp 로) 도착할 수 있다 — 관측은 버리지 않고 구간만 넓혀 first <= last 를 지킨다
+        self.first_seen_sec = min(self.first_seen_sec, timestamp_sec)
+        self.last_seen_sec = max(self.last_seen_sec, timestamp_sec)
         self.observation_count += 1
         self.confidence_sum += detection.confidence
 
@@ -158,6 +160,7 @@ class TrackAggregator:
         if state is None:
             state = _TrackState(
                 first_seen_sec=timestamp_sec,
+                last_seen_sec=timestamp_sec,
                 recent_positions=deque(maxlen=self._position_window),
                 recent_colors=deque(maxlen=self._color_window),
             )
