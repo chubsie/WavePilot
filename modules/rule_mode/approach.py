@@ -20,7 +20,7 @@ import re
 
 from modules.decision.interface.state import ModeResult
 from modules.flight_control.interface import CommandAck, FlightControl, GoTo, SetGimbal, SetYaw, Telemetry
-from modules.perception.interface import Track
+from modules.perception.interface import Track, get_frame_camera
 from modules.rule_mode.interface import ModeParams, ModeTick, RuleModeSettings, track_label
 from modules.rule_mode.target_estimate import TargetEstimate, estimate_target_position, get_ground_plane_down_m
 from modules.yolo_detection.interface import Detection
@@ -88,8 +88,10 @@ class ApproachMode:
     def _observe(self, tick: ModeTick) -> bool:
         """이번 tick 의 대상 탐지로 추정을 갱신한다. 대상 탐지가 있었는지 돌려준다."""
         detection = self._find_detection(tick)
-        if detection is not None and tick.frame_telemetry is not None:
-            estimate = estimate_target_position(detection, tick.frame_telemetry, self._settings.camera)
+        if detection is not None and tick.frame is not None and tick.frame_telemetry is not None:
+            # xyxy 는 프레임 픽셀 — 브라우저 FPV(640x360)처럼 보정 해상도와 다르면 같은 화각으로 스케일한다
+            camera = get_frame_camera(self._settings.camera, tick.frame.image_width, tick.frame.image_height)
+            estimate = estimate_target_position(detection, tick.frame_telemetry, camera)
             if estimate is not None:
                 self._record_estimate(estimate)
 

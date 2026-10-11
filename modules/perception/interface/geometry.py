@@ -53,8 +53,41 @@ class CameraIntrinsics:
             cy_px=height_px / 2.0,
         )
 
+    def scaled_to(self, width_px: int, height_px: int) -> "CameraIntrinsics":
+        """같은 렌즈(같은 HFOV/VFOV)를 다른 해상도로 리사이즈한 카메라. 크기가 같으면 self 그대로.
+
+        YOLO 에 보내는 프레임이 보정 해상도보다 작게 리사이즈될 수 있다(브라우저 FPV 640x360).
+        픽셀 좌표는 프레임 기준이므로 fx·cx 도 같은 비율로 줄여야 시선 각이 보존된다.
+        """
+        if width_px <= 0 or height_px <= 0:
+            raise ValueError(f"frame size must be > 0, got {width_px}x{height_px}")
+        if width_px == self.width_px and height_px == self.height_px:
+            return self
+
+        scale_x = width_px / self.width_px
+        scale_y = height_px / self.height_px
+        return CameraIntrinsics(
+            width_px=width_px,
+            height_px=height_px,
+            fx_px=self.fx_px * scale_x,
+            fy_px=self.fy_px * scale_y,
+            cx_px=self.cx_px * scale_x,
+            cy_px=self.cy_px * scale_y,
+        )
+
 
 DEFAULT_CAMERA = CameraIntrinsics.from_hfov(1280, 720, DEFAULT_HFOV_DEG)
+
+
+def get_frame_camera(camera: CameraIntrinsics, frame_width_px: int, frame_height_px: int) -> CameraIntrinsics:
+    """프레임 실제 크기에 맞춘 카메라. 크기 메타가 비정상(<= 0)이면 보정 카메라를 그대로 쓴다.
+
+    잘못된 메타 한 프레임으로 임무 프로세스가 죽는 것보다 보정 해상도로 투영하는 편이 낫다.
+    """
+    if frame_width_px <= 0 or frame_height_px <= 0:
+        return camera
+
+    return camera.scaled_to(frame_width_px, frame_height_px)
 
 
 def rotation_body_to_ned(roll_deg: float, pitch_deg: float, yaw_deg: float) -> Matrix3:
