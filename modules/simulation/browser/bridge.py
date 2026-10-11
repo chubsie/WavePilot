@@ -6,6 +6,7 @@
 - 명령은 큐에 쌓였다가 drain 한 번에 한 번만 배달된다(id 는 1 부터 단조 증가).
 - heart_shot 이벤트(발마다 맞은 배우, Phase 6 D-10)는 recent_events 와 별도 큐 — drain 한 번에 한 번만 나온다.
 - 파이프라인 state·report 는 종류별 최신 한 칸 — --operator browser 일 때 페이지가 /sim/telemetry 로 읽는다.
+- 선택기 selection·mode_end 도 같은 칸 방식 — run_mission --sim browser 가 넣고 mission_demo LLM Decisions 패널이 읽는다.
 
 페이로드 검증(Telemetry.from_dict, 크기 상한)은 HTTP 서버(02-02) 몫이다 — bridge 는 타입이 맞는 객체만 받는다.
 모든 상태는 Condition 하나(내부 Lock)로 보호하므로 서버 스레드·파이프라인 스레드가 동시에 불러도 된다.
@@ -25,7 +26,7 @@ RECENT_EVENT_LIMIT = 50
 HEART_SHOT_EVENT = "heart_shot"
 HEART_SHOT_LIMIT = 1000
 FRAME_FPS_WINDOW_SEC = 1.0
-PIPELINE_MESSAGE_KINDS = ("state", "report")
+PIPELINE_MESSAGE_KINDS = ("state", "report", "selection", "mode_end")
 DETECTION_LOG_SIZE = 30  # 페이지 폴링 한 번 사이에 YOLO 가 낸 결과를 빠짐없이 넘길 만큼
 DETECTION_LOG_TTL_SEC = 2.0  # 전달용 버퍼라 짧게 — YOLO 가 멈추면 옛 결과를 계속 보내지 않는다
 PIPELINE_MESSAGE_TTL_SEC = 10.0  # 보고 주기(기본 8 s)보다 조금 길게 — 파이프라인이 멈추면 state·report 도 사라진다

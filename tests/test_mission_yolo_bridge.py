@@ -216,7 +216,7 @@ def test_telemetry_response_has_empty_pipeline_before_any_message(sim_server) ->
 
     response = post_telemetry(port)
 
-    assert response["pipeline"] == {"state": None, "report": None}
+    assert response["pipeline"] == {"state": None, "report": None, "selection": None, "mode_end": None}
     assert set(response) == {"commands", "detections", "status", "mission", "pipeline", "detection_log"}
     assert set(response["status"]) == {"frame_fps", "yolo_latency_ms"}
 
@@ -233,6 +233,8 @@ def test_bridge_comm_link_sends_latest_state_and_report_to_page(sim_server) -> N
     assert response["pipeline"] == {
         "state": {"seq": 2, "sent_at": SENT_AT, "payload": {"kind": "state"}},
         "report": {"seq": 3, "sent_at": SENT_AT, "payload": {"kind": "report"}},
+        "selection": None,
+        "mode_end": None,
     }
 
 
@@ -242,7 +244,7 @@ def test_bridge_comm_link_drops_telemetry_messages() -> None:
 
     link.send(_make_message("telemetry"))
 
-    assert bridge.pipeline_messages() == {"state": None, "report": None}
+    assert bridge.pipeline_messages() == {"state": None, "report": None, "selection": None, "mode_end": None}
 
 
 def test_bridge_comm_link_receive_never_blocks_and_status_follows_bridge(sim_server) -> None:
@@ -286,7 +288,7 @@ def test_detection_log_and_pipeline_messages_expire_after_ttl() -> None:
     assert bridge.pipeline_messages()["state"] == {"seq": 1}
 
     now_sec[0] += PIPELINE_MESSAGE_TTL_SEC
-    assert bridge.pipeline_messages() == {"state": None, "report": None}
+    assert bridge.pipeline_messages() == {"state": None, "report": None, "selection": None, "mode_end": None}
 
 
 # --- A4 run_scenario --operator ---
