@@ -3,6 +3,7 @@ const THREE = window.THREE;
 export const HEART_RATE = 30, HEART_SPEED = 30, HEART_LIFE = 1.8;
 // Python fire_heart 조준 사격 — 기수(수평)가 아니라 짐벌 시선(표적이 화면 중앙)으로, 눈에 남게 느리고 크게
 export const AIMED_HEART_SPEED = 14, AIMED_HEART_SCALE = 1.6;
+const HEART_SPREAD = 2.4;   // main 의 발사 퍼짐(m/s) — 조준축에 수직으로 ±절반
 
 export function createHeartTexture() {
   const canvas = document.createElement('canvas');
@@ -34,37 +35,40 @@ export class HeartBeam {
     this.hearts = Array.from({ length: 90 }, () => {
       const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false, fog: false }));
       sprite.visible = false; this.group.add(sprite);
-      return { sprite, vel: new THREE.Vector3(), age: HEART_LIFE, spin: 0, scale: 1 };
+      return { sprite, vel: new THREE.Vector3(), age: HEART_LIFE, life: HEART_LIFE, spin: 0, scale: 1 };
     });
   }
 
-  // aim = { direction: 단위 벡터 } 이면 그 방향으로 AIMED_HEART_SPEED 로 쏜다. 없으면 main 그대로(기수 방향)
+  // aim = { direction, speed?, scale?, life?, spread? } 이면 그 방향으로 쏜다(기본은 AIMED_HEART_*). 없으면 main 그대로(기수 방향)
   update(dt, drone, velocity, held, aim = null) {
     this.noseDir.set(0, 0, -1).applyQuaternion(drone.quaternion);
     this.noseUp.set(0, 1, 0).applyQuaternion(drone.quaternion);
     this.noseSide.crossVectors(this.noseDir, this.noseUp);
     if (aim) this.alignToAim(aim.direction);
-    const speed = aim ? AIMED_HEART_SPEED : HEART_SPEED;
-    const scale = aim ? AIMED_HEART_SCALE : 1;
+    const speed = aim ? aim.speed ?? AIMED_HEART_SPEED : HEART_SPEED;
+    const scale = aim ? aim.scale ?? AIMED_HEART_SCALE : 1;
+    const life = aim?.life ?? HEART_LIFE;
+    const spread = aim?.spread ?? HEART_SPREAD;
+
     if (held) {
       this.accumulator += dt * HEART_RATE;
       while (this.accumulator >= 1) {
         this.accumulator -= 1;
-        const heart = this.hearts.find(item => item.age >= HEART_LIFE);
+        const heart = this.hearts.find(item => item.age >= item.life);
         if (!heart) break;
-        heart.age = 0; heart.spin = (this.random() - .5) * 3; heart.scale = scale;
+        heart.age = 0; heart.life = life; heart.spin = (this.random() - .5) * 3; heart.scale = scale;
         heart.sprite.visible = true;
         heart.sprite.position.copy(drone.position).addScaledVector(this.noseDir, 1.2);
         heart.vel.copy(this.noseDir).multiplyScalar(speed).add(velocity)
-          .addScaledVector(this.noseUp, (this.random() - .5) * 2.4)
-          .addScaledVector(this.noseSide, (this.random() - .5) * 2.4);
+          .addScaledVector(this.noseUp, (this.random() - .5) * spread)
+          .addScaledVector(this.noseSide, (this.random() - .5) * spread);
       }
     } else this.accumulator = 0;
     for (const heart of this.hearts) {
-      if (heart.age >= HEART_LIFE) { heart.sprite.visible = false; continue; }
+      if (heart.age >= heart.life) { heart.sprite.visible = false; continue; }
       heart.age += dt;
       heart.sprite.position.addScaledVector(heart.vel, dt);
-      const t = heart.age / HEART_LIFE;
+      const t = heart.age / heart.life;
       heart.sprite.scale.setScalar((.7 + 1.1 * t) * heart.scale);
       heart.sprite.material.opacity = t < .6 ? 1 : 1 - (t - .6) / .4;
       heart.sprite.material.rotation += heart.spin * dt;

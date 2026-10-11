@@ -5,6 +5,10 @@
 export const HEART_PULSE_MS = 400;       // fire_heart 한 발이 chase 하트 빔을 켜 두는 시간
 export const FPV_HEART_FLIGHT_MS = 800;  // FPV 하트 한 발이 아래에서 표적(화면 중앙)까지 날아가는 시간
 export const BURST_GAP_MS = 1500;        // 이보다 오래 쉬면 다음 발은 새 연사로 센다
+export const HEART_TARGET_MAX_AGE_SEC = 0.5;   // fire_heart 때 이보다 오래된 YOLO 박스는 조준에 쓰지 않는다
+export const BODY_POINT_FROM_TOP = 0.4;        // 박스 위에서 40% — 머리 위가 아니라 몸통을 노린다
+export const HEART_FLIGHT_MIN_SEC = 0.5, HEART_FLIGHT_MAX_SEC = 0.8;
+const RETICLE = { x: 0.5, y: 0.5 };            // 화면 비율 좌표(0..1)의 FPV 중앙
 
 // ---------- 순수 계산 ----------
 // 연속 발사면 끊김 없이 이어지게 — 앞 펄스가 더 길게 남아 있으면 줄이지 않는다
@@ -26,14 +30,58 @@ export function formatHeartShot(trackId, count) {
   return `FIRE ♥ T${trackId} ×${count}`;
 }
 
-// 진행률 0..1 → 하트 위치·크기·투명도. 화면 아래 가운데서 표적(가운데 레티클)으로 날아가며 커졌다 사라진다
-export function getHeartFlight(progress, width, height, lane = 0) {
+// ---------- 표적 조준 (fire_heart track_id → YOLO 박스 → 화면 지점) ----------
+// 프레임들(detectionLog + 최신 detections) 중 maxAgeSec 안에서 그 track_id 가 있는 가장 최근 박스
+export function findTargetBox(frames, trackId, nowSec, maxAgeSec = HEART_TARGET_MAX_AGE_SEC) {
+  let best = null;
+  for (const frame of frames) {
+    if (!frame || !Number.isFinite(frame.timestamp_sec) || nowSec - frame.timestamp_sec > maxAgeSec) continue;
+    if (!(frame.image_width > 0 && frame.image_height > 0)) continue;
+    if (best && frame.timestamp_sec <= best.timestampSec) continue;
+
+    const detection = (frame.detections || []).find((item) => item.track_id === trackId && item.xyxy?.length === 4);
+    if (detection) best = { xyxy: detection.xyxy, imageWidth: frame.image_width, imageHeight: frame.image_height, timestampSec: frame.timestamp_sec };
+  }
+  return best;
+}
+
+// 박스 가로 가운데, 위에서 BODY_POINT_FROM_TOP 지점(픽셀)
+export function getBodyAimPixel([x1, y1, x2, y2]) {
+  return { x: (x1 + x2) / 2, y: y1 + (y2 - y1) * BODY_POINT_FROM_TOP };
+}
+
+// 이미지 픽셀(원점 왼쪽 위, y 아래로) → three.js NDC(-1..1, y 위로)
+export function pixelToNdc(x, y, width, height) {
+  return { x: (x / width) * 2 - 1, y: 1 - (y / height) * 2 };
+}
+
+// 하트가 쏠 지점: ndc 는 FPV 카메라 unproject 용, screen 은 오버레이용 화면 비율(0..1). 박스가 없으면 null(=레티클)
+export function getHeartTarget(frames, trackId, nowSec, maxAgeSec = HEART_TARGET_MAX_AGE_SEC) {
+  const box = findTargetBox(frames, trackId, nowSec, maxAgeSec);
+  if (!box) return null;
+
+  const pixel = getBodyAimPixel(box.xyxy);
+  return {
+    ndc: pixelToNdc(pixel.x, pixel.y, box.imageWidth, box.imageHeight),
+    screen: { x: pixel.x / box.imageWidth, y: pixel.y / box.imageHeight },
+  };
+}
+
+// 표적까지 거리(m) → 비행 시간. 순항 속도로 걸리는 시간을 0.5~0.8 s 로 묶어, 가까워도 보이고 멀어도 바로 닿게
+export function getHeartFlightSec(distanceM, cruiseMps) {
+  return Math.min(HEART_FLIGHT_MAX_SEC, Math.max(HEART_FLIGHT_MIN_SEC, distanceM / cruiseMps));
+}
+
+// 진행률 0..1 → 하트 위치·크기·투명도. 화면 아래 가운데서 target(화면 비율, 기본 레티클)으로 날아가며 커졌다 사라진다
+export function getHeartFlight(progress, width, height, lane = 0, target = RETICLE) {
   const travel = Math.min(1, progress * 1.4);
   const size = height * (0.12 + 0.28 * progress);
+  const startX = width / 2, endX = width * target.x;
+  const startY = height, endY = height * target.y;
 
   return {
-    x: width / 2 + lane * width * 0.06 * (1 - travel),
-    y: height - (height / 2) * travel,
+    x: startX + (endX - startX) * travel + lane * width * 0.06 * (1 - travel),
+    y: startY + (endY - startY) * travel,
     size,
     alpha: progress < 0.65 ? 1 : Math.max(0, 1 - (progress - 0.65) / 0.35),
   };
@@ -62,9 +110,10 @@ export function createHeartOverlay({ canvas, uploadCanvas }) {
   const shots = [];
   let burst = null;
 
-  function fire(trackId, nowMs) {
+  // target = 화면 비율 지점(getHeartTarget().screen). 없으면 레티클로
+  function fire(trackId, nowMs, target = null) {
     burst = countBurstShot(burst, trackId, nowMs);
-    shots.push({ trackId, count: burst.count, startMs: nowMs, lane: getShotLane(burst.count) });
+    shots.push({ trackId, count: burst.count, startMs: nowMs, lane: getShotLane(burst.count), target: target ?? RETICLE });
     return burst.count;
   }
 
@@ -76,7 +125,7 @@ export function createHeartOverlay({ canvas, uploadCanvas }) {
 
   function drawShot(shot, progress) {
     const { width, height } = canvas;
-    const flight = getHeartFlight(progress, width, height, shot.lane);
+    const flight = getHeartFlight(progress, width, height, shot.lane, shot.target);
 
     ctx.globalAlpha = flight.alpha;
     ctx.fillStyle = '#ff3b5c';

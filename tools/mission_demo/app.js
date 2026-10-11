@@ -5,7 +5,7 @@ import { TestFlight, COURSE } from './test-flight.js';
 import { terrainHeight } from './mountain-course.js';
 import { createYoloLog, createYoloLogView, formatDetectionLabel, getObjectCategory, scaleBox } from './yolo-log.js';
 import { createDecisionLog, createLlmDecisionView, formatAiBadge } from './llm-decisions.js';
-import { createHeartOverlay, extendHeartPulse, isHeartPulseOn } from './heart-overlay.js';
+import { createHeartOverlay, extendHeartPulse, getHeartTarget, isHeartPulseOn } from './heart-overlay.js';
 
 // TODO: 임시 — 장갑 수동(IMU)·산악 코스에서 비행 키를 누르는 동안은 키보드가 우선한다. 장갑 검증 끝나면 false로.
 const ALLOW_KEYBOARD_OVERRIDE = true;
@@ -59,8 +59,10 @@ const heartOverlay = world.fpvCanvas ? createHeartOverlay({ canvas: $('heart-ove
 
 const pyAutopilot = SimLink ? SimLink.createAutopilot({
   onHeart: (trackId) => {
+    const target = getHeartTarget(getYoloFrames(), trackId, nowSec());
+    world.heartTargetNdc = target?.ndc ?? null;
     heartPulseUntilMs = extendHeartPulse(heartPulseUntilMs, performance.now());
-    heartOverlay?.fire(trackId, performance.now());
+    heartOverlay?.fire(trackId, performance.now(), target?.screen);
     pyAutopilot.recordEvent({ kind: 'heart_shot', track_id: trackId, time_sec: nowSec(), actor_id: null });
   },
 }) : null;
@@ -121,6 +123,12 @@ const link = SimLink && world.fpvCanvas ? SimLink.createLink({
   log: (line) => console.info('[sim-link]', line),
 }) : null;
 link?.start();
+
+// fire_heart 조준용 — 폴링 사이 프레임(detectionLog)과 최신 결과를 모두 후보로. 나이 판정은 getHeartTarget 이 한다
+function getYoloFrames() {
+  if (!link) return [];
+  return [...link.state.detectionLog, link.state.detections].filter(Boolean);
+}
 
 function getFreshDetections() {
   if (!link || !link.state.detections || mode === 'test') return null;

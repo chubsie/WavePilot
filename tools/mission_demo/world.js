@@ -1,7 +1,8 @@
 import { resolveMovement, sphereIntersectsAabb } from "./collision.js";
 import { createDrone } from "./drone-model.js";
 import { MainFlightCore, D2R, DRAG_H, DRAG_V } from "./flight-core.js";
-import { HeartBeam, updateStatusLeds } from "./hearts.js";
+import { HeartBeam, updateStatusLeds, HEART_SPEED, AIMED_HEART_SPEED } from "./hearts.js";
+import { getHeartFlightSec } from "./heart-overlay.js";
 import { PEOPLE, createStandingPerson, createWalker } from './population.js';
 import { createCourse, TEST_START } from './test-flight.js';
 import { createMountain, terrainHeight } from './mountain-course.js';
@@ -18,6 +19,8 @@ const PYTHON_VELOCITY_LAG_PER_SEC = 3;
 const PYTHON_TILT_DEG_PER_MPS = 1.5, PYTHON_MAX_TILT_DEG = 10;
 // fire_heart 조준 사격 중 chase 카메라가 짐벌 시선 쪽(표적)으로 고개를 숙인다 — 하트와 표적이 같이 보이게
 const CHASE_AIM_LOOK_M = 10, CHASE_AIM_BLEND_PER_SEC = 4;
+// 표적 박스로 쏠 때 퍼짐(m/s) — 0.5~0.8 s 비행에서 표적 몸통 안에 모이게 main(2.4)보다 좁게
+const TARGET_HEART_SPREAD = .8;
 
 // 속도 → 표시용 기체 자세(deg). 앞으로 가면 기수 숙임(-pitch), 오른쪽으로 가면 오른쪽 내림(+roll)
 export function getVelocityTiltDeg(velocity, heading) {
@@ -64,7 +67,8 @@ export class DroneWorld {
     this.rotors = model.rotors;
     this.leds = model.leds;
     this.flashHeld = false;
-    this.heartAimActive = false;   // true = 하트를 기수가 아니라 FPV 시선(짐벌)으로 쏜다(Python fire_heart)
+    this.heartAimActive = false;   // true = Python fire_heart 조준 사격(느리고 크게, 표적 박스가 있으면 그쪽으로)
+    this.heartTargetNdc = null;    // fire_heart 표적 박스 몸통 지점(FPV NDC). null 이면 레티클(화면 중앙)
     this.scene.add(this.drone);
     this.heartBeam = new HeartBeam(this.scene);
     this.environment = null;
@@ -293,7 +297,7 @@ export class DroneWorld {
     });
     updateStatusLeds(this.leds || []);
     const aimDirection = this.camera.getWorldDirection(new THREE.Vector3());
-    this.heartBeam?.update(delta, this.drone, this.velocity, this.flashHeld, this.heartAimActive ? { direction: aimDirection } : null);
+    this.heartBeam?.update(delta, this.drone, this.velocity, this.flashHeld, this.getHeartAim(aimDirection));
     // Rigid follow offset: altitude, turning and acceleration never change the distance.
     const followDistance = 4;
     const offset=new THREE.Vector3(Math.sin(this.heading)*followDistance,1.8,Math.cos(this.heading)*followDistance);
@@ -325,6 +329,21 @@ export class DroneWorld {
       this.renderer.setScissorTest(false);
       this.renderer.setViewport(0,0,w,h);
     }
+  }
+
+  // 하트는 모든 모드에서 FPV 시선으로 나간다 — 기수 수평으로 쏘면 사람보다 높은 드론에서 늘 머리 위로 지나갔다.
+  // 수동(키·장갑)은 main 속도·크기 그대로 레티클로, fire_heart 는 표적 박스 몸통 광선으로 0.5~0.8 s 에 닿게
+  getHeartAim(reticleDirection) {
+    if (!this.heartAimActive) return { direction: reticleDirection, speed: HEART_SPEED, scale: 1 };
+    if (!this.heartTargetNdc) return { direction: reticleDirection };
+
+    const direction = new THREE.Vector3(this.heartTargetNdc.x, this.heartTargetNdc.y, .5)
+      .unproject(this.camera).sub(this.camera.position).normalize();
+    const groundDistanceM = direction.y < -1e-3 ? -this.camera.position.y / direction.y : null;
+    if (groundDistanceM === null) return { direction };
+
+    const flightSec = getHeartFlightSec(groundDistanceM, AIMED_HEART_SPEED);
+    return { direction, speed: groundDistanceM / flightSec, life: flightSec, spread: TARGET_HEART_SPREAD };
   }
 
   // chase 뷰에만 보이는 것(기체·하트 빔). FPV 캔버스는 YOLO 로 올라가므로 여기 든 것은 절대 그리지 않는다
