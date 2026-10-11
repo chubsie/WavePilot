@@ -127,6 +127,7 @@ button:disabled{opacity:.4;cursor:default}
 .original-buttons{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 12px}
 .original-buttons button{border-radius:5px;padding:0 9px;font-size:11px;min-height:34px}
 .original-buttons #connect-imu,.original-buttons #connect-ble{background:#c9ef5815;border-color:var(--lime-dim)}
+.original-buttons #ai-mode-button{border-color:#7a6431;color:var(--amber)}.original-buttons #ai-mode-button.active{background:var(--amber);border-color:var(--amber);color:var(--ink)}
 .sensor-grid{gap:8px;margin-bottom:10px}
 .sensor-grid>div{padding:9px 10px;background:#1a241d;border:1px solid #344036;border-radius:6px}
 .sensor-grid output{font-size:22px}
