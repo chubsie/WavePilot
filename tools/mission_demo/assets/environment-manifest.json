@@ -1,0 +1,9 @@
+{
+  "urban": {
+    "style": "war-damaged-european-city",
+    "generated_objects": 888,
+    "colliders": 14,
+    "features": ["solid-facades", "broken-roofs", "exposed-floors", "recessed-windows", "balconies", "street-edge-rubble", "wet-cobble", "burned-vehicle", "clear-flight-corridor", "explicit-collision-proxies"],
+    "target_ids": ["T-03", "T-07"]
+  }
+}

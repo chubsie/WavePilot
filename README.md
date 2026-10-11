@@ -47,9 +47,9 @@ Compile warnings saying `"USE_TINYUSB" redefined` come from the board package an
 | Hand tilt | NU-IMU | Roll and pitch lean the drone; wrist rotation turns it |
 | Finger bend | Flex sensor on P0.03 (A1), divider to 3.3 V | Throttle: 0% straight, 50% hovers, 100% fully bent |
 | Thumb button | Switch from P0.21 to GND | Toggle Manual / AI mode (AI is a placeholder that circles) |
-| Middle-finger button | Switch from P0.10 to GND | Flash the drone's LEDs while held (placeholder) |
+| Middle-finger button | Switch from P0.10 to GND | Hold to fire a beam of hearts from the drone's nose |
 
-Calibrate the flex sensor with **Set flat** and **Set bent** in the visualizer. For testing without the glove, press `M` for the mode and hold `L` for the LEDs.
+Calibrate the flex sensor with **Set flat** and **Set bent** in the visualizer. For testing without the glove, press `M` for the mode and hold `L` for the hearts.
 
 ## Serial protocol
 
@@ -83,9 +83,39 @@ At rest, yaw drift measures about 0.1° per 30 s. While the glove is still, the 
 - [ ] Real AI mode (currently a placeholder that circles)
 - [ ] Arm / land gesture
 
+## Ruined-city mission demo
+
+The Field Command browser demo uses one Blender-authored ruined city: solid facades, broken roofs, exposed floors, windows, balconies, street debris, and a clear central flight corridor. It displays simulated YOLO-style tracks and event-driven Korean situation reports. Only explicit `COLLIDER_` proxies block flight; render meshes are not treated as whole-building collision boxes. The `.blend` source and exported `.glb` are in `tools/mission_demo/assets/`.
+
+From the repository root, serve the files over HTTP:
+
+```bash
+python3 -m http.server 8000
+```
+
+Then open `http://localhost:8000/tools/mission_demo/` in Chrome or Edge. Use **WASD** to move, **Q/E** to turn and **R/F** to change altitude. `AUTO` patrols the street, approaches a visible track after one second of stable identification, and observes from about 14 m horizontal distance. Occlusion or lost detection stops movement immediately; collision stops the approach. Any manual key input returns control to the keyboard. Reset restores a verified clear spawn and restarts the patrol route.
+
+The glove behavior is ported from chubsie/main, including the `5e5c255` heart-beam update (flight behavior from `56d963d`); `tools/visualizer/index.html` and the glove firmware preserve the fetched main implementation. Click **USB 연결** for Web Serial or **Bluetooth 연결** for Nordic UART Bluetooth. Clicking `IMU` while disconnected also requests the USB picker. The original `G,seq,roll,pitch,yaw_rate,flex0,flex1,buttons` stream drives the visible drone and flight physics:
+
+- Yaw integrates sequence gaps at 0.02 s/sample (capped at 50 steps, backwards/reset sequence contributes zero), with the original 1°/s deadband. The integrated angle drives heading; attitude smooths by 0.35 each frame. Physical roll/pitch are not capped at 30°.
+- Axis swap/inversions share `gloveVizOpts.v2`. Per the requested mission UI behavior, glove flight starts enabled even if an older saved preference disabled it. The original parked/coasting behavior is preserved in the flight core for explicit non-flight inputs.
+- `FLAT`/`BENT` average the last 25 samples (at least 10). Calibration shares `gloveVizFlex.v1`, preferring original calibration and migrating `wavepilot-mission-flex.v1` only if no original value exists. Flex smooths by 0.3 at frame end, so the next physics frame uses it.
+- IMU flight uses 2G maximum thrust along the tilted up-axis, gravity 9.81 m/s², horizontal/vertical drag 0.7/1.2, 3° tilt deadband and the 46–54% hover band. Uncalibrated automatic hover targets the original **9 m AGL**, not entry altitude.
+- `AI CIRCLE`, **M**, and the thumb button select original Manual/AI behavior: radius 20 m, speed 6 m/s, retaining heading and AGL when entering AI. **AUTO** remains a separate observation/patrol extension.
+- The four motors use the original 0.15 tilt mix, throttle, `min(1, dt*6)` smoothing, alternating spin direction, blade opacity and rotor-disc opacity. LEDs blink by default in 250 ms phases (2 Hz). **L** or the middle-finger button emits the latest main's decorative heart beam while held: 30 hearts/s, 30 m/s along the drone nose plus drone velocity, 1.8 s lifetime and a reusable 90-sprite pool. Emission, spread, spin, growth and fade match main. Hearts appear in both chase and FPV views.
+- `ZERO`, 자이로 보정 and IMU 정보 send `c`, `g` and `i`. ZERO also resets integrated yaw. The settings panel shows mapped angles, yaw rate/Hz, raw flex/bend/calibration, throttle/climb/home distance, FL/FR/RL/RR outputs, 500-sample sensor chart and firmware logs.
+
+The current interface adds a chase view with the drone visible and an upper-left FPV inset. The main view and analysis panel use a 77.5% / 22.5% split; sensor telemetry stays visible, with a vertical normalized flex-bend gauge. Glove flight is always enabled in this UI (no flight-enable checkbox). Intentional city-demo differences: explicit collision proxies override commanded motion (including AI circles), swept movement/wall sliding, a 0.7 m ground clearance and 48 m ceiling within the finite city, and an immediate stop after 500 ms of missing IMU data. Ground contact applies main's drag factor 4. Observation AUTO uses its own target acquisition and braking. The original infinite terrain and its terrain-following camera are replaced by the Blender city and a wall-aware chase camera. Hardware is not emulated by these tests: physical glove/BLE/USB operation still needs device verification.
+
+The environment defaults to `CINEMATIC`: PBR materials, soft shadows, detailed ruins and cinematic lens treatment. Use `PERFORMANCE` on lower-power laptops to cap the render scale, disable shadows and hide high-detail meshes without changing collision, targets or reports. Run `node --test tests/mission_flight.test.mjs tests/mission_main_parity.test.mjs`. The parity suite executes the actual original main parser, mapping, frame physics and motor code against the same packets/frames as the new core; the flight suite checks real-GLB patrol/approach, collision, yaw integration, parked flight, dual views, protocol buttons and picker calls.
+
+`ORIN DEMO` means detections and Korean reports are generated by the deterministic browser fallback. The UI boundary is ready for the Orin YOLO/Nemotron stream without changing the viewport or report components.
+
 ## Third-party code
 
-`tools/visualizer/three.min.js` is [three.js](https://threejs.org) r128, MIT license.
+`tools/visualizer/three.min.js` and `tools/mission_demo/vendor/GLTFLoader.js` are [three.js](https://threejs.org) r128, MIT license.
+
+The mission-demo Blender source contains CC0 Poly Haven material resources including `cracked_concrete_wall`, `cobblestone_floor_08`, `red_brick_plaster_patch_02` and `rust_coarse_01`.
 
 ## Python: LLM overwatch pipeline
 

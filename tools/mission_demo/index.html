@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#080b09">
+  <title>WavePilot — Field Command</title>
+  <link rel="stylesheet" href="styles.css?v=urban-ui-1">
+</head>
+<body>
+  <header class="command-bar">
+    <a class="brand" href="#" aria-label="WavePilot home">
+      <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span><b>WAVEPILOT</b><small>FIELD COMMAND / 01</small></span>
+    </a>
+  </header>
+
+  <main class="command-grid">
+    <section class="camera-panel" aria-label="Drone live view">
+      <div id="viewport" class="viewport"></div>
+      <section class="fpv-inset" aria-label="Drone camera inset">
+        <div class="fpv-title">● DRONE CAMERA</div>
+        <div id="fpv-view"><div id="detection-overlay" class="detection-overlay" aria-hidden="true"></div>
+          <div class="reticle" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+        </div>
+      </section>
+      <section class="sensor-panel compact-controller" aria-label="Glove controls">
+        <div class="original-buttons primary-controls">
+          <button id="connect-ble" class="utility-button" title="Pair Bluetooth glove">PAIRING</button>
+          <button id="zero-imu" class="utility-button" disabled>Zero</button>
+          <button id="flex-bent" class="utility-button" title="Save bent position as 100%" disabled>BENT</button>
+          <button id="flex-flat" class="utility-button" title="Save flat position as 0%" disabled>FLAT</button>
+        </div>
+        <div class="original-flex compact-flex">
+          <div class="flex-heading"><span title="Finger bend">BEND</span><output id="sensor-bend">—</output></div>
+          <span class="gauge-endpoint">BENT</span>
+          <div class="bend-meter" id="flex-gauge" role="meter" aria-label="Finger bend" title="Center: 50% bend, hover when level" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="bend-fill"></i><span class="hover-mark" aria-hidden="true"></span></div>
+          <span class="gauge-endpoint">FLAT</span>
+        </div>
+        <details id="advanced-controls"><summary aria-label="Control settings" title="Control settings">⚙</summary>
+          <div class="advanced-body">
+            <div class="settings-heading"><strong>Control settings</strong><button id="close-settings" type="button" aria-label="Close settings">×</button></div>
+            <header>Sensor data <span id="sensor-hz">0 Hz</span></header>
+            <div id="sensor-values" class="sensor-grid">
+              <div><small>Roll</small><output id="sensor-roll">—</output></div>
+              <div><small>Pitch</small><output id="sensor-pitch">—</output></div>
+              <div><small>Yaw</small><output id="sensor-yaw">—</output></div>
+              <div><small>Yaw rate</small><output id="sensor-rate">—</output></div>
+            </div>
+            <p>Flex ADC <b id="sensor-adc">—</b></p>
+            <div class="flex-endpoints"><span>Flat <b id="flat-value">—</b></span><span>Bent <b id="bent-value">—</b></span></div>
+            <p id="flex-calibration">Calibrate FLAT and BENT</p>
+            <div class="original-buttons">
+              <button id="gyro-imu" class="utility-button" disabled>Calibrate gyro</button>
+              <button id="info-imu" class="utility-button" disabled>IMU info</button>
+            </div>
+            <fieldset class="glove-settings"><legend>Axis mapping</legend>
+              <label><input id="invRoll" type="checkbox">Invert roll</label>
+              <label><input id="invPitch" type="checkbox">Invert pitch</label>
+              <label><input id="invYaw" type="checkbox">Invert yaw</label>
+              <label><input id="swapRP" type="checkbox">Swap roll/pitch</label>
+            </fieldset>
+            <div class="original-buttons">
+              <button id="main-mode-toggle" class="utility-button">Mode: Manual</button>
+              <button id="observation-toggle" class="utility-button">Start observation</button>
+              <button id="reset-flight" class="utility-button">Reset position</button>
+            </div>
+            <p>Thumb / M: Manual ↔ Circle · Middle / L: Hearts</p>
+            <output id="flight-details"></output>
+            <canvas id="sensor-chart" aria-label="Last 500 sensor samples"></canvas>
+            <p class="chart-legend"><span>Roll</span><span>Pitch</span><span>Yaw rate</span></p>
+            <pre id="glove-log" aria-live="polite"></pre>
+          </div>
+        </details>
+      </section>
+      <div id="flight-mode-badge" class="flight-mode-badge" role="status"><i></i><span id="flight-mode-text">MANUAL</span></div>
+      <div class="scanlines" aria-hidden="true"></div>
+      <div id="cinematic-effects" class="cinematic-effects urban" aria-hidden="true"></div>
+      <div class="camera-footer">
+        <div><small>ALT</small><b id="altitude">32.0</b><span>M</span></div>
+        <div><small>SPD</small><b id="speed">0.0</b><span>M/S</span></div>
+        <div><small>HDG</small><b id="heading">000</b><span>°</span></div>
+        <div><small>BAT</small><b>87</b><span>%</span></div>
+      </div>
+      <div id="obstacle-warning" class="obstacle-warning" role="status">OBSTACLE / FLIGHT BLOCKED</div>
+      <div id="glove-status" class="glove-status" role="status" hidden></div>
+      <div id="flight-hint" class="flight-hint" role="status"></div>
+    </section>
+
+    <aside class="analysis-panel" aria-label="Scene analysis">
+      <section class="panel-section detections-section">
+        <header class="section-heading">
+          <div><h1>Visible targets</h1></div>
+          <div class="metric"><b id="track-count">0</b><small>TARGETS</small></div>
+        </header>
+        <div id="detection-list" class="detection-list" aria-live="polite"></div>
+      </section>
+
+      <section class="panel-section report-section">
+        <header class="section-heading">
+          <div><h2>Scene report</h2></div>
+          <span id="report-grounding" class="grounded">Simulation</span>
+        </header>
+        <div class="report-meta">
+          <span id="report-time">Waiting</span>
+          <span id="report-state">Camera snapshot</span>
+        </div>
+        <div id="report-content" class="report-content" aria-live="polite">
+          <div class="empty-report"><p>Checking camera view</p></div>
+        </div>
+        <footer class="report-actions">
+          <span id="analysis-cooldown">READY</span>
+        </footer>
+      </section>
+    </aside>
+  </main>
+
+  <footer class="footer-strip">
+    <span>SIMULATION / LOCAL FALLBACK</span>
+    <span id="asset-status">BLENDER ASSET · LOADING</span>
+    <span class="coordinates">N <b id="coord-n">000.0</b> · E <b id="coord-e">000.0</b></span>
+  </footer>
+
+  <script src="../visualizer/three.min.js"></script>
+  <script src="vendor/GLTFLoader.js"></script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
