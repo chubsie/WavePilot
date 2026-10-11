@@ -11,8 +11,10 @@ hearted 기록은 임무 루프의 몫이며 모드는 모른다.
 직전 조준점 근처(REACQUIRE_GATE_*)에 같은 클래스 박스가 있으면 그 id 로 대상을 넘겨 조준·연사를 이어 간다.
 이후 FireHeart·결과 label 은 새 id 를 쓴다.
 
-놓침(이번 프레임에 대상 박스 없음, 프레임이 없으면 track 비활성)이 target_lost_grace_sec 를 넘으면 failure,
-timeout_sec 경과는 timeout (D-11). 끝난 뒤 step 은 None.
+놓침(이번 프레임에 대상 박스 없음, 프레임이 없으면 track 비활성)이 target_lost_grace_sec 를 넘고 그동안 놓친 step 이
+연속 LOSS_MIN_MISSING_STEPS 번 이상이면 failure, timeout_sec 경과는 timeout (D-11). 끝난 뒤 step 은 None.
+step 수 조건은 sim 시계가 튈 때를 막는다 — 실측(run6, T10): 연사 5발 뒤 벽시계 0.3 s 동안 sim 시계가 68.6→70.0 으로
+뛰어, 한두 step 놓친 것이 유예 1 s 를 넘은 것으로 보여 연사 중에 failure 로 끝났다.
 """
 
 import logging
@@ -48,6 +50,8 @@ AIM_POINT_RATIO = 0.4
 # 재획득 반경 = max(프레임 폭 × 비율, 직전 박스 높이 × 배수) px
 REACQUIRE_GATE_WIDTH_RATIO = 0.1
 REACQUIRE_GATE_BOX_HEIGHTS = 1.5
+# 놓침 failure 에 필요한 연속 놓침 step 수 — 10 Hz 에서 0.5 s. 정상 시계면 유예(1 s, 약 10 step)가 먼저 결정한다
+LOSS_MIN_MISSING_STEPS = 5
 
 
 class AimAndFireMode:
@@ -65,6 +69,7 @@ class AimAndFireMode:
         self._settings = settings
         self._target_label = track_label(self._target_id)
         self._loss_timer = TargetLossTimer(settings.target_lost_grace_sec)
+        self._missing_step_count = 0
 
         self._start_sec: float | None = None
         self._last_frame_id: int | None = None
@@ -86,7 +91,9 @@ class AimAndFireMode:
 
         if is_missing:
             self._stable_frame_count = 0
-        if self._loss_timer.update(tick.now_sec, is_missing):
+        self._missing_step_count = self._missing_step_count + 1 if is_missing else 0
+        is_grace_over = self._loss_timer.update(tick.now_sec, is_missing)
+        if is_grace_over and self._missing_step_count >= LOSS_MIN_MISSING_STEPS:
             return self._finish("failure")
 
         if tick.now_sec - self._start_sec >= self._timeout_sec:
