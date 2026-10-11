@@ -13,6 +13,18 @@ const DRONE_RADIUS = .7;
 const BUILDING_SIDE_CLEARANCE = 2;
 // FPV 전용 캔버스 내부 해상도 — 화면 인셋과 YOLO 로 보내는 JPEG 가 같은 픽셀이다(CSS 로 인셋 크기에 맞춰 축소)
 const FPV_WIDTH = 640, FPV_HEIGHT = 360;
+// Python 명령(source 'python') 추종 — drone_camera.html 과 같은 1차 지연·속도 기반 기울기
+const PYTHON_VELOCITY_LAG_PER_SEC = 3;
+const PYTHON_TILT_DEG_PER_MPS = 1.5, PYTHON_MAX_TILT_DEG = 10;
+
+// 속도 → 표시용 기체 자세(deg). 앞으로 가면 기수 숙임(-pitch), 오른쪽으로 가면 오른쪽 내림(+roll)
+export function getVelocityTiltDeg(velocity, heading) {
+  const clampTilt = (value) => Math.max(-PYTHON_MAX_TILT_DEG, Math.min(PYTHON_MAX_TILT_DEG, value));
+  const forwardMps = -Math.sin(heading) * velocity.x - Math.cos(heading) * velocity.z;
+  const rightMps = Math.cos(heading) * velocity.x - Math.sin(heading) * velocity.z;
+
+  return { pitchDeg: -clampTilt(forwardMps * PYTHON_TILT_DEG_PER_MPS), rollDeg: clampTilt(rightMps * PYTHON_TILT_DEG_PER_MPS) };
+}
 
 export class DroneWorld {
   constructor(container, onAssetStatus = () => {}, fpvContainer = null) {
@@ -186,8 +198,11 @@ export class DroneWorld {
     if (input.source !== this.lastSource) this.hoverAltitude = this.camera.position.y;
     this.lastSource = input.source;
     const mainControl = ['imu', 'imu-stale', 'ai'].includes(input.source);
+    const isPython = input.source === 'python';
     let moveAltitude = true;
-    if (mainControl) {
+    if (isPython) {
+      this.followPythonCommand(input, delta);
+    } else if (mainControl) {
       if (input.source === 'ai' && !this.mainFlight.ai) this.mainFlight.enterAi(this.camera.position.y, 0, -this.heading / D2R);
       const result = this.mainFlight.step(input, delta, this.camera.position, this.velocity,this.training?terrainHeight(this.camera.position.x,this.camera.position.z):0);
       this.heading = result.heading;
@@ -210,7 +225,7 @@ export class DroneWorld {
     }
     if (!mainControl) {
       this.mainFlight.ai = false;
-      this.heading += input.yaw * delta * 1.45;
+      if (!isPython) this.heading += input.yaw * delta * 1.45;
     }
     const floor=this.training?terrainHeight(this.camera.position.x,this.camera.position.z)+.7:.7;
     this.onGround = this.camera.position.y <= floor;
@@ -226,11 +241,20 @@ export class DroneWorld {
     }
     this.camera.rotation.y = this.heading;
     const overview = THREE.MathUtils.clamp((this.camera.position.y - 12) / 20, 0, 1);
-    this.camera.rotation.x = mainControl ? this.mainFlight.shown.pitch * D2R : this.training?-.08-input.pitch*.05:-.35 - overview * .3 - input.pitch * 0.09;
-    this.camera.rotation.z = mainControl ? -this.mainFlight.shown.roll * D2R : -input.roll * 0.10;
+    // Python 모드의 FPV 카메라는 짐벌 각을 그대로 쓰고 수평을 유지한다
+    this.camera.rotation.x = isPython ? input.gimbalPitchDeg * D2R
+      : mainControl ? this.mainFlight.shown.pitch * D2R : this.training?-.08-input.pitch*.05:-.35 - overview * .3 - input.pitch * 0.09;
+    this.camera.rotation.z = isPython ? 0 : mainControl ? -this.mainFlight.shown.roll * D2R : -input.roll * 0.10;
     this.camera.updateMatrixWorld(true);
     this.renderViews(delta, input);
     return resolved.blocked;
+  }
+
+  // NED 속도 명령 → 장면 축(x=east, y=up, z=south). 기수는 yaw(북 기준 시계방향 deg)를 그대로 따른다
+  followPythonCommand(input, delta) {
+    const target = new THREE.Vector3(input.velEastMps, -input.velDownMps, -input.velNorthMps);
+    this.velocity.lerp(target, Math.min(1, delta * PYTHON_VELOCITY_LAG_PER_SEC));
+    this.heading = -input.yawDeg * D2R;
   }
 
   project(position) {
@@ -249,8 +273,13 @@ export class DroneWorld {
     if (!this.chaseCamera) { this.renderer.render(this.scene,this.camera); return; }
     this.drone.position.copy(this.camera.position);
     const mainControl = ['imu','imu-stale','ai'].includes(input.source);
-    this.drone.rotation.set(mainControl ? this.mainFlight.shown.pitch * D2R : -input.pitch*.22,
-      this.heading, mainControl ? -this.mainFlight.shown.roll * D2R : -input.roll*.28, 'YXZ');
+    if (input.source === 'python') {
+      const tilt = getVelocityTiltDeg(this.velocity, this.heading);
+      this.drone.rotation.set(tilt.pitchDeg * D2R, this.heading, -tilt.rollDeg * D2R, 'YXZ');
+    } else {
+      this.drone.rotation.set(mainControl ? this.mainFlight.shown.pitch * D2R : -input.pitch*.22,
+        this.heading, mainControl ? -this.mainFlight.shown.roll * D2R : -input.roll*.28, 'YXZ');
+    }
     this.rotors.forEach(rotor => {
       const index = (rotor.position.z < 0 ? 0 : 2) + (rotor.position.x < 0 ? 0 : 1);
       const speed = mainControl ? this.mainFlight.motorSpeeds[index] : .5;
