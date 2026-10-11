@@ -171,8 +171,7 @@ test('heart overlay refuses the YOLO upload canvas', () => {
 
 test('page wires the heart overlay to its own canvas, not world.fpvCanvas', () => {
   const html = readDemo('index.html');
-  const fpvView = html.slice(html.indexOf('<div id="fpv-view">'), html.indexOf('</section>', html.indexOf('<div id="fpv-view">')));
-  assert.match(fpvView, /<canvas id="heart-overlay"/);
+  assert.match(html, /<canvas id="heart-overlay"/);
   assert.match(html, /id="link-banner"/);
   assert.match(readDemo('app.js'), /createHeartOverlay\(\{ canvas: \$\('heart-overlay'\), uploadCanvas: world\.fpvCanvas \}\)/);
 });

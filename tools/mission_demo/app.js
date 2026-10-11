@@ -1,9 +1,9 @@
 import { KeyboardInput, GloveInput, AutoPilotInput } from "./input.js?v=middle-gesture-1";
 import { AnalysisEngine } from "./analysis.js";
-import { DroneWorld } from "./world.js?v=fpv-3d-hearts-1";
+import { DroneWorld } from "./world.js?v=main-fpv-1";
 import { TestFlight, COURSE } from './test-flight.js?v=slope-15';
 import { terrainHeight } from './mountain-course.js?v=slope-15';
-import { createYoloLog, createYoloLogView, formatDetectionLabel, getObjectCategory, scaleBox } from './yolo-log.js';
+import { createYoloLog, createYoloLogView, formatDetectionLabel, getObjectCategory, mapCaptureBoxToView } from './yolo-log.js';
 import { createDecisionLog, createLlmDecisionView, formatAiBadge } from './llm-decisions.js';
 import { createHeartOverlay, extendHeartPulse, getHeartTarget, isHeartPulseOn } from './heart-overlay.js';
 
@@ -39,7 +39,7 @@ const analysis = new AnalysisEngine(() => {});  // 정답 트랙 fallback 만 �
 const testFlight=new TestFlight();
 
 // ---------- Python 링크 (sim_link.js) ----------
-// FPV 캔버스(world.fpvCanvas)를 JPEG 로 올리고, 응답의 detections·pipeline 을 패널에 보여준다.
+// 오프스크린 캡처(world.fpvCanvas)를 JPEG 로 올리고, 응답의 detections·pipeline 을 패널에 보여준다.
 // AI 모드에서만 Python 비행 명령을 받아 pyAutopilot 이 실행한다(로컬 'auto' 관찰 모드는 받지 않는다).
 const SimLink = window.SimLink;
 const RAD_TO_DEG = 180 / Math.PI;
@@ -54,7 +54,7 @@ const yoloView = createYoloLogView($('yolo-log'));
 const decisionLog = createDecisionLog();
 const decisionView = createLlmDecisionView($('decision-list'));
 
-// FPV 하트(3D 스프라이트)는 world 의 FPV 하트 캔버스가, 연사 표시는 이 2D 오버레이가 그린다 — 둘 다 YOLO 업로드 캔버스(world.fpvCanvas)가 아니다
+// 하트(3D 스프라이트)는 메인(1인칭) 렌더에, 연사 표시는 메인 위 이 2D 오버레이에 — 둘 다 YOLO 업로드 캔버스(world.fpvCanvas)가 아니다
 const heartOverlay = world.fpvCanvas ? createHeartOverlay({ canvas: $('heart-overlay'), uploadCanvas: world.fpvCanvas }) : null;
 
 const pyAutopilot = SimLink ? SimLink.createAutopilot({
@@ -211,7 +211,7 @@ function connectionNotice(message) {
 }
 
 
-// 정답 트랙(fallback)으로 FPV 박스를 그린다
+// 정답 트랙(fallback)으로 메인(1인칭) 화면 위에 박스를 그린다
 function renderTrackBoxes(visibleTracks) {
   const overlay = $("detection-overlay");
   const visibleIds = new Set();
@@ -237,14 +237,14 @@ function upsertTargetBox(overlay, key) {
   return box;
 }
 
-// YOLO 결과로 FPV 박스를 그린다. 서버 문자열은 textContent 로만
+// YOLO 결과(캡처 픽셀)를 메인(1인칭) 화면 좌표로 옮겨 그린다. 서버 문자열은 textContent 로만
 function renderYoloBoxes(frame) {
   const detections = frame.detections || [];
-  const overlay = $("detection-overlay"), view = $("fpv-view");
+  const overlay = $("detection-overlay"), view = $("viewport");
   const boxKeys = new Set();
   detections.forEach((detection, index) => {
     const key = `yolo-${index}`, box = upsertTargetBox(overlay, key);
-    const rect = scaleBox(detection.xyxy, frame.image_width, frame.image_height, view.clientWidth, view.clientHeight);
+    const rect = mapCaptureBoxToView(detection.xyxy, frame.image_width, frame.image_height, view.clientWidth, view.clientHeight);
     boxKeys.add(key);
     box.dataset.kind = getObjectCategory(detection.class_name);
     box.style.cssText = `left:${rect.left}px;top:${rect.top}px;width:${rect.width}px;height:${rect.height}px`;

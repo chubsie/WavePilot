@@ -1,4 +1,4 @@
-// FPV 하트 = chase 와 같은 3D 하트 스프라이트를, YOLO 업로드 캔버스(world.fpvCanvas)가 아닌 별도 투명 캔버스에 그린다
+// 1인칭 메인 화면의 하트 — 메인 렌더(world.camera)에 그대로 보이고, 코앞 것만 숨기거나 작게. YOLO 캡처에는 절대 없다
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
@@ -7,30 +7,24 @@ const require = createRequire(import.meta.url);
 const T = require('../tools/visualizer/three.min.js');
 
 // ---------- 헤드리스 스텁: WebGL 렌더러·DOM 대신 호출만 기록 ----------
-function createFakeElement() {
-  return { className: '', placedAfter: null, after(element) { element.placedAfter = this; } };
-}
-
 const renderers = [];
 class FakeRenderer {
   constructor(options = {}) {
     this.options = options;
-    this.domElement = createFakeElement();
+    this.domElement = { className: '' };
     this.shadowMap = {};
     this.renders = [];
-    this.clearCount = 0;
     renderers.push(this);
   }
   setPixelRatio() {}
   setSize() {}
-  setClearColor(color, alpha) { this.clearAlpha = alpha; }
   setScissorTest() {}
   setViewport() {}
-  clear() { this.clearCount++; }
+  setScissor() {}
   render(root, camera) {
     const sprites = [];
     root.traverseVisible((object) => { if (object.isSprite) sprites.push(object); });
-    this.renders.push({ root, camera, rootVisible: root.visible, sprites });
+    this.renders.push({ root, camera, sprites: sprites.map((sprite) => ({ sprite, scale: sprite.scale.x })) });
   }
 }
 
@@ -42,45 +36,26 @@ const fake2dContext = new Proxy({}, {
 globalThis.document = { createElement: () => ({ getContext: () => fake2dContext }) };
 globalThis.window = { THREE: { ...T, WebGLRenderer: FakeRenderer }, devicePixelRatio: 1, addEventListener: noop };
 
-const { DroneWorld } = await import('../tools/mission_demo/world.js');
+const { DroneWorld, FPV_HEART_NEAR_M, FPV_HEART_SHRINK_M, FPV_HEART_MUZZLE_M } = await import('../tools/mission_demo/world.js');
 
 function createWorld({ withFpv = true } = {}) {
   renderers.length = 0;
-  const container = { clientWidth: 800, clientHeight: 450, appendChild: noop };
-  const fpvContainer = withFpv ? { clientWidth: 640, clientHeight: 360, prepend: noop } : null;
+  const container = { clientWidth: 800, clientHeight: 450, appendChild: noop, getBoundingClientRect: () => ({ left: 0, bottom: 450 }) };
+  const fpvContainer = withFpv ? { clientWidth: 320, clientHeight: 180, getBoundingClientRect: () => ({ left: 18, bottom: 228, width: 320, height: 180 }) } : null;
   const world = new DroneWorld(container, noop, fpvContainer);
-  const [mainRenderer, uploadRenderer, heartRenderer] = renderers;
-  return { world, mainRenderer, uploadRenderer, heartRenderer };
+  const [mainRenderer, uploadRenderer] = renderers;
+  return { world, mainRenderer, uploadRenderer };
 }
 
 function renderFrames(world, count) {
   for (let i = 0; i < count; i++) world.renderViews(1 / 60, { source: 'keyboard', roll: 0, pitch: 0 });
 }
 
-function getSubtree(root) {
-  const objects = [];
-  root.traverse((object) => objects.push(object));
-  return objects;
-}
-
-// ---------- 캔버스 분리 ----------
-test('FPV heart overlay is its own transparent WebGL canvas, never the YOLO upload canvas', () => {
-  const { world, uploadRenderer, heartRenderer } = createWorld();
-
-  assert.equal(renderers.length, 3, 'chase + FPV upload + FPV heart overlay');
-  assert.equal(world.fpvCanvas, uploadRenderer.domElement);
-  assert.equal(world.fpvHeartCanvas, heartRenderer.domElement);
-  assert.notEqual(world.fpvHeartCanvas, world.fpvCanvas);
-  assert.equal(heartRenderer.options.alpha, true);
-  assert.equal(heartRenderer.clearAlpha, 0, 'clears to transparent so the FPV image shows through');
-  assert.equal(uploadRenderer.options.preserveDrawingBuffer, true);
-  assert.equal(world.fpvHeartCanvas.placedAfter, world.fpvCanvas, 'stacked right above the FPV canvas');
-  assert.equal(world.fpvHeartCanvas.className, 'fpv-heart-canvas');
-});
+const getMainRenders = (world, renderer) => renderer.renders.filter((render) => render.camera === world.camera);
 
 // ---------- 렌더 ----------
-test('hearts are hidden for the YOLO upload render and drawn alone on the overlay with the FPV camera', () => {
-  const { world, uploadRenderer, heartRenderer } = createWorld();
+test('hearts are drawn in the main drone-view render and in the chase inset, never in the YOLO capture', () => {
+  const { world, mainRenderer, uploadRenderer } = createWorld();
   world.flashHeld = true;
   const heartsSeenByUpload = [];
   const uploadRender = uploadRenderer.render.bind(uploadRenderer);
@@ -92,62 +67,60 @@ test('hearts are hidden for the YOLO upload render and drawn alone on the overla
   renderFrames(world, 12);
 
   assert.ok(heartsSeenByUpload.length === 12 && heartsSeenByUpload.every((isVisible) => isVisible === false));
-  assert.ok(heartRenderer.renders.length > 0, 'hearts reached the overlay');
+  assert.ok(uploadRenderer.renders.every((render) => render.sprites.length === 0));
+  const mainRenders = getMainRenders(world, mainRenderer);
+  assert.equal(mainRenders.length, 12);
+  assert.ok(mainRenders.at(-1).sprites.length > 3, 'a heart stream is visible from the drone');
+  const chaseRenders = mainRenderer.renders.filter((render) => render.camera === world.chaseCamera);
+  assert.ok(chaseRenders.at(-1).sprites.length >= mainRenders.at(-1).sprites.length, 'chase sees every heart');
+  assert.equal(world.heartBeam.group.visible, true);
+});
 
-  const subtree = getSubtree(world.heartBeam.group);
-  for (const { root, camera, rootVisible, sprites } of heartRenderer.renders) {
-    assert.equal(root, world.heartBeam.group, 'overlay renders the heart group, not the scene');
-    assert.equal(camera, world.camera, 'same FPV camera as the YOLO image');
-    assert.equal(rootVisible, true);
-    assert.ok(sprites.length > 0);
-    assert.ok(subtree.every((object) => object === root || object.isSprite), 'only heart sprites are in what the overlay draws');
+test('hearts leave the muzzle ahead of the camera so the first frame does not cover the drone view', () => {
+  const { world } = createWorld();
+  world.flashHeld = true;
+
+  renderFrames(world, 2);
+  const sprites = world.heartBeam.getVisibleSprites();
+  assert.ok(sprites.length > 0);
+  for (const sprite of sprites) assert.ok(sprite.position.distanceTo(world.camera.position) >= FPV_HEART_MUZZLE_M - 1e-9);
+  assert.ok(FPV_HEART_MUZZLE_M > 1.2 && FPV_HEART_NEAR_M < 1);
+});
+
+test('close hearts are shrunk (and ones at the lens hidden) only for the drone-view render', () => {
+  const { world, mainRenderer } = createWorld();
+  world.flashHeld = true;
+  renderFrames(world, 2);
+
+  const close = getMainRenders(world, mainRenderer).at(-1).sprites
+    .filter(({ sprite }) => sprite.position.distanceTo(world.camera.position) < FPV_HEART_SHRINK_M);
+  assert.ok(close.length > 0);
+  for (const { sprite, scale } of close) {
+    assert.ok(scale < sprite.scale.x, 'smaller in the drone view than its real (chase) size');
   }
-  assert.ok(!subtree.includes(world.drone), 'the drone body is not on the overlay');
-  assert.equal(world.heartBeam.group.visible, true, 'chase view keeps its hearts');
+
+  // 카메라 렌즈 바로 앞 하트는 1인칭 렌더에서 빠지고, 렌더 뒤에는 다시 보인다
+  const lensHeart = world.heartBeam.getVisibleSprites()[0];
+  lensHeart.position.copy(world.camera.position).add(new T.Vector3(0, 0, -.3));
+  const restore = world.fitHeartsToFpv();
+  assert.equal(lensHeart.visible, false);
+  restore();
+  assert.equal(lensHeart.visible, true);
 });
 
-test('hearts right at the nose are left off the overlay so they do not cover the FPV view', () => {
-  const { world, heartRenderer } = createWorld();
-  world.flashHeld = true;
-
-  renderFrames(world, 2);   // 1.2 m 에서 막 나온 하트만 있다
-  assert.equal(heartRenderer.renders.length, 0);
-
-  renderFrames(world, 10);
-  const lastRender = heartRenderer.renders.at(-1);
-  for (const sprite of lastRender.sprites) assert.ok(sprite.position.distanceTo(world.camera.position) >= 3);
-  const nearSprites = world.heartBeam.getVisibleSprites().filter((sprite) => sprite.position.distanceTo(world.camera.position) < 3);
-  assert.ok(nearSprites.length > 0, 'a near heart exists and stays visible for the chase view');
-});
-
-test('no hearts → no overlay render; when the last heart fades the overlay is cleared once, then skipped', () => {
-  const { world, heartRenderer } = createWorld();
-
+test('no hearts fired → nothing heart-shaped in either view', () => {
+  const { world, mainRenderer, uploadRenderer } = createWorld();
   renderFrames(world, 5);
-  assert.equal(heartRenderer.renders.length, 0);
-  assert.equal(heartRenderer.clearCount, 0, 'never drawn → nothing to clear');
 
-  world.flashHeld = true;
-  renderFrames(world, 12);
-  const drawnFrames = heartRenderer.renders.length;
-  assert.ok(drawnFrames > 0);
-
-  world.flashHeld = false;
-  renderFrames(world, 240);   // HEART_LIFE 1.8 s 보다 길게
-  assert.equal(world.heartBeam.getVisibleSprites().length, 0);
-  assert.equal(heartRenderer.clearCount, 1);
-
-  const rendersAfterFade = heartRenderer.renders.length;
-  renderFrames(world, 30);
-  assert.equal(heartRenderer.renders.length, rendersAfterFade);
-  assert.equal(heartRenderer.clearCount, 1);
+  assert.ok(mainRenderer.renders.every((render) => render.sprites.length === 0));
+  assert.ok(uploadRenderer.renders.every((render) => render.sprites.length === 0));
 });
 
-test('without an FPV container there is no heart overlay and rendering is a safe no-op', () => {
+test('without an FPV container there is no capture renderer and rendering is a safe no-op', () => {
   const { world } = createWorld({ withFpv: false });
   world.flashHeld = true;
 
-  assert.equal(world.fpvHeartRenderer, undefined);
+  assert.equal(world.fpvRenderer, undefined);
   assert.doesNotThrow(() => renderFrames(world, 12));
-  assert.doesNotThrow(() => world.renderFpvHearts());
+  assert.doesNotThrow(() => world.fitHeartsToFpv()());
 });

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#080b09">
   <title>WavePilot — Field Command</title>
-  <link rel="stylesheet" href="styles.css?v=fpv-3d-hearts-1">
+  <link rel="stylesheet" href="styles.css?v=main-fpv-1">
 </head>
 <body>
   <header class="command-bar">
@@ -22,12 +22,12 @@
   <main id="mode-screen" class="command-grid" role="tabpanel" aria-labelledby="normal-tab">
     <section class="camera-panel" aria-label="Drone live view">
       <div id="viewport" class="viewport"></div>
-      <section class="fpv-inset" aria-label="Drone camera inset">
-        <div class="fpv-title">● DRONE CAMERA</div>
-        <div id="fpv-view"><div id="detection-overlay" class="detection-overlay" aria-hidden="true"></div>
-          <canvas id="heart-overlay" class="heart-overlay" aria-hidden="true"></canvas>
-          <div class="reticle" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
-        </div>
+      <div id="detection-overlay" class="detection-overlay" aria-hidden="true"></div>
+      <canvas id="heart-overlay" class="heart-overlay" aria-hidden="true"></canvas>
+      <div class="reticle" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+      <section class="fpv-inset" aria-label="Chase camera inset">
+        <div class="fpv-title">● CHASE CAMERA</div>
+        <div id="fpv-view"></div>
       </section>
       <section class="sensor-panel compact-controller" aria-label="Glove controls">
         <div class="original-buttons primary-controls">
@@ -129,6 +129,6 @@
   <script src="../visualizer/three.min.js"></script>
   <script src="vendor/GLTFLoader.js"></script>
   <script src="../visualizer/sim_link.js"></script>
-  <script type="module" src="app.js?v=fpv-3d-hearts-1"></script>
+  <script type="module" src="app.js?v=main-fpv-1"></script>
 </body>
 </html>

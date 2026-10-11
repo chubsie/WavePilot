@@ -48,7 +48,7 @@ test('main axis mapping, gyro/info commands, logs and yaw reset remain available
   assert.deepEqual(logs,['INFO,ready','Calibrating gyro · Keep the glove still']);
 });
 
-test('chase view shows drone while inset uses original camera without self-occlusion', () => {
+test('main view is the drone camera without self-occlusion while the inset is the chase view with the drone', () => {
   const world = flightWorld();
   const model = createDrone();
   Object.assign(world, model, {chaseCamera:new T.PerspectiveCamera(60,1,.1,320),
@@ -59,16 +59,16 @@ test('chase view shows drone while inset uses original camera without self-occlu
     render(scene,camera){renders.push({camera,visible:world.drone.visible});}};
   world.renderViews(1/60,{roll:.2,pitch:.3});
   assert.equal(renders.length,2);
-  assert.equal(renders[0].camera,world.chaseCamera);
-  assert.equal(renders[0].visible,true);
-  assert.equal(renders[1].camera,world.camera);
-  assert.equal(renders[1].visible,false);
+  assert.equal(renders[0].camera,world.camera);
+  assert.equal(renders[0].visible,false);
+  assert.equal(renders[1].camera,world.chaseCamera);
+  assert.equal(renders[1].visible,true);
   assert.ok(world.drone.position.equals(world.camera.position));
   assert.equal(model.rotors.length,4);
   const point=world.camera.position.clone().add(world.camera.getWorldDirection(new T.Vector3()).multiplyScalar(20));
   const projected=world.project(point.toArray());
-  assert.ok(Math.abs(projected.x-150)<.01);
-  assert.ok(Math.abs(projected.y-84.5)<.01);
+  assert.ok(Math.abs(projected.x-500)<.01, 'boresight lands at the main view centre');
+  assert.ok(Math.abs(projected.y-500)<.01);
 });
 
 function flightWorld(boxes = []) {

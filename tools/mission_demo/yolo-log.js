@@ -16,6 +16,22 @@ export function scaleBox(xyxy, imageWidth, imageHeight, viewWidth, viewHeight) {
   return { left: x1 * scaleX, top: y1 * scaleY, width: (x2 - x1) * scaleX, height: (y2 - y1) * scaleY };
 }
 
+// 캡처(16:9 YOLO 입력) 픽셀 → 메인 화면 픽셀. 둘은 같은 카메라·같은 세로 FOV 라 중심 기준 세로 비율 하나로 스케일한다.
+// 메인이 16:9 보다 좁으면 캡처 좌우가 화면 밖(음수·폭 초과)으로 나간다 — 잘라 내지 않는다
+export function mapCapturePointToView(x, y, captureWidth, captureHeight, viewWidth, viewHeight) {
+  const scale = viewHeight / captureHeight;
+
+  return { x: (x - captureWidth / 2) * scale + viewWidth / 2, y: (y - captureHeight / 2) * scale + viewHeight / 2 };
+}
+
+export function mapCaptureBoxToView(xyxy, captureWidth, captureHeight, viewWidth, viewHeight) {
+  const [x1, y1, x2, y2] = xyxy.map(Number);
+  const topLeft = mapCapturePointToView(x1, y1, captureWidth, captureHeight, viewWidth, viewHeight);
+  const bottomRight = mapCapturePointToView(x2, y2, captureWidth, captureHeight, viewWidth, viewHeight);
+
+  return { left: topLeft.x, top: topLeft.y, width: bottomRight.x - topLeft.x, height: bottomRight.y - topLeft.y };
+}
+
 // FPV 박스 색 키 — 클래스마다 색을 조금씩 다르게. fallback 트랙의 VEHICLE 은 car 색, 모르는 클래스는 object
 const COLORED_CLASS_NAMES = new Set(['person', 'car', 'bus', 'truck']);
 export function getObjectCategory(className) {

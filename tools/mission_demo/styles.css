@@ -83,10 +83,6 @@ button:active { transform: scale(.96); }
 .fpv-title{height:28px;background:#0b110ff2;color:var(--lime);padding:8px 9px;font-size:9px;letter-spacing:.08em;display:flex;justify-content:space-between}
 .fpv-title span{color:var(--muted);font-size:8px}
 #fpv-view{position:relative;aspect-ratio:16/9;overflow:hidden;background:transparent}
-#fpv-view .reticle{width:32px;height:32px;opacity:.4}
-#fpv-view .reticle i{width:8px;height:8px}
-#fpv-view .target-label{font-size:7px;top:-17px;padding:2px 3px}
-#fpv-view .target-distance{font-size:7px}
 @media(max-width:600px){.fpv-inset{top:20px;left:10px;width:180px}.fpv-title{font-size:8px}}
 .sensor-panel{position:absolute;right:18px;top:88px;z-index:7;width:280px;max-height:calc(100% - 245px);overflow:auto;padding:14px;background:#0c140eef;border:1px solid var(--line);font-size:11px}
 .sensor-panel header{display:flex;justify-content:space-between;color:var(--lime);font-size:10px;letter-spacing:.08em;margin-bottom:12px}
@@ -207,7 +203,6 @@ button.flight-mode-badge{font-family:inherit;cursor:pointer;transition:border-co
 @media (max-width:900px){body{overflow:auto}.command-bar{grid-template-columns:1fr auto;height:auto}.brand{height:60px}.scenario-switch{justify-content:flex-end}.system-strip{grid-column:1/-1;height:34px;border-top:1px solid var(--line);justify-content:center}.command-grid{height:auto;grid-template-columns:1fr;grid-template-rows:62vh 650px}.camera-panel{border-right:0;border-bottom:1px solid var(--line)}.analysis-panel{grid-template-rows:300px 350px}.footer-strip{position:fixed;bottom:0;left:0;right:0;z-index:10}}
 @media (max-width:600px){.quality-switch{grid-column:1;grid-row:2;justify-self:start}.glove-controls{grid-column:1/-1;grid-row:3;flex-wrap:wrap}.control-dock>.icon-button{grid-row:1}.camera-footer{bottom:184px}.flight-hint{bottom:158px}.camera-topline{font-size:8px}.glove-status{font-size:9px}.command-bar{grid-template-columns:1fr}.scenario-switch{display:none}.system-strip{gap:10px}.brand{border-right:0}.glove-controls .utility-button{padding:0 6px}}
 /* YOLO 링크: FPV 전용 캔버스, YOLO log 섹션 */
-#fpv-view .fpv-canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
 .analysis-panel{grid-template-rows:minmax(0,1fr) minmax(190px,38%)}
 .report-section{border-bottom:1px solid var(--line)}
 .yolo-log-section{display:flex;flex-direction:column;border-bottom:1px solid var(--line)}
@@ -246,9 +241,8 @@ button.flight-mode-badge{font-family:inherit;cursor:pointer;transition:border-co
 .decision-bar b{font-weight:400;text-align:right;font-variant-numeric:tabular-nums}
 .decision-end{margin:0;padding:5px 0;border-top:1px solid var(--line-soft);color:var(--muted);font-size:8px;letter-spacing:.06em;overflow-wrap:anywhere}
 
-/* FPV 하트 — YOLO 업로드 캔버스(.fpv-canvas) 위에 겹친 별도 캔버스들: 3D 하트(WebGL, 투명) 위에 연사 표시(2D) */
-#fpv-view .fpv-heart-canvas{position:absolute;inset:0;z-index:4;width:100%;height:100%;display:block;pointer-events:none}
-#fpv-view .heart-overlay{position:absolute;inset:0;z-index:4;width:100%;height:100%;display:block;pointer-events:none}
+/* 연사 표시('FIRE ♥') — 메인(1인칭) 화면 위 2D 캔버스. YOLO 업로드 캔버스는 오프스크린이라 여기 섞이지 않는다 */
+.heart-overlay{position:absolute;inset:0;z-index:4;width:100%;height:100%;display:block;pointer-events:none}
 
 /* 링크 배너 — 제어권 뺏김(session) / 백그라운드 안내(background) / 링크 끊김(link) */
 .link-banner{position:absolute;z-index:8;top:20px;left:50%;transform:translateX(-50%);max-width:min(560px,calc(100% - 32px));padding:9px 14px;border:1px solid var(--amber);background:#1a1305ee;color:var(--amber);font-size:12px;font-weight:600;letter-spacing:.06em;text-align:center;box-shadow:0 8px 24px #0009;pointer-events:none}
