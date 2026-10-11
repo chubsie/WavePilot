@@ -345,7 +345,7 @@
 
   // ---------- 와이어 프로토콜 클라이언트 ----------
   function createLink(options) {
-    const { canvas, getTelemetry, isAiMode, isOperatorLinkUp, onCommand, takeEvents, onPaired, onFrameSent, log } = options;
+    const { canvas, getTelemetry, isAiMode, isOperatorLinkUp, onCommand, takeEvents, onPaired, log } = options;
     // 운용자 링크 heartbeat — 옵션이 없으면 늘 연결(Phase 5 D-01)
     const readOperatorLink = isOperatorLinkUp || (() => true);
     const nowSec = () => performance.now() / 1000;
@@ -485,13 +485,7 @@
       const snapshot = getTelemetry();
       const frameSeq = seq = (seq + 1) % MAX_SEQ;
       pendingFrames++;
-      canvas.toBlob((blob) => {
-        // 선택 훅: 보낸 프레임을 seq 와 함께 넘긴다(YOLO 로그 썸네일용) — 훅이 터져도 업로드는 계속한다
-        if (blob && onFrameSent) {
-          try { onFrameSent(frameSeq, blob); } catch (error) { log('onFrameSent failed: ' + error.message); }
-        }
-        uploadFrame(blob, frameSeq, snapshot);
-      }, 'image/jpeg', JPEG_QUALITY);
+      canvas.toBlob((blob) => uploadFrame(blob, frameSeq, snapshot), 'image/jpeg', JPEG_QUALITY);
     }
 
     return { start, afterRender, state };

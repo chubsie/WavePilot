@@ -2,9 +2,7 @@
 // 위쪽은 순수 함수(node 테스트 대상), 아래 createYoloLogView 만 DOM 을 만진다. 서버 문자열은 textContent 로만 넣는다.
 
 export const MAX_LOG_ENTRIES = 30;
-export const MAX_THUMBNAILS = 12;
 export const FRAME_LOG_INTERVAL_MS = 1000;
-export const THUMB_WIDTH = 160, THUMB_HEIGHT = 90;
 
 // ---------- 포맷 ----------
 const hasTrackId = (detection) => detection.track_id !== null && detection.track_id !== undefined;
@@ -133,24 +131,6 @@ export function createYoloLog({ maxEntries = MAX_LOG_ENTRIES, frameIntervalMs = 
   return { entries, addFrame, addState, addReport };
 }
 
-// 보낸 프레임 썸네일(objectURL) — 오래된 것부터 버리고 버릴 때 revoke 한다. URL 함수는 테스트에서 바꿔 끼운다
-export function createThumbnailStore(max = MAX_THUMBNAILS, urls = globalThis.URL) {
-  const bySeq = new Map();
-
-  function put(seq, blob) {
-    if (bySeq.has(seq)) urls.revokeObjectURL(bySeq.get(seq));
-    bySeq.delete(seq);
-    bySeq.set(seq, urls.createObjectURL(blob));
-    while (bySeq.size > max) {
-      const [oldestSeq, oldestUrl] = bySeq.entries().next().value;
-      urls.revokeObjectURL(oldestUrl);
-      bySeq.delete(oldestSeq);
-    }
-  }
-
-  return { put, get: (seq) => bySeq.get(seq) ?? null, get size() { return bySeq.size; } };
-}
-
 // ---------- DOM ----------
 function element(tag, className, text) {
   const node = document.createElement(tag);
@@ -163,37 +143,12 @@ export function createTrackChip(trackId) {
   return element('span', 'track-chip', `[${trackId}]`);
 }
 
-function drawThumbnail(canvas, frame, imageUrl) {
-  const ctx = canvas.getContext('2d');
-  const drawBoxes = () => {
-    ctx.strokeStyle = '#c9ef58'; ctx.fillStyle = '#c9ef58'; ctx.lineWidth = 1; ctx.font = '8px monospace';
-    for (const detection of frame.detections || []) {
-      const box = scaleBox(detection.xyxy, frame.image_width, frame.image_height, canvas.width, canvas.height);
-      ctx.strokeRect(box.left, box.top, box.width, box.height);
-      if (hasTrackId(detection)) ctx.fillText(`#${detection.track_id}`, box.left + 1, Math.max(8, box.top - 1));
-    }
-  };
-
-  ctx.fillStyle = '#080d0a'; ctx.fillRect(0, 0, canvas.width, canvas.height);
-  if (!imageUrl) { drawBoxes(); return; }
-  const image = new Image();
-  image.onload = () => { ctx.drawImage(image, 0, 0, canvas.width, canvas.height); drawBoxes(); };
-  image.onerror = drawBoxes;
-  image.src = imageUrl;
-}
-
-function renderEntry(entry, thumbnails) {
+function renderEntry(entry) {
   const article = element('article', `yolo-entry ${entry.kind}`);
   const header = element('header');
   header.append(element('span', 'yolo-kind', entry.kind.toUpperCase()), element('span', 'yolo-title', entry.header));
   article.append(header);
 
-  if (entry.kind === 'frame') {
-    const canvas = element('canvas', 'yolo-thumb');
-    canvas.width = THUMB_WIDTH; canvas.height = THUMB_HEIGHT;
-    drawThumbnail(canvas, entry.frame, thumbnails.get(entry.seq));
-    article.append(canvas);
-  }
   if (entry.lines && entry.lines.length) article.append(element('pre', 'yolo-lines', entry.lines.join('\n')));
   if (entry.json) {
     const details = element('details');
@@ -210,7 +165,7 @@ function renderEntry(entry, thumbnails) {
 }
 
 // 새 항목만 위에 끼우고, 모델에서 빠진 항목은 지운다
-export function createYoloLogView(container, thumbnails) {
+export function createYoloLogView(container) {
   const rendered = new Map();
 
   function render(entries) {
@@ -221,7 +176,7 @@ export function createYoloLogView(container, thumbnails) {
     for (let i = entries.length - 1; i >= 0; i--) {
       const entry = entries[i];
       if (rendered.has(entry.key)) continue;
-      const node = renderEntry(entry, thumbnails);
+      const node = renderEntry(entry);
       rendered.set(entry.key, node);
       container.prepend(node);
     }

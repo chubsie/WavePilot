@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   scaleBox, formatDetectionLabel, formatDetectionLine, formatFrameHeader, detectionSignature,
-  summarizeState, formatTrackLine, formatReportHeader, reportSentences, createYoloLog, createThumbnailStore,
+  summarizeState, formatTrackLine, formatReportHeader, reportSentences, createYoloLog,
 } from '../tools/mission_demo/yolo-log.js';
 
 const person = { class_id: 0, class_name: 'person', confidence: .871, xyxy: [64, 36, 128, 108.4], track_id: 3, upper_color: 'red' };
@@ -98,19 +98,4 @@ test('log is capped and a dropped frame id may be logged again', () => {
   assert.deepEqual(log.entries.map((entry) => entry.key), ['frame-5', 'frame-4', 'frame-3']);
   assert.ok(log.addFrame(frameOf(1, [car]), 10, 99));
   assert.equal(log.entries.length, 3);
-});
-
-test('thumbnail store keeps the newest blobs and revokes evicted urls', () => {
-  const revoked = [];
-  let next = 0;
-  const urls = { createObjectURL: () => `blob:${next++}`, revokeObjectURL: (url) => revoked.push(url) };
-  const store = createThumbnailStore(2, urls);
-  store.put(10, {}); store.put(11, {}); store.put(12, {});
-  assert.equal(store.size, 2);
-  assert.equal(store.get(10), null);
-  assert.equal(store.get(12), 'blob:2');
-  assert.deepEqual(revoked, ['blob:0']);
-  store.put(12, {});
-  assert.deepEqual(revoked, ['blob:0', 'blob:2']);
-  assert.equal(store.get(12), 'blob:3');
 });

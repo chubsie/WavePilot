@@ -3,7 +3,7 @@ import { AnalysisEngine } from "./analysis.js";
 import { DroneWorld } from "./world.js";
 import { TestFlight, COURSE } from './test-flight.js';
 import { terrainHeight } from './mountain-course.js';
-import { createYoloLog, createYoloLogView, createThumbnailStore, createTrackChip, detectionSignature, formatDetectionLabel, reportSentences, scaleBox } from './yolo-log.js';
+import { createYoloLog, createYoloLogView, createTrackChip, detectionSignature, formatDetectionLabel, reportSentences, scaleBox } from './yolo-log.js';
 
 // TODO: 임시 — 장갑 수동(IMU)·산악 코스에서 비행 키를 누르는 동안은 키보드가 우선한다. 장갑 검증 끝나면 false로.
 const ALLOW_KEYBOARD_OVERRIDE = true;
@@ -44,9 +44,8 @@ const testFlight=new TestFlight();
 const SimLink = window.SimLink;
 const RAD_TO_DEG = 180 / Math.PI;
 const YOLO_PANEL_REFRESH_MS = 200;
-const thumbnails = createThumbnailStore();
 const yoloLog = createYoloLog();
-const yoloView = createYoloLogView($('yolo-log'), thumbnails);
+const yoloView = createYoloLogView($('yolo-log'));
 let shownReportSeq = null;
 
 // 좌표: world x→east, -z→north, y→up(down=-y). 카메라 기울기는 짐벌(-90..0°)로, 남는 기수 들림만 body pitch 로 보낸다
@@ -80,7 +79,6 @@ const link = SimLink && world.fpvCanvas ? SimLink.createLink({
   isAiMode: () => mode === 'ai' || mode === 'auto',
   onCommand: () => false,
   takeEvents: () => [],
-  onFrameSent: (seq, blob) => thumbnails.put(seq, blob),
   log: (line) => console.info('[sim-link]', line),
 }) : null;
 link?.start();
