@@ -217,7 +217,7 @@ def test_telemetry_response_has_empty_pipeline_before_any_message(sim_server) ->
     response = post_telemetry(port)
 
     assert response["pipeline"] == {"state": None, "report": None, "selection": None, "mode_end": None}
-    assert set(response) == {"commands", "detections", "status", "mission", "pipeline", "detection_log"}
+    assert set(response) == {"commands", "detections", "status", "mission", "pipeline", "detection_log", "session_active"}
     assert set(response["status"]) == {"frame_fps", "yolo_latency_ms"}
 
 

@@ -8,13 +8,26 @@
 - 파이프라인 state·report 는 종류별 최신 한 칸 — --operator browser 일 때 페이지가 /sim/telemetry 로 읽는다.
 - 선택기 selection·mode_end 도 같은 칸 방식 — run_mission --sim browser 가 넣고 mission_demo LLM Decisions 패널이 읽는다.
 
+단일 세션 (최신 탭 우선):
+- 페이지는 POST 마다 session_id(없으면 익명 세션 None)를 붙인다. 브리지는 활성 세션 하나의 텔레메트리·프레임·이벤트만
+  받는다. 처음 보는 session_id 가 오면 그 세션이 활성이 된다(새로 연 탭·새로고침이 이긴다). 밀려난 세션은 활성
+  세션이 LINK_TIMEOUT_SEC 넘게 조용할 때만 다시 활성이 된다(새 탭을 닫으면 옛 탭이 이어받는다).
+- 비활성 세션의 POST 는 상태를 바꾸지 않고 False 를 돌려받는다. 세션이 바뀌면 옛 탭 몫의 대기 명령은 버린다.
+
+sim 시계 보정:
+- 페이지 시계(time_sec)는 새로고침하면 0 부터 다시 시작한다. 세션이 바뀌거나 같은 세션에서 CLOCK_REWIND_TOLERANCE_SEC
+  넘게 뒤로 가면, 오프셋을 다시 잡아 보정 시계가 마지막 값에서 이어지게 한다. 텔레메트리·프레임·이벤트의 time_sec
+  는 모두 보정 시계로 바꿔 저장하므로 임무 시계·트랙 TTL·안전 감시·로그가 한 시간축을 본다.
+  (임무 루프 시계를 monotonic 으로 바꾸면 프레임 timestamp·heartbeat·hit 시각과 축이 갈라진다 — 경계에서 한 번 보정한다.)
+
 페이로드 검증(Telemetry.from_dict, 크기 상한)은 HTTP 서버(02-02) 몫이다 — bridge 는 타입이 맞는 객체만 받는다.
 모든 상태는 Condition 하나(내부 Lock)로 보호하므로 서버 스레드·파이프라인 스레드가 동시에 불러도 된다.
 """
 
+import dataclasses
 import threading
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -30,6 +43,9 @@ PIPELINE_MESSAGE_KINDS = ("state", "report", "selection", "mode_end")
 DETECTION_LOG_SIZE = 30  # 페이지 폴링 한 번 사이에 YOLO 가 낸 결과를 빠짐없이 넘길 만큼
 DETECTION_LOG_TTL_SEC = 2.0  # 전달용 버퍼라 짧게 — YOLO 가 멈추면 옛 결과를 계속 보내지 않는다
 PIPELINE_MESSAGE_TTL_SEC = 10.0  # 보고 주기(기본 8 s)보다 조금 길게 — 파이프라인이 멈추면 state·report 도 사라진다
+RETIRED_SESSION_LIMIT = 64  # 밀려난 session_id 기억 개수 — 넘치면 가장 오래된 것부터 잊는다
+# 프레임·텔레메트리 POST 는 따로 와서 조금 뒤섞일 수 있다 — 이보다 크게 뒤로 가야 시계 재시작으로 본다
+CLOCK_REWIND_TOLERANCE_SEC = 1.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,6 +87,16 @@ class SimBridge:
 
         self._pipeline_messages: dict[str, tuple[float, dict] | None] = dict.fromkeys(PIPELINE_MESSAGE_KINDS)  # (발행 시각, 항목)
 
+        self._has_active_session = False
+        self._active_session_id: str | None = None
+        self._active_seen_at_sec: float | None = None
+        self._retired_session_ids: OrderedDict[str | None, None] = OrderedDict()  # 순서 있는 집합
+
+        self._needs_clock_anchor = False
+        self._clock_offset_sec = 0.0
+        self._last_raw_time_sec: float | None = None
+        self._last_sim_time_sec: float | None = None
+
     # --- 브라우저 → Python: 텔레메트리·AI 모드·이벤트 ---
 
     def update_from_browser(
@@ -79,15 +105,21 @@ class SimBridge:
         ai_mode: bool,
         events: list[dict],
         operator_link: bool = True,
-    ) -> None:
+        session_id: str | None = None,
+    ) -> bool:
+        """활성 세션이면 상태를 갱신하고 True. 비활성 세션이면 아무것도 바꾸지 않고 False."""
         with self._condition:
             received_at_sec = self._clock()
+            if not self._accept_session(session_id, received_at_sec):
+                return False
+
+            telemetry = self._to_sim_time(telemetry)
             self._telemetry = telemetry
             self._telemetry_received_at_sec = received_at_sec
             self._ai_mode = ai_mode
             # 호출자가 나중에 dict 를 고쳐도 저장본이 바뀌지 않게 복사한다
             for event in events:
-                stored = dict(event)
+                stored = self._event_to_sim_time(dict(event))
                 if stored.get("kind") == HEART_SHOT_EVENT:
                     self._heart_shots.append(stored)
                 else:
@@ -97,6 +129,8 @@ class SimBridge:
             if operator_link:
                 self._operator_heartbeat_at_sec = received_at_sec
                 self._operator_heartbeat_time_sec = telemetry.time_sec
+
+            return True
 
     def latest_telemetry(self) -> Telemetry | None:
         with self._condition:
@@ -173,14 +207,20 @@ class SimBridge:
 
     # --- 프레임 슬롯 ---
 
-    def put_frame(self, frame: BrowserFrame) -> None:
+    def put_frame(self, frame: BrowserFrame, session_id: str | None = None) -> bool:
+        """활성 세션 프레임이면 슬롯에 넣고 True. 비활성 세션이거나 닫혔으면 버리고 False."""
         with self._condition:
             if self._closed:
-                return
+                return False
+            if not self._accept_session(session_id, self._clock()):
+                return False
 
+            telemetry = self._to_sim_time(frame.telemetry)
+            frame = dataclasses.replace(frame, timestamp_sec=telemetry.time_sec, telemetry=telemetry)
             self._frame = frame
             self._frame_received_times.append(frame.received_at_sec)
             self._condition.notify_all()
+            return True
 
     def wait_frame(self, after_seq: int | None, timeout_sec: float) -> BrowserFrame | None:
         """after_seq 보다 새 프레임이 오면 돌려준다. 타임아웃이나 close 면 None."""
@@ -204,6 +244,55 @@ class SimBridge:
         with self._condition:
             self._closed = True
             self._condition.notify_all()
+
+    # --- 단일 세션·sim 시계 보정 (호출자가 _condition 을 잡고 부른다) ---
+
+    def _accept_session(self, session_id: str | None, now_sec: float) -> bool:
+        if self._has_active_session and session_id == self._active_session_id:
+            self._active_seen_at_sec = now_sec
+            return True
+
+        is_new_session = session_id not in self._retired_session_ids
+        is_active_silent = self._active_seen_at_sec is None or now_sec - self._active_seen_at_sec > LINK_TIMEOUT_SEC
+        if self._has_active_session and not is_new_session and not is_active_silent:
+            return False
+
+        self._activate_session(session_id, now_sec)
+        return True
+
+    def _activate_session(self, session_id: str | None, now_sec: float) -> None:
+        if self._has_active_session:
+            self._retired_session_ids[self._active_session_id] = None
+            while len(self._retired_session_ids) > RETIRED_SESSION_LIMIT:
+                self._retired_session_ids.popitem(last=False)
+            self._pending_commands = []  # 옛 탭에 보내려던 명령 — 새 탭에 배달하지 않는다
+            self._needs_clock_anchor = True
+
+        self._retired_session_ids.pop(session_id, None)
+        self._has_active_session = True
+        self._active_session_id = session_id
+        self._active_seen_at_sec = now_sec
+
+    def _to_sim_time(self, telemetry: Telemetry) -> Telemetry:
+        """페이지 시각을 보정 시계로 — 세션 교체·시계 재시작이면 마지막 보정 시각에서 이어지게 오프셋을 다시 잡는다."""
+        raw_sec = telemetry.time_sec
+        is_rewound = self._last_raw_time_sec is not None and raw_sec < self._last_raw_time_sec - CLOCK_REWIND_TOLERANCE_SEC
+        if (self._needs_clock_anchor or is_rewound) and self._last_sim_time_sec is not None:
+            self._clock_offset_sec = self._last_sim_time_sec - raw_sec
+        self._needs_clock_anchor = False
+
+        sim_sec = raw_sec + self._clock_offset_sec
+        self._last_raw_time_sec = raw_sec
+        self._last_sim_time_sec = sim_sec if self._last_sim_time_sec is None else max(self._last_sim_time_sec, sim_sec)
+
+        if self._clock_offset_sec == 0.0:
+            return telemetry
+        return dataclasses.replace(telemetry, time_sec=sim_sec)
+
+    def _event_to_sim_time(self, event: dict) -> dict:
+        if "time_sec" in event and self._clock_offset_sec != 0.0:
+            event["time_sec"] = event["time_sec"] + self._clock_offset_sec
+        return event
 
     def _is_newer_frame(self, after_seq: int | None) -> bool:
         if self._frame is None:

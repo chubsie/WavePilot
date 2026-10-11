@@ -5,8 +5,12 @@
     → 브라우저(Chrome/Edge)로 http://127.0.0.1:8765/drone_camera.html 열기
 
 와이어 프로토콜:
-1. POST /sim/frame?seq=<0..2^31>  — body image/jpeg, 헤더 X-Telemetry(Telemetry JSON) → 204
-2. POST /sim/telemetry            — body JSON {telemetry, ai_mode, events, operator_link?} → 200 {commands, detections, status, mission, pipeline}
+1. POST /sim/frame?seq=<0..2^31>  — body image/jpeg, 헤더 X-Telemetry(Telemetry JSON), X-Session-Id(선택) → 204
+                                     응답 헤더 X-Session-Active: true|false (false 면 프레임을 버렸다)
+2. POST /sim/telemetry            — body JSON {telemetry, ai_mode, events, operator_link?, session_id?}
+                                     → 200 {commands, detections, status, mission, pipeline, detection_log, session_active}
+                                     session_id 가 없으면 하나의 익명 세션이다. 활성 세션은 하나(최신 탭 우선) —
+                                     비활성 세션이면 bridge 를 바꾸지 않고 session_active false, commands [] 를 준다
                                      detections 에는 추론한 프레임의 seq 가, pipeline 에는 최신 {state, report} 가 실린다(--operator browser)
                                      events 의 kind 는 goal_reached | heart_shot (heart_shot 은 Phase 6 D-10 발사 판정)
 3. GET  /sim/scenario?id=<id>     — 200 브라우저 시나리오 dict (Phase 6 C1) / 400 잘못된 id·파일 / 404 파일 없음
@@ -49,6 +53,9 @@ MAX_TELEMETRY_HEADER_BYTES = 8 * 1024
 MAX_FRAME_SEQ = 2**31
 MAX_EVENTS_PER_POST = 32  # sim_link.js MAX_EVENTS_PER_POST 와 같은 값
 MAX_ACTOR_ID_CHARS = 32
+MAX_SESSION_ID_CHARS = 128
+SESSION_ID_HEADER = "X-Session-Id"
+SESSION_ACTIVE_HEADER = "X-Session-Active"
 
 FRAME_PATH = "/sim/frame"
 TELEMETRY_PATH = "/sim/telemetry"
@@ -144,6 +151,12 @@ class SimRequestHandler(SimpleHTTPRequestHandler):
         if telemetry is None:
             return
 
+        try:
+            session_id = parse_session_id(self.headers.get(SESSION_ID_HEADER))
+        except ValueError as error:
+            self.send_error(HTTPStatus.BAD_REQUEST, f"invalid {SESSION_ID_HEADER}: {error}")
+            return
+
         body = self._read_body(MAX_FRAME_BYTES, "image/jpeg")
         if body is None:
             return
@@ -155,8 +168,9 @@ class SimRequestHandler(SimpleHTTPRequestHandler):
             telemetry=telemetry,
             received_at_sec=time.monotonic(),  # SimBridge 기본 clock 과 같은 시계
         )
-        self.server.sim_bridge.put_frame(frame)
+        is_session_active = self.server.sim_bridge.put_frame(frame, session_id)
         self.send_response(HTTPStatus.NO_CONTENT)
+        self.send_header(SESSION_ACTIVE_HEADER, "true" if is_session_active else "false")
         self.end_headers()
 
     def _parse_telemetry_header(self) -> Telemetry | None:
@@ -177,20 +191,26 @@ class SimRequestHandler(SimpleHTTPRequestHandler):
             return
 
         try:
-            telemetry, ai_mode, events, operator_link = parse_telemetry_post(json.loads(body))
+            payload = json.loads(body)
+            telemetry, ai_mode, events, operator_link = parse_telemetry_post(payload)
+            session_id = parse_session_id(payload.get("session_id"))
         except ValueError as error:  # JSONDecodeError·UnicodeDecodeError 도 ValueError
             self.send_error(HTTPStatus.BAD_REQUEST, f"invalid telemetry post: {error}")
             return
 
         bridge = self.server.sim_bridge
-        bridge.update_from_browser(telemetry, ai_mode, events, operator_link)
+        is_session_active = bridge.update_from_browser(
+            telemetry, ai_mode, events, operator_link, session_id=session_id
+        )
         response = {
-            "commands": bridge.drain_commands(),
+            # 명령은 활성 탭에만 배달한다 — 비활성 탭이 꺼내 가면 활성 탭이 못 받는다
+            "commands": bridge.drain_commands() if is_session_active else [],
             "detections": bridge.latest_browser_detections(),
             "status": bridge.status(),
             "mission": bridge.mission_status(),
             "pipeline": bridge.pipeline_messages(),
             "detection_log": bridge.recent_detections(),
+            "session_active": is_session_active,
         }
         self._send_json(response)
 
@@ -252,6 +272,15 @@ def parse_telemetry_post(payload: object) -> tuple[Telemetry, bool, list[dict], 
         raise ValueError(f"field 'operator_link' must be a bool, got {operator_link!r}")
 
     return telemetry, ai_mode, events, operator_link
+
+
+def parse_session_id(value: object) -> str | None:
+    """선택 필드 session_id — 없으면(None) 익명 세션. 1..MAX_SESSION_ID_CHARS 글자 문자열만 받는다."""
+    if value is None:
+        return None
+    if not isinstance(value, str) or not 1 <= len(value) <= MAX_SESSION_ID_CHARS:
+        raise ValueError(f"session_id must be a 1..{MAX_SESSION_ID_CHARS} char string, got {value!r}")
+    return value
 
 
 def _parse_event(event: object) -> dict:
