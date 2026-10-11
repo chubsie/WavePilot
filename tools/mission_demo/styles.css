@@ -69,7 +69,9 @@ button:active { transform: scale(.96); }
 .obstacle-warning{position:absolute;z-index:5;left:50%;top:74px;transform:translate(-50%,-8px);padding:7px 12px;border:1px solid var(--amber);background:#1a1305dd;color:var(--amber);font-size:8px;letter-spacing:.12em;opacity:0;transition-property:opacity,transform;transition-duration:.18s;pointer-events:none}.obstacle-warning.show{opacity:1;transform:translate(-50%,0)}
 .flight-hint{position:absolute;z-index:3;color:#abb4a6;font-size:9px;letter-spacing:.04em}
 
-.detection-overlay{position:absolute;z-index:3;inset:0;pointer-events:none}.target-box{position:absolute;border:1px solid var(--lime);box-shadow:0 0 12px #c9ef5822;transition-property:left,top,width,height,opacity;transition-duration:.08s}.target-box::before,.target-box::after{content:"";position:absolute;background:var(--lime)}.target-box::before{width:10px;height:2px;left:-1px;top:-2px}.target-box::after{width:2px;height:10px;left:-2px;top:-1px}.target-label{position:absolute;left:-1px;top:-20px;padding:3px 5px;background:var(--lime);color:#111;font-size:8px;font-weight:600;white-space:nowrap}.target-distance{position:absolute;right:0;bottom:-17px;color:var(--lime);font-size:8px;white-space:nowrap}
+.detection-overlay{position:absolute;z-index:3;inset:0;pointer-events:none}.target-box{--box-color:var(--lime);position:absolute;border:1px solid var(--box-color);box-shadow:0 0 12px color-mix(in srgb,var(--box-color) 14%,transparent);transition-property:left,top,width,height,opacity;transition-duration:.08s}.target-box::before,.target-box::after{content:"";position:absolute;background:var(--box-color)}.target-box::before{width:10px;height:2px;left:-1px;top:-2px}.target-box::after{width:2px;height:10px;left:-2px;top:-1px}.target-label{position:absolute;left:-1px;top:-20px;padding:3px 5px;background:var(--box-color);color:#111;font-size:8px;font-weight:600;white-space:nowrap}.target-distance{position:absolute;right:0;bottom:-17px;color:var(--box-color);font-size:8px;white-space:nowrap}
+/* 객체 종류별 색 — person 라임 · vehicle 시안 · object 앰버 */
+.target-box[data-kind="person"]{--box-color:var(--lime)}.target-box[data-kind="vehicle"]{--box-color:var(--cyan)}.target-box[data-kind="object"]{--box-color:var(--amber)}
 
 .analysis-panel { min-width:0; overflow:hidden; display:grid; grid-template-rows:minmax(260px,43%) 1fr; background:linear-gradient(135deg,#151b15 0,#0c100d 70%); }
 .panel-section{min-height:0;padding:22px 24px;overflow:hidden}.detections-section{border-bottom:1px solid var(--line)}
@@ -209,7 +211,7 @@ button:disabled{opacity:.4;cursor:default}
 #fpv-view .fpv-canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
 .source-badge{display:inline-block;margin-top:6px;padding:3px 6px;border:1px solid #7a6431;color:var(--amber);font-size:8px;letter-spacing:.08em}
 .source-badge.live{border-color:#647e3c;color:var(--lime)}
-.analysis-panel{grid-template-rows:minmax(0,1.15fr) minmax(190px,30%) minmax(0,1fr)}
+.analysis-panel{grid-template-rows:minmax(0,1fr) minmax(190px,38%)}
 .report-section{border-bottom:1px solid var(--line)}
 .yolo-log-section{display:flex;flex-direction:column;border-bottom:1px solid var(--line)}
 .yolo-log{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:#526244 transparent}
@@ -225,4 +227,4 @@ button:disabled{opacity:.4;cursor:default}
 .yolo-sentence{margin:5px 0 0;color:#cbd3c6}.yolo-error{margin:5px 0 0;color:var(--red)}
 .track-chip{display:inline-block;margin-right:4px;padding:0 3px;border:1px solid var(--lime-dim);color:var(--lime);font-size:8px;line-height:1.5}
 .detections-section{display:flex;flex-direction:column}.detections-section .detection-list{flex:1;min-height:0;height:auto}
-@media (max-width:900px){.command-grid{grid-template-rows:62vh 1050px}.analysis-panel{grid-template-rows:400px 300px 350px}}
+@media (max-width:900px){.command-grid{grid-template-rows:62vh 1050px}.analysis-panel{grid-template-rows:400px 300px}}

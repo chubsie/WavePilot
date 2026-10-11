@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  scaleBox, formatDetectionLabel, formatDetectionLine, formatFrameHeader, detectionSignature,
+  scaleBox, getObjectCategory, formatDetectionLabel, formatDetectionLine, formatFrameHeader, detectionSignature,
   summarizeState, formatTrackLine, formatReportHeader, reportSentences, createYoloLog,
 } from '../tools/mission_demo/yolo-log.js';
 
@@ -97,4 +97,10 @@ test('log is capped and a dropped frame id may be logged again', () => {
   assert.deepEqual(log.entries.map((entry) => entry.key), ['frame-5', 'frame-4', 'frame-3']);
   assert.ok(log.addFrame(frameOf(1, [car]), 10));
   assert.equal(log.entries.length, 3);
+});
+
+test('object category picks the FPV box color group', () => {
+  assert.equal(getObjectCategory('person'), 'person');
+  for (const name of ['car', 'bus', 'truck', 'VEHICLE']) assert.equal(getObjectCategory(name), 'vehicle');
+  assert.equal(getObjectCategory('traffic light'), 'object');
 });

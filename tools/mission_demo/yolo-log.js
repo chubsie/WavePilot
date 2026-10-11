@@ -15,6 +15,14 @@ export function scaleBox(xyxy, imageWidth, imageHeight, viewWidth, viewHeight) {
   return { left: x1 * scaleX, top: y1 * scaleY, width: (x2 - x1) * scaleX, height: (y2 - y1) * scaleY };
 }
 
+// FPV 박스 색 구분 — person / vehicle / 그 밖은 object
+const VEHICLE_CLASS_NAMES = new Set(['car', 'bus', 'truck', 'vehicle']);
+export function getObjectCategory(className) {
+  const name = String(className).toLowerCase();
+  if (name === 'person') return 'person';
+  return VEHICLE_CLASS_NAMES.has(name) ? 'vehicle' : 'object';
+}
+
 export function formatDetectionLabel(detection) {
   const id = hasTrackId(detection) ? ` #${detection.track_id}` : '';
   return `${String(detection.class_name)}${id} ${Math.round(Number(detection.confidence) * 100)}%`;

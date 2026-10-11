@@ -3,7 +3,7 @@ import { AnalysisEngine } from "./analysis.js";
 import { DroneWorld } from "./world.js";
 import { TestFlight, COURSE } from './test-flight.js';
 import { terrainHeight } from './mountain-course.js';
-import { createYoloLog, createYoloLogView, createTrackChip, detectionSignature, formatDetectionLabel, reportSentences, scaleBox } from './yolo-log.js';
+import { createYoloLog, createYoloLogView, detectionSignature, formatDetectionLabel, getObjectCategory, scaleBox } from './yolo-log.js';
 
 // TODO: 임시 — 장갑 수동(IMU)·산악 코스에서 비행 키를 누르는 동안은 키보드가 우선한다. 장갑 검증 끝나면 false로.
 const ALLOW_KEYBOARD_OVERRIDE = true;
@@ -14,8 +14,6 @@ let mode = "keyboard";
 let lastFrame = performance.now();
 let lastTracks = [];
 let reportTracks = [];
-let reportContext = {};
-let initialReportRequested = false;
 let blockedUntil = 0;
 let auxHeld = false, keyFlash = false;
 
@@ -35,7 +33,7 @@ const glove = new GloveInput({
   onLog: (line) => { const log=$('glove-log'); log.textContent=(log.textContent+'\n'+line).split('\n').slice(-80).join('\n'); log.scrollTop=log.scrollHeight; },
 });
 const autopilot = new AutoPilotInput();
-const analysis = new AnalysisEngine(renderReportState);
+const analysis = new AnalysisEngine(() => {});  // 정답 트랙 fallback 만 쓴다 — Scene report 섹션은 없앴다
 const testFlight=new TestFlight();
 
 // ---------- Python YOLO 링크 (sim_link.js) ----------
@@ -48,7 +46,6 @@ const YOLO_FPS_WINDOW_MS = 1000;
 const yoloFrameTimes = [];  // 로그에 새로 들어온 YOLO 프레임 시각 — 실측 fps 용
 const yoloLog = createYoloLog();
 const yoloView = createYoloLogView($('yolo-log'));
-let shownReportSeq = null;
 
 // 좌표: world x→east, -z→north, y→up(down=-y). 카메라 기울기는 짐벌(-90..0°)로, 남는 기수 들림만 body pitch 로 보낸다
 function getSimTelemetry() {
@@ -93,24 +90,15 @@ function getFreshDetections() {
   return ageSec < SimLink.DETECTION_STALE_SEC ? link.state.detections : null;
 }
 
-function getPipelineReport() {
-  if (!link || !link.state.connected || mode === 'test') return null;
-  return link.state.pipeline?.report?.payload ? link.state.pipeline.report : null;
-}
-
 function startTest(){
   if(world.loading)return;
   world.setTraining(true);
   autopilot.reset();blockedUntil=0;testFlight.start();setMode('test');
-  clearTimeout(analysis.timer);analysis.pending=false;initialReportRequested=false;
-  $('report-content').textContent='Mountain course · Manual flight';
 }
 
 function setMode(next) {
   if(mode==='test' && next!=='test'){
     world.setTraining(false);
-    clearTimeout(analysis.timer);analysis.pending=false;initialReportRequested=false;
-    $('report-content').textContent='Checking camera view';
   }
   if (next !== mode) autopilot.resetObservation();
   mode = next;
@@ -165,6 +153,7 @@ function renderTracks(tracks, visibleTracks) {
     if (!screen.visible) return;
     visibleIds.add(track.id);
     const box = upsertTargetBox(overlay, track.id);
+    box.dataset.kind = getObjectCategory(track.kind);
     box.style.cssText = `left:${screen.x-screen.width/2}px;top:${screen.y-screen.height/2}px;width:${screen.width}px;height:${screen.height}px`;
     box.querySelector(".target-label").textContent = `${track.id} / ${track.clothing?track.clothing.toUpperCase():track.kind} ${track.confidence}`;
     box.querySelector(".target-distance").textContent = `${screen.distance.toFixed(1)} M`;
@@ -212,6 +201,7 @@ function renderYoloDetections(frame) {
     const key = `yolo-${index}`, box = upsertTargetBox(overlay, key);
     const rect = scaleBox(detection.xyxy, frame.image_width, frame.image_height, view.clientWidth, view.clientHeight);
     boxKeys.add(key);
+    box.dataset.kind = getObjectCategory(detection.class_name);
     box.style.cssText = `left:${rect.left}px;top:${rect.top}px;width:${rect.width}px;height:${rect.height}px`;
     box.querySelector(".target-label").textContent = formatDetectionLabel(detection);
     box.querySelector(".target-distance").textContent = "";
@@ -223,33 +213,6 @@ function renderDetectionSource(frame) {
   const latency = link?.state.yoloLatencyMs;
   $("detection-source").textContent = frame ? `YOLO LIVE · ${Number.isFinite(latency) ? Math.round(latency) : '–'} ms` : "ORIN DEMO (fallback)";
   $("detection-source").classList.toggle("live", Boolean(frame));
-}
-
-function createReportLine(cite, text, index) {
-  const line = document.createElement("div");
-  line.className = "report-line"; line.style.animationDelay = `${index*85}ms`;
-  const citeSpan = document.createElement("span"), textSpan = document.createElement("span");
-  citeSpan.className = "cite";
-  if (typeof cite === "string") citeSpan.textContent = cite; else citeSpan.append(...cite);
-  textSpan.textContent = text;
-  line.append(citeSpan, textSpan);
-  return line;
-}
-
-// Python 보고(state JSON → LLM 문장)가 있으면 Scene report 를 그 문장으로 바꾼다
-function renderPipelineReport(pipelineReport) {
-  if (pipelineReport.seq === shownReportSeq) return;
-  shownReportSeq = pipelineReport.seq;
-  const payload = pipelineReport.payload, decision = payload.decision || {};
-  const lines = reportSentences(payload).map((sentence, index) => createReportLine(
-    sentence.trackIds.length ? sentence.trackIds.map(createTrackChip) : sentence.kind.slice(0, 3).toUpperCase(), sentence.text, index));
-  if (payload.report_error) lines.push(createReportLine("ERR", `Report error: ${payload.report_error}`, lines.length));
-  if (!lines.length) lines.push(createReportLine("—", String(decision.reason ?? "No report sentences"), 0));
-
-  $("report-content").replaceChildren(...lines);
-  $("report-time").textContent = `t=${Number(payload.time_sec ?? 0).toFixed(1)}s · YOLO pipeline`;
-  $("report-state").textContent = decision.verdict ? String(decision.verdict).toUpperCase() : "Report";
-  $("report-grounding").textContent = payload.report?.is_grounded ? "YOLO · Grounded" : "YOLO";
 }
 
 function updateYoloPanel() {
@@ -265,26 +228,6 @@ function updateYoloPanel() {
   yoloLog.addState(pipeline.state);
   yoloLog.addReport(pipeline.report);
   yoloView.render(yoloLog.entries);
-
-  const report = getPipelineReport();
-  if (report) renderPipelineReport(report);
-  else if (shownReportSeq !== null) {
-    // 보고가 끊기면 브라우저 보고로 즉시 되돌린다
-    shownReportSeq = null; initialReportRequested = false;
-    $("report-grounding").textContent = "Simulation";
-  }
-}
-
-function renderReportState(state) {
-  if (state.status === "loading") {
-    $("analysis-cooldown").textContent = "WORKING";
-    return;
-  }
-  $("analysis-cooldown").textContent = "AUTO UPDATE";
-  if (getPipelineReport()) return;   // Python 보고가 우선 — 브라우저 보고는 fallback
-  $("report-time").textContent = `${state.generatedAt.toLocaleTimeString("en-GB", { hour12:false })} captured`;
-  $("report-state").textContent = "Camera snapshot";
-  $("report-content").innerHTML = state.lines.map((line, index) => `<div class="report-line" style="animation-delay:${index*85}ms"><span class="cite">${line.ids.join("+")}</span><span>${line.text}</span></div>`).join("");
 }
 
 function updateTelemetry() {
@@ -351,8 +294,7 @@ function frame(now) {
     const screen=world.project(track.position), ratio=screen.x/$('fpv-view').clientWidth;
     return {...track,distance:screen.distance,screenSide:ratio<.35?'Left':ratio>.65?'Right':'Center'};
   });
-  const current=updateTelemetry();
-  reportContext={altitude:current.altitude,speed:current.speed,mode:$('flight-mode-text').textContent};
+  updateTelemetry();
   const yoloFrame = getFreshDetections();
   if (yoloFrame) renderYoloDetections(yoloFrame); else renderTracks(reportTracks, reportTracks);
   renderDetectionSource(yoloFrame);
@@ -372,8 +314,6 @@ function frame(now) {
       ring.material.color.setHex(color);ring.material.emissive.setHex(color);
     }
   }
-  const seconds = Math.floor((now-startedAt)/1000);
-  if (seconds >= 2) { analysis.requestReport(reportTracks, !initialReportRequested, reportContext); initialReportRequested = true; }
   requestAnimationFrame(frame);
 }
 
