@@ -116,9 +116,6 @@ function setMode(next) {
   $('observation-toggle').textContent=mode==='auto'?'Manual control':'Start observation';
   $('main-mode-toggle').textContent=mode==='ai'?'Mode: AI (circling)':'Mode: Manual';
   $('main-mode-toggle').classList.toggle('active',mode==='ai');
-  $('ai-mode-button').classList.toggle('active',mode==='ai');
-  $('ai-mode-button').setAttribute('aria-pressed',String(mode==='ai'));
-  $('ai-mode-button').textContent=mode==='ai'?'AI ON':'AI MODE';
   document.querySelectorAll("[data-mode]").forEach((button) => button.classList.toggle("active", button.dataset.mode === mode));
   $("flight-hint").textContent = '';
 }
@@ -347,7 +344,6 @@ async function connectGlove(kind) {
 }
 $('observation-toggle').addEventListener('click',()=>setMode(mode==='auto'?(glove.link?'imu':'keyboard'):'auto'));
  $('main-mode-toggle').addEventListener('click',toggleMainMode);
-$('ai-mode-button').addEventListener('click',toggleMainMode);
 $("connect-ble").addEventListener("click", () => connectGlove('ble'));
 $("flex-flat").addEventListener("click", () => { $("flight-hint").textContent = glove.calibrateFlex("flat") ? "FLAT saved" : "Waiting for flex samples"; });
 $("flex-bent").addEventListener("click", () => { $("flight-hint").textContent = glove.calibrateFlex("bent") ? "BENT saved" : "Waiting for flex samples"; });
