@@ -15,9 +15,9 @@ test('scaleBox maps source-image pixels onto the view size', () => {
 });
 
 test('detection label and log line formats', () => {
-  assert.equal(formatDetectionLabel(person), 'person');
-  assert.equal(formatDetectionLabel(car), 'car');
-  assert.equal(formatDetectionLabel({ class_name: 'VEHICLE' }), 'vehicle');
+  assert.equal(formatDetectionLabel(person), 'person 87%');
+  assert.equal(formatDetectionLabel(car), 'car 50%');
+  assert.equal(formatDetectionLabel({ class_name: 'VEHICLE', confidence: .91 }), 'vehicle 91%');
   assert.equal(formatDetectionLine(person), 'person #3 0.87 [64,36,128,108] red');
   assert.equal(formatDetectionLine(car), 'car 0.50 [0,0,10,10]');
 });
@@ -100,8 +100,8 @@ test('log is capped and a dropped frame id may be logged again', () => {
   assert.equal(log.entries.length, 3);
 });
 
-test('object category picks the FPV box color group', () => {
-  assert.equal(getObjectCategory('person'), 'person');
-  for (const name of ['car', 'bus', 'truck', 'VEHICLE']) assert.equal(getObjectCategory(name), 'vehicle');
+test('object category gives each class its own FPV box color key', () => {
+  for (const name of ['person', 'car', 'bus', 'truck']) assert.equal(getObjectCategory(name), name);
+  assert.equal(getObjectCategory('VEHICLE'), 'car', 'fallback vehicle tracks use the car color');
   assert.equal(getObjectCategory('traffic light'), 'object');
 });

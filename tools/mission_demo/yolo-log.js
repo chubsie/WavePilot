@@ -15,17 +15,17 @@ export function scaleBox(xyxy, imageWidth, imageHeight, viewWidth, viewHeight) {
   return { left: x1 * scaleX, top: y1 * scaleY, width: (x2 - x1) * scaleX, height: (y2 - y1) * scaleY };
 }
 
-// FPV 박스 색 구분 — person / vehicle / 그 밖은 object
-const VEHICLE_CLASS_NAMES = new Set(['car', 'bus', 'truck', 'vehicle']);
+// FPV 박스 색 키 — 클래스마다 색을 조금씩 다르게. fallback 트랙의 VEHICLE 은 car 색, 모르는 클래스는 object
+const COLORED_CLASS_NAMES = new Set(['person', 'car', 'bus', 'truck']);
 export function getObjectCategory(className) {
   const name = String(className).toLowerCase();
-  if (name === 'person') return 'person';
-  return VEHICLE_CLASS_NAMES.has(name) ? 'vehicle' : 'object';
+  if (name === 'vehicle') return 'car';
+  return COLORED_CLASS_NAMES.has(name) ? name : 'object';
 }
 
-// FPV 네임 태그는 무슨 객체인지만 — 트랙 번호·신뢰도는 YOLO log 에 있다
+// FPV 네임 태그는 객체와 신뢰도만 — 트랙 번호·박스 좌표는 YOLO log 에 있다
 export function formatDetectionLabel(detection) {
-  return String(detection.class_name).toLowerCase();
+  return `${String(detection.class_name).toLowerCase()} ${Math.round(Number(detection.confidence) * 100)}%`;
 }
 
 export function formatDetectionLine(detection) {

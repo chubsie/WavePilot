@@ -70,8 +70,8 @@ button:active { transform: scale(.96); }
 .flight-hint{position:absolute;z-index:3;color:#abb4a6;font-size:9px;letter-spacing:.04em}
 
 .detection-overlay{position:absolute;z-index:3;inset:0;pointer-events:none}.target-box{--box-color:var(--lime);position:absolute;border:1px solid var(--box-color);box-shadow:0 0 12px color-mix(in srgb,var(--box-color) 14%,transparent);transition-property:left,top,width,height,opacity;transition-duration:.08s}.target-box::before,.target-box::after{content:"";position:absolute;background:var(--box-color)}.target-box::before{width:10px;height:2px;left:-1px;top:-2px}.target-box::after{width:2px;height:10px;left:-2px;top:-1px}.target-label{position:absolute;left:-1px;top:-20px;padding:3px 5px;background:var(--box-color);color:#111;font-size:8px;font-weight:600;white-space:nowrap}.target-distance{position:absolute;right:0;bottom:-17px;color:var(--box-color);font-size:8px;white-space:nowrap}
-/* 객체 종류별 색 — person 라임 · vehicle 시안 · object 앰버 */
-.target-box[data-kind="person"]{--box-color:var(--lime)}.target-box[data-kind="vehicle"]{--box-color:var(--cyan)}.target-box[data-kind="object"]{--box-color:var(--amber)}
+/* 객체별 색 — person 라임 · car 시안 · bus 하늘 · truck 연보라 · 그 밖 object 앰버 */
+.target-box[data-kind="person"]{--box-color:var(--lime)}.target-box[data-kind="car"]{--box-color:var(--cyan)}.target-box[data-kind="bus"]{--box-color:#8fb2ff}.target-box[data-kind="truck"]{--box-color:#c3a6ff}.target-box[data-kind="object"]{--box-color:var(--amber)}
 
 .analysis-panel { min-width:0; overflow:hidden; display:grid; grid-template-rows:minmax(260px,43%) 1fr; background:linear-gradient(135deg,#151b15 0,#0c100d 70%); }
 .panel-section{min-height:0;padding:22px 24px;overflow:hidden}.detections-section{border-bottom:1px solid var(--line)}
