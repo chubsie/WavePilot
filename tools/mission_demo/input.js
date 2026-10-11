@@ -1,3 +1,4 @@
+import { MiddleButton } from './middle-button.js';
 const clamp = (value, min = -1, max = 1) => Math.max(min, Math.min(max, value));
 
 export class KeyboardInput {
@@ -50,6 +51,7 @@ export class GloveInput {
     this.onStatus = onStatus;
     this.onModeToggle = onModeToggle;
     this.onAuxAction = onAuxAction;
+    this.middleButton=new MiddleButton(()=>{void this.send('c');},onAuxAction);
     this.onLog = onLog;
     this.yawDegrees = 0;
     this.packetCount = 0;
@@ -179,8 +181,7 @@ export class GloveInput {
     }
     const pressed = buttons & ~this.buttons;
     if (pressed & 2) this.onModeToggle();
-    if (pressed & 1) this.onAuxAction(true);
-    if (!(buttons & 1) && (this.buttons & 1)) this.onAuxAction(false);
+    this.middleButton.update(Boolean(buttons & 1),performance.now());
     this.buttons = buttons;
     this.last = {
       roll: roll / 30, pitch: -pitch / 30, yaw: -yawRate / 90,
@@ -229,6 +230,9 @@ export class GloveInput {
   }
 
   async disconnect() {
+    this.middleButton.cancel();
+    this.buttons=0;
+    this.last=null;
     const link = this.link;
     this.link = null;
     try { await link?.close(); } catch {}
@@ -250,6 +254,7 @@ export class GloveInput {
   sample() {
     const mapped = this.mapped();
     if (!this.last || performance.now() - this.last.timestamp > 500) {
+      this.middleButton.cancel();
       return { ...mapped, source: "imu-stale", timestamp: performance.now() };
     }
     return mapped;

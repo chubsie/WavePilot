@@ -1,8 +1,8 @@
-import { KeyboardInput, GloveInput, AutoPilotInput } from "./input.js";
+import { KeyboardInput, GloveInput, AutoPilotInput } from "./input.js?v=middle-gesture-1";
 import { AnalysisEngine } from "./analysis.js";
-import { DroneWorld } from "./world.js";
-import { TestFlight, COURSE } from './test-flight.js';
-import { terrainHeight } from './mountain-course.js';
+import { DroneWorld } from "./world.js?v=yaw-steering-1";
+import { TestFlight, COURSE } from './test-flight.js?v=slope-15';
+import { terrainHeight } from './mountain-course.js?v=slope-15';
 import { createYoloLog, createYoloLogView, createTrackChip, detectionSignature, formatDetectionLabel, reportSentences, scaleBox } from './yolo-log.js';
 
 // TODO: 임시 — 장갑 수동(IMU)·산악 코스에서 비행 키를 누르는 동안은 키보드가 우선한다. 장갑 검증 끝나면 false로.

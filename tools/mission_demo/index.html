@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#080b09">
   <title>WavePilot — Field Command</title>
-  <link rel="stylesheet" href="styles.css?v=yolo-log-2">
+  <link rel="stylesheet" href="styles.css?v=yolo-slope-15">
 </head>
 <body>
   <header class="command-bar">
@@ -69,7 +69,7 @@
               <button id="observation-toggle" class="utility-button">Start observation</button>
               <button id="reset-flight" class="utility-button">Reset position</button>
             </div>
-            <p>Thumb / M: Manual ↔ Circle · Middle / L: Hearts</p>
+            <p>Thumb / M: Manual ↔ Circle<br>Middle tap: Zero · Hold 0.5s: Hearts<br>L: Hearts</p>
             <output id="flight-details"></output>
             <canvas id="sensor-chart" aria-label="Last 500 sensor samples"></canvas>
             <p class="chart-legend"><span>Roll</span><span>Pitch</span><span>Yaw rate</span></p>
@@ -143,6 +143,6 @@
   <script src="../visualizer/three.min.js"></script>
   <script src="vendor/GLTFLoader.js"></script>
   <script src="../visualizer/sim_link.js"></script>
-  <script type="module" src="app.js"></script>
+  <script type="module" src="app.js?v=middle-gesture-1"></script>
 </body>
 </html>

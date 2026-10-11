@@ -1,4 +1,4 @@
-import {COURSE,TEST_START} from './test-flight.js';
+import {COURSE,TEST_START} from './test-flight.js?v=slope-15';
 const path=[TEST_START,...COURSE];
 export function valleyDistance(x,z){
   let distance=Infinity;

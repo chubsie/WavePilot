@@ -3,8 +3,9 @@ import { createDrone } from "./drone-model.js";
 import { MainFlightCore, D2R, DRAG_H, DRAG_V } from "./flight-core.js";
 import { HeartBeam, updateStatusLeds } from "./hearts.js";
 import { PEOPLE, createWalker } from './population.js';
-import { createCourse, TEST_START } from './test-flight.js';
-import { createMountain, terrainHeight } from './mountain-course.js';
+import { createCourse, TEST_START } from './test-flight.js?v=slope-15';
+import { createMountain, terrainHeight } from './mountain-course.js?v=slope-15';
+import { gloveTurnRate } from './yaw-steering.js';
 
 const THREE = window.THREE;
 
@@ -188,6 +189,14 @@ export class DroneWorld {
     const mainControl = ['imu', 'imu-stale', 'ai'].includes(input.source);
     let moveAltitude = true;
     if (mainControl) {
+      if((input.source==='imu' && input.fly) || input.source==='imu-stale'){
+        const rate=input.source==='imu-stale'?0:gloveTurnRate(input.yawDegrees??0);
+        const yawDegrees=-this.heading/D2R+rate*delta;
+        input={...input,yawDegrees};
+        // The rate is already integrated in time. Don't smooth an absolute
+        // wrist heading toward it, which would undo a turn on recentering.
+        this.mainFlight.shown.yaw=yawDegrees;
+      }
       if (input.source === 'ai' && !this.mainFlight.ai) this.mainFlight.enterAi(this.camera.position.y, 0, -this.heading / D2R);
       const result = this.mainFlight.step(input, delta, this.camera.position, this.velocity,this.training?terrainHeight(this.camera.position.x,this.camera.position.z):0);
       this.heading = result.heading;
@@ -218,7 +227,7 @@ export class DroneWorld {
       this.velocity.x *= Math.max(0, 1 - 4 * delta);
       this.velocity.z *= Math.max(0, 1 - 4 * delta);
     }
-    for (const [axis, min, max] of [[0,-68,68], [1,floor,this.training?65:48], [2,-68,68]]) {
+    for (const [axis, min, max] of [[0,-68,68], [1,floor,this.training?65:48], [2,this.training?-120:-68,68]]) {
       const before = this.camera.position.getComponent(axis);
       const bounded = THREE.MathUtils.clamp(before, min, max);
       if (bounded !== before) this.velocity.setComponent(axis, 0);
