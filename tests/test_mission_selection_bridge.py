@@ -222,7 +222,7 @@ def test_browser_mission_publishes_selection_and_mode_end_to_bridge(monkeypatch,
     )
     caplog.set_level(logging.INFO, logger="modules.drone.run_mission")
 
-    exit_code = run_mission.main(["--sim", "browser", "--sim-host", "127.0.0.1", "--sim-port", "8766"])
+    exit_code = run_mission.main(["--sim", "browser", "--once", "--sim-host", "127.0.0.1", "--sim-port", "8766"])
 
     assert exit_code == run_mission.EXIT_FAILURE
     assert [(kind, entry["seq"], entry["payload"]) for kind, entry in bridge.published_list] == [

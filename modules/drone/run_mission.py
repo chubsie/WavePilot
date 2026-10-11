@@ -17,6 +17,11 @@ pipeline.py / run_scenario.py 는 건드리지 않는 별도 컴포지션 루트
     (mission_demo: http://127.0.0.1:8766/mission_demo/ — 선택·모드 종료가 브리지 pipeline 의 selection·mode_end
      칸으로 가고 페이지 LLM Decisions 패널이 읽는다)
 
+--sim browser 는 서버 상주다: 임무가 끝나도(landed 등) 프로세스를 끝내지 않고, 페이지가 MANUAL 로 갔다가 다시 AI 로
+바뀌면 새 임무를 시작한다(임무마다 새 로그 파일). YOLO·HTTP 서버·브리지는 임무 사이에 재사용하고 Ctrl-C 로만 끝난다.
+--once 를 주면 예전처럼 임무 한 번 뒤 종료 코드를 돌려준다(--ai-mode-timeout-sec 도 --once 에서만 쓴다).
+브라우저 링크가 끊기면(탭 백그라운드·새로고침·닫기) 임무는 끝나지 않고 일시정지했다가 재연결되면 이어간다.
+
 --mission 임무 파일이 탐색 구역·상체 색·최대 비행 시간·안전 여유를 정한다(파일 색이 --target-color 보다 우선).
 임무 파일이 없으면 params 기본값 + CLI 로 돈다(Phase 3·4 동작).
 
@@ -86,6 +91,7 @@ DEFAULT_TICK_HZ = 10.0
 DEFAULT_AI_MODE_TIMEOUT_SEC = 120.0
 SIM_CONNECT_POLL_SEC = 0.1
 AI_MODE_POLL_SEC = 0.5
+IDLE_WAIT_LOG_INTERVAL_SEC = 30.0  # 상주 모드에서 AI 전환·MANUAL 전환을 기다릴 때 안내 줄 간격
 
 DEFAULT_TARGET_COLOR = "red"
 TARGET_COLOR_NONE = "none"
@@ -310,7 +316,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--ai-mode-timeout-sec", type=float, default=DEFAULT_AI_MODE_TIMEOUT_SEC,
-        help="how long to wait for AI mode to be switched on in the page (--sim browser)",
+        help="how long to wait for AI mode to be switched on in the page (--sim browser --once only)",
+    )
+    parser.add_argument(
+        "--once", action="store_true",
+        help="--sim browser: run a single mission and exit with its result "
+        "(default: stay up and start a new mission on every MANUAL -> AI switch, Ctrl-C to stop)",
     )
     # 기본값 None — 임무 파일과 함께 지정했는지 구분한다 (지정 안 하면 red)
     parser.add_argument(
@@ -351,24 +362,37 @@ def main(argv: Sequence[str] | None = None) -> int:
             logger.error("invalid mission file %s: %s", args.mission, error)
             return EXIT_USAGE
 
-    log_path = default_log_path(Path(args.log_dir), datetime.now())
-    logger.info("mission log: %s", log_path)
-
     try:
-        with MissionLog(log_path, console=logging.getLogger(MISSION_CONSOLE_LOGGER_NAME)) as mission_log:
+        if args.sim == SIM_BROWSER:
+            return _serve_browser_missions(args, config, decision_model, spec)
+
+        with _open_mission_log(args) as mission_log:
             setup = _create_mission_setup(args, config, spec, mission_log)
-            if args.sim == SIM_BROWSER:
-                result = _run_browser_mission(args, decision_model, setup)
-            else:
-                result = _run_mock_mission(args, decision_model, setup)
+            result = _run_mock_mission(args, decision_model, setup)
     except KeyboardInterrupt:
         logger.info("interrupted")
         return EXIT_INTERRUPTED
 
+    return _exit_code_for(result)
+
+
+def _exit_code_for(result: MissionRunResult | None) -> int:
     if result is None:
         return EXIT_FAILURE
 
     return EXIT_OK if result.is_success else EXIT_FAILURE
+
+
+def _open_mission_log(args: argparse.Namespace) -> MissionLog:
+    """임무마다 새 파일 — 상주 모드에서 같은 초에 두 임무가 시작돼도 한 파일에 섞이지 않게 접미사를 붙인다."""
+    log_path = default_log_path(Path(args.log_dir), datetime.now())
+    suffix = 2
+    while log_path.exists():
+        log_path = log_path.with_name(f"{log_path.stem.split('_')[0]}_{suffix}{log_path.suffix}")
+        suffix += 1
+
+    logger.info("mission log: %s", log_path)
+    return MissionLog(log_path, console=logging.getLogger(MISSION_CONSOLE_LOGGER_NAME))
 
 
 def resolve_target_upper_color(target_color_arg: str | None, spec: MissionSpec | None) -> str | None:
@@ -475,10 +499,10 @@ def _run_mock_mission(
     ).run()
 
 
-def _run_browser_mission(
-    args: argparse.Namespace, decision_model: DecisionModel, setup: MissionSetup
-) -> MissionRunResult | None:
-    """브라우저가 벽시계로 물리를 돌리고 Python 은 따라간다 — 시계는 브라우저 sim 시각이다."""
+def _serve_browser_missions(
+    args: argparse.Namespace, config: SelectorConfig, decision_model: DecisionModel, spec: MissionSpec | None
+) -> int:
+    """서버·YOLO·브리지를 한 번 띄우고 임무를 돌린다. --once 가 아니면 MANUAL→AI 전환마다 새 임무 (Ctrl-C 로 종료)."""
     components = _load_browser_components()
     bridge = components.sim_bridge()
     server = components.start_sim_server(bridge, args.sim_host, args.sim_port)
@@ -490,27 +514,60 @@ def _run_browser_mission(
     try:
         if not _wait_for_simulator(bridge, args.sim_connect_timeout_sec):
             logger.error("simulator not connected within %.1fs", args.sim_connect_timeout_sec)
-            return None
+            return EXIT_FAILURE
 
         # YOLO 는 페이지가 붙자마자 돌린다 — MANUAL 에서도 YOLO log·FPV 박스가 보이게
         yolo_factory = create_yolo_factory(args.yolo, args.device, args.yolo_url)
         detection_source = components.browser_detection_source(bridge, yolo_factory=yolo_factory)
         frame_reader = LatestFrameReader(detection_source)
-
-        if not _wait_for_ai_mode(bridge, args.ai_mode_timeout_sec):
-            logger.error("AI mode not enabled within %.1fs", args.ai_mode_timeout_sec)
-            return None
-
         flight_control = components.browser_flight_control(bridge)
+        publisher = BridgePipelinePublisher(bridge)  # 임무 사이에도 seq 가 이어져야 페이지가 새 항목으로 본다
 
-        # 조종자 모드·운용자 링크는 매 틱 operator 로 읽고, 브리지 자체가 끊기면 중단한다 (D-01, D-02)
-        publisher = BridgePipelinePublisher(bridge)
+        if args.once:
+            if not _wait_for_ai_mode(bridge, args.ai_mode_timeout_sec):
+                logger.error("AI mode not enabled within %.1fs", args.ai_mode_timeout_sec)
+                return EXIT_FAILURE
+            result = _run_browser_mission(args, config, spec, decision_model, bridge, flight_control, frame_reader, publisher)
+            return _exit_code_for(result)
+
+        while True:
+            _wait_for_ai_mode(bridge, None)
+            result = _run_browser_mission(args, config, spec, decision_model, bridge, flight_control, frame_reader, publisher)
+            end_reason = None if result is None else result.end_reason
+            logger.info("mission ended (%s): switch to MANUAL, then AI to start a new mission (Ctrl-C to quit)", end_reason)
+            _wait_for_manual_mode(bridge)
+            decision_model = create_decision_model(config)  # 선택기 내부 상태를 임무마다 새로
+    finally:
+        if frame_reader is not None:
+            frame_reader.close()
+        if detection_source is not None:
+            detection_source.close()
+        server.shutdown()
+        server.server_close()
+
+
+def _run_browser_mission(
+    args: argparse.Namespace,
+    config: SelectorConfig,
+    spec: MissionSpec | None,
+    decision_model: DecisionModel,
+    bridge,
+    flight_control: FlightControl,
+    frame_reader: MissionFrameSource,
+    publisher: BridgePipelinePublisher,
+) -> MissionRunResult | None:
+    """브라우저가 벽시계로 물리를 돌리고 Python 은 따라간다 — 시계는 브리지가 보정한 sim 시각이다.
+
+    브리지 연결이 끊기면 임무는 끝나지 않고 일시정지한다(is_link_up). 조종자 모드·운용자 링크는 매 틱 operator 로 읽는다 (D-01).
+    """
+    with _open_mission_log(args) as mission_log:
+        setup = _create_mission_setup(args, config, spec, mission_log)
         result = _build_runner(
             args, flight_control, frame_reader, decision_model, setup,
             clock=lambda: flight_control.get_telemetry().time_sec,
             advance=WallTickSleeper(args.tick_hz),
             operator=BridgeOperatorInput(bridge),
-            should_abort=lambda: not bridge.is_connected(),
+            is_link_up=bridge.is_connected,
             on_status=_build_browser_status_handler(bridge, setup.mission_log),
             on_selection=publisher.on_selection,
             on_mode_end=publisher.on_mode_end,
@@ -519,14 +576,7 @@ def _run_browser_mission(
         # 마지막 틱 뒤에 도착한 연사 발까지 남긴다 (C3)
         record_heart_shots(bridge, setup.mission_log)
 
-        return result
-    finally:
-        if frame_reader is not None:
-            frame_reader.close()
-        if detection_source is not None:
-            detection_source.close()
-        server.shutdown()
-        server.server_close()
+    return result
 
 
 def _build_runner(
@@ -542,6 +592,7 @@ def _build_runner(
     on_status: Callable[[dict], None] | None = None,
     on_selection: Callable[[dict], None] | None = None,
     on_mode_end: Callable[[dict], None] | None = None,
+    is_link_up: Callable[[], bool] | None = None,
 ) -> MissionRunner:
     _record_mission_start(setup, flight_control)
 
@@ -564,6 +615,7 @@ def _build_runner(
         on_status=on_status,
         on_selection=on_selection,
         on_mode_end=on_mode_end,
+        is_link_up=is_link_up,
     )
 
 
@@ -608,15 +660,32 @@ def _wait_for_simulator(bridge, timeout_sec: float) -> bool:
     return True
 
 
-def _wait_for_ai_mode(bridge, timeout_sec: float) -> bool:
-    deadline_sec = time.monotonic() + timeout_sec
+def _wait_for_ai_mode(bridge, timeout_sec: float | None) -> bool:
+    """연결된 페이지가 AI 를 켤 때까지 기다린다. timeout_sec 가 None 이면 무기한(상주 모드)."""
+    deadline_sec = None if timeout_sec is None else time.monotonic() + timeout_sec
     logger.info("waiting for AI mode: press M in the simulator page to start the AI mission")
 
-    while not bridge.ai_mode:
-        if time.monotonic() >= deadline_sec:
-            return False
+    # 닫힌 탭이 남긴 ai_mode 로 시작하지 않게 연결도 함께 본다
+    _poll_until(lambda: bridge.is_connected() and bridge.ai_mode, deadline_sec, "waiting for AI mode")
+    return bridge.is_connected() and bool(bridge.ai_mode)
+
+
+def _wait_for_manual_mode(bridge) -> None:
+    """임무가 끝난 뒤 페이지가 MANUAL 로 돌아갈 때까지 기다린다 — 다음 임무는 그 뒤의 AI 전환으로만 시작한다."""
+    _poll_until(lambda: not bridge.ai_mode, None, "waiting for MANUAL mode before the next mission")
+
+
+def _poll_until(is_done: Callable[[], bool], deadline_sec: float | None, waiting_message: str) -> None:
+    next_log_sec = time.monotonic() + IDLE_WAIT_LOG_INTERVAL_SEC
+
+    while not is_done():
+        now_sec = time.monotonic()
+        if deadline_sec is not None and now_sec >= deadline_sec:
+            return
+        if now_sec >= next_log_sec:
+            logger.info(waiting_message)
+            next_log_sec = now_sec + IDLE_WAIT_LOG_INTERVAL_SEC
         time.sleep(AI_MODE_POLL_SEC)
-    return True
 
 
 def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:

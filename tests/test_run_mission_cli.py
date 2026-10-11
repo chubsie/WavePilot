@@ -424,7 +424,7 @@ def test_browser_orin_args_reach_yolo_factory(monkeypatch):
     monkeypatch.setattr(run_mission, "_build_runner", lambda *args, **kwargs: UnfinishedRunner())
 
     exit_code = run_mission.main(
-        ["--sim", "browser", "--yolo", "orin", "--yolo-url", "http://10.0.0.5:8082", "--device", "cpu"]
+        ["--sim", "browser", "--once", "--yolo", "orin", "--yolo-url", "http://10.0.0.5:8082", "--device", "cpu"]
     )
 
     assert exit_code == run_mission.EXIT_FAILURE
@@ -526,7 +526,7 @@ def test_browser_mission_wires_operator_status_and_abort(monkeypatch, tmp_path):
     monkeypatch.setattr(run_mission, "LatestFrameReader", lambda source: None)
     monkeypatch.setattr(run_mission, "MissionRunner", runner_factory)
 
-    exit_code = run_mission.main(["--sim", "browser", "--log-dir", str(tmp_path)])
+    exit_code = run_mission.main(["--sim", "browser", "--once", "--log-dir", str(tmp_path)])
 
     kwargs = runner_factory.kwargs
     assert exit_code == run_mission.EXIT_OK
@@ -534,9 +534,11 @@ def test_browser_mission_wires_operator_status_and_abort(monkeypatch, tmp_path):
     assert kwargs["operator"]._bridge is bridge
     assert bridge.status_list == [{"mode": "AI", "reason": "operator"}]
 
-    assert kwargs["should_abort"]() is False
+    # 브리지 끊김은 중단이 아니라 일시정지 훅으로 간다
+    assert kwargs["should_abort"] is None
+    assert kwargs["is_link_up"]() is True
     bridge.connected = False
-    assert kwargs["should_abort"]() is True
+    assert kwargs["is_link_up"]() is False
 
     records = read_log_records(tmp_path)
     hit_list = [record for record in records if record["kind"] == "hit"]
